@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import logging
 import os
 import time
 from collections import Counter
@@ -16,9 +15,10 @@ from .kernel_api import (
     attention_runtime_profile_schema,
     kernel_version,
 )
+from .log import get_logger
 
 
-LOG = logging.getLogger("comfyui-turing-utils")
+LOG = get_logger("profile")
 
 
 def _profile_call_limit() -> int:
@@ -293,7 +293,7 @@ class CudaPhaseProfiler:
                 counts[phase] += 1
             total = sum(totals.values())
             LOG.warning(
-                "[Turing profile] bucket=%s calls=%d recorded_cuda=%.3f ms "
+                "cuda_phases bucket=%s calls=%d recorded_cuda=%.3f ms "
                 "device=%s device_sm=%s kernel=%s compiled_attention=[%s] "
                 "native_arch=%s profile_schema=%s",
                 bucket.key,
@@ -421,7 +421,7 @@ class WorkflowTimeline:
             f"{name}={value}" for name, value in sorted(window.counters.items())
         )
         LOG.warning(
-            "[Turing timeline] span=%d label=%s wall=%.3f ms cuda=%.3f ms "
+            "timeline span=%d label=%s wall=%.3f ms cuda=%.3f ms "
             "host_or_transfer=%.3f ms allocated=%.1f->%.1f MiB "
             "peak=%.1f MiB reserved=%.1f->%.1f MiB%s",
             window.index,

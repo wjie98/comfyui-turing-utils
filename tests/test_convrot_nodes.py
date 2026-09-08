@@ -325,7 +325,7 @@ class ConvRotActivationTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "force_int8_gemm must be boolean"):
             configure_convrot_activation({}, None, "int8")
 
-    def test_w4a8_rejects_disabled_cuda_backend(self):
+    def test_w4a8_accepts_installed_cuda_extension_disabled_by_comfyui_policy(self):
         backends = {
             "cuda": {
                 "available": True,
@@ -333,9 +333,16 @@ class ConvRotActivationTest(unittest.TestCase):
                 "unavailable_reason": None,
             }
         }
-        with mock.patch("comfy_kitchen.list_backends", return_value=backends):
-            with self.assertRaisesRegex(RuntimeError, "requires the comfy-kitchen CUDA backend"):
-                validate_runtime_support(ConvRotSummary(w4a8=1))
+        with (
+            mock.patch("comfy_kitchen.list_backends", return_value=backends),
+            mock.patch(
+                "comfy.model_management.get_torch_device",
+                return_value=torch.device("cuda", 0),
+            ),
+            mock.patch("torch.cuda.is_available", return_value=True),
+            mock.patch("torch.cuda.get_device_capability", return_value=(7, 5)),
+        ):
+            validate_runtime_support(ConvRotSummary(w4a8=1))
 
     def test_w4a8_accepts_enabled_turing_cuda_backend(self):
         backends = {

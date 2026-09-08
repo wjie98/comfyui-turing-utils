@@ -1483,6 +1483,12 @@ class MiniMaxActivationPolicyTest(unittest.TestCase):
             mock.patch.object(
                 dispatch, "_kernel_op", return_value=bundled
             ) as kernel_op,
+            mock.patch.object(
+                dispatch, "_kernel_available", return_value=True
+            ),
+            mock.patch.object(
+                dispatch, "is_supported_tensor_core_device", return_value=True
+            ),
         ):
             actual = dispatch._turing_int8_gemm(
                 qactivation,

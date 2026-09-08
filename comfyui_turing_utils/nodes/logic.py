@@ -2,15 +2,16 @@
 
 from __future__ import annotations
 
-import logging
 import re
 
 import torch
 from comfy_api.latest import io
 
+from ..log import get_logger
 from ..runtime.stage_barrier import STAGE_BARRIER_NODE_ID, STAGE_PATH_NODE_ID
 
 
+LOG = get_logger("stage")
 _MISSING = object()
 _MAX_STAGE_BARRIER_VALUES = 100
 _DYNAMIC_VALUE_SUFFIX = re.compile(r"(\d+)$")
@@ -213,7 +214,7 @@ class StageBarrier(io.ComfyNode):
             outputs[index] = value
             connected += 1
 
-        logging.info("Stage Barrier reached: stage=%d values=%d", stage, connected)
+        LOG.info("Stage Barrier reached: stage=%d values=%d", stage, connected)
         return io.NodeOutput(*outputs)
 
 
@@ -250,5 +251,5 @@ class StagePath(io.ComfyNode):
         stage = int(stage)
         if stage < 0:
             raise ValueError("Stage Path stage must be greater than or equal to zero")
-        logging.info("Stage Barrier path reached: stage=%d", stage)
+        LOG.info("Stage Barrier path reached: stage=%d", stage)
         return io.NodeOutput(value)

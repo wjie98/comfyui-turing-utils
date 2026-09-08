@@ -9,14 +9,15 @@ port with a private one-input/one-output node before validation and caching.
 
 from __future__ import annotations
 
-import logging
 import re
 from collections.abc import Mapping
 from typing import Any
 
+from ..log import get_logger
 from .stage_barrier import STAGE_BARRIER_NODE_ID, STAGE_PATH_NODE_ID
 
 
+LOG = get_logger("stage")
 _PROMPT_HANDLER_MARKER = "_turing_utils_stage_barrier_prompt_compiler"
 _DYNAMIC_VALUE_INPUT = re.compile(r"^values\.value_(\d+)$")
 _NESTED_VALUE_INPUT = re.compile(r"^value_(\d+)$")
@@ -219,7 +220,7 @@ def compile_stage_barriers_on_prompt(json_data: Any) -> Any:
 
     result = dict(json_data)
     result["prompt"] = compiled
-    logging.info(
+    LOG.info(
         "Compiled Stage Barrier hubs into %d independent lazy-compatible paths",
         route_count,
     )
@@ -232,7 +233,7 @@ def install_stage_barrier_prompt_compiler() -> bool:
     try:
         from server import PromptServer
     except (ImportError, AttributeError):
-        logging.warning(
+        LOG.warning(
             "Stage Barrier route compilation is unavailable: ComfyUI's prompt "
             "server was not found"
         )
@@ -240,7 +241,7 @@ def install_stage_barrier_prompt_compiler() -> bool:
 
     prompt_server = getattr(PromptServer, "instance", None)
     if prompt_server is None or not hasattr(prompt_server, "add_on_prompt_handler"):
-        logging.warning(
+        LOG.warning(
             "Stage Barrier route compilation is unavailable: ComfyUI's prompt "
             "server has not been initialized"
         )
@@ -250,7 +251,7 @@ def install_stage_barrier_prompt_compiler() -> bool:
 
     prompt_server.add_on_prompt_handler(compile_stage_barriers_on_prompt)
     setattr(prompt_server, _PROMPT_HANDLER_MARKER, True)
-    logging.info("Enabled lazy-compatible Stage Barrier route compilation")
+    LOG.info("Enabled lazy-compatible Stage Barrier route compilation")
     return True
 
 

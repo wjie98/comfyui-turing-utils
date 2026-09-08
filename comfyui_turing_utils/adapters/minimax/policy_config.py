@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
-import logging
 import os
 
+from ...log import get_logger
 
-LOG = logging.getLogger("comfyui-turing-utils")
+
+LOG = get_logger("minimax.config")
 
 
 def activation_mode() -> str:

@@ -3,15 +3,16 @@
 from __future__ import annotations
 
 import dataclasses
-import logging
 import math
 
 import torch
 
+from ...log import get_logger
+
 from ...profiling import WORKFLOW_TIMELINE
 
 
-LOG = logging.getLogger("comfyui-turing-utils")
+LOG = get_logger("minimax.memory")
 MIB = 1024**2
 VBAR_PAGE_BYTES = 32 * MIB
 DEFAULT_WEIGHT_PREFETCH_BYTES = 512 * MIB

@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import logging
-
 import comfy.context_windows
 import comfy.conds
 import comfy.patcher_extension
@@ -11,10 +9,11 @@ import comfy.utils
 import torch
 import torch.nn.functional as F
 
+from ..log import get_logger
 from .methods import OriginalMethod, weak_method
 
 
-LOG = logging.getLogger("comfyui-turing-utils")
+LOG = get_logger("bernini")
 _BERNINI_ROPE_WRAPPER_KEY = "turing_utils_bernini_context_rope"
 _ABSOLUTE_INDEX_KEY = "turing_utils_bernini_absolute_latent_indices"
 _CONTEXT_ROLES_KEY = "turing_utils_bernini_context_roles"

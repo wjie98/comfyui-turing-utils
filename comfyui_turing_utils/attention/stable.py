@@ -3,21 +3,21 @@
 from __future__ import annotations
 
 import dataclasses
-import logging
 from collections.abc import Callable
 
 import torch
 
-from ..kernel_api import load_turing_sage
-from ..runtime.capabilities import kernel_capabilities
 from ..hardware import (
     is_supported_attention_device as _is_supported_attention_device,
     is_supported_turing_device,
 )
+from ..kernel_api import load_turing_sage
+from ..log import get_logger
+from ..runtime.capabilities import kernel_capabilities
 from .protocol import QKTransformSpec
 
 
-LOG = logging.getLogger("comfyui-turing-utils")
+LOG = get_logger("attention")
 SUPPORTED_KERNEL_DTYPES = (torch.float16, torch.bfloat16)
 SUPPORTED_INPUT_DTYPES = (*SUPPORTED_KERNEL_DTYPES, torch.float32)
 SPARSE_AUTO_MIN_SEQUENCE = 4096

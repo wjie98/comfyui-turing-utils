@@ -9,13 +9,10 @@ It deliberately contains no quantization, Turing, or custom-loader policy.
 from __future__ import annotations
 
 import inspect
-import logging
 import math
 import weakref
 
-from ..methods import OriginalMethod, weak_method
-from .activation_policy import ActivationRuntimePlan
-
+from ...log import get_logger
 from ...attention.layout import (
     ATTENTION_LAYOUT_KEY,
     AttentionSegment,
@@ -24,9 +21,11 @@ from ...attention.layout import (
     LayoutProviderStatus,
     has_complete_attention_layout,
 )
+from ..methods import OriginalMethod, weak_method
+from .activation_policy import ActivationRuntimePlan
 
 
-LOG = logging.getLogger("comfyui-turing-utils")
+LOG = get_logger("minimax.layout")
 MINIMAX_H3_LAYOUT_KIND = "minimax_h3"
 H3_IMAGE_SOL_STRATEGY = "h3_image_sol"
 H3_IMAGE_SOL_LAYOUT_KEY = "turing_utils_h3_image_sol_temporal_layout"

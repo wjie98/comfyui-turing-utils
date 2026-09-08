@@ -2,13 +2,13 @@
 
 from __future__ import annotations
 
-import logging
-import math
 import inspect
+import math
 from collections import Counter
 
 import torch
 
+from ..log import get_logger
 from .methods import OriginalMethod, weak_method
 from .memory import install_memory_hooks, scan_quantized_workspaces
 from ..attention.integration import AttentionSiteStatus, execute_projected_attention
@@ -26,7 +26,7 @@ from ..quantization.dispatch import (
 )
 
 
-LOG = logging.getLogger("comfyui-turing-utils")
+LOG = get_logger("wan")
 _CONTEXT_SHAPE_KEY = "context_latents"
 _MEMORY_CONTEXT_ATTR = "_turing_utils_wan_memory_context"
 _OUTER_SAMPLE_WRAPPER_KEY = "turing_utils_wan_memory_context"

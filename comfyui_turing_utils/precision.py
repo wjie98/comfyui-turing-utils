@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import dataclasses
-import logging
 from importlib.metadata import PackageNotFoundError, version
 
 import torch
@@ -17,6 +16,7 @@ from .attention import (
 )
 from .hardware import is_supported_tensor_core_device, is_supported_turing_device
 from .kernel_api import load_kernel_package
+from .log import get_logger
 from .quantization.dispatch import (
     backend_available,
     preflight_kitchen,
@@ -26,7 +26,7 @@ from .quantization.dispatch import (
 )
 
 
-LOG = logging.getLogger("comfyui-turing-utils")
+LOG = get_logger("precision")
 MIN_KITCHEN_VERSION = (0, 2, 26)
 MIN_KERNEL_VERSION = (0, 8, 0)
 MIN_CODEBOOK_W4A8_KERNEL_VERSION = (0, 24, 0)
@@ -133,8 +133,8 @@ def prepare_turing_runtime(
         import comfy_kitchen
 
         cuda_status = comfy_kitchen.list_backends().get("cuda", {})
-        if not cuda_status.get("available") or cuda_status.get("disabled"):
-            reason = cuda_status.get("unavailable_reason") or "disabled"
+        if not cuda_status.get("available"):
+            reason = cuda_status.get("unavailable_reason") or "not installed"
             raise RuntimeError(f"Kitchen CUDA backend is unavailable: {reason}")
         capabilities = set(cuda_status.get("capabilities", ()))
         if (summary.w4a4 or summary.w4a8) and "convrot_w4a4_linear" not in capabilities:

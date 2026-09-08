@@ -2,14 +2,11 @@
 
 from __future__ import annotations
 
-import logging
 import math
 import re
 from dataclasses import dataclass
 
 import torch
-
-from ...profiling import WORKFLOW_TIMELINE
 import torch.nn as nn
 import torch.nn.functional as F
 
@@ -19,6 +16,12 @@ import comfy.model_patcher
 import comfy.ops
 import comfy.utils
 import folder_paths
+
+from ...log import get_logger
+from ...profiling import WORKFLOW_TIMELINE
+
+
+LOG = get_logger("minimax.upscale")
 
 
 LATENTS_MEAN = (
@@ -407,7 +410,7 @@ def load_h3_latent_upscaler(model_name: str, precision: str):
         load_device=load_device,
         offload_device=comfy.model_management.unet_offload_device(),
     )
-    logging.info(
+    LOG.info(
         "Loaded MiniMax H3 3D latent upscaler %s: blocks=%d+%d width=%d temporal_every=%d kernel=%d dtype=%s",
         model_name,
         architecture.in_blocks,

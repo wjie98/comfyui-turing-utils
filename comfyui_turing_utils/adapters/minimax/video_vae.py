@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import hashlib
-import logging
 import math
 import queue
 import threading
@@ -32,8 +31,10 @@ from ...attention.protocol import (
 )
 from ...hardware import is_supported_tensor_core_device
 from ...kernel_api import load_turing_sage
+from ...log import get_logger
 
 
+LOG = get_logger("minimax.vae")
 TILE_SIZE = 256
 TILE_OVERLAP = 64
 _AUTO_DECODE_TILE_BATCH_LIMIT = 16
@@ -246,7 +247,7 @@ def _select_tiles_per_batch(
             break
         selected = candidate
     estimate = memory_estimator(selected)
-    log = logging.warning if estimate > budget else logging.info
+    log = LOG.warning if estimate > budget else LOG.info
     log(
         "MiniMax H3 VAE auto tile batch selected %d/%d: estimated %.0f MiB, available %.0f MiB%s",
         selected,
@@ -292,7 +293,7 @@ class _TileProgress:
                 self.bar.update(count)
                 self.terminal.update(count)
             except RuntimeError:
-                logging.exception("H3 VAE tile progress event failed")
+                LOG.exception("H3 VAE tile progress event failed")
 
     def update(self, count):
         count = int(count)
@@ -1029,7 +1030,7 @@ def _shared_core_multiband_decoder_forward(
             else None
         )
         if streaming_overlap is not None and not plan._overlap_backend_logged:
-            logging.info(
+            LOG.info(
                 "MiniMax H3 VAE streaming deterministic FP32 overlap kernel active"
             )
             plan._overlap_backend_logged = True
@@ -1551,7 +1552,7 @@ class _PixelWriter:
                 self.double_buffer = False
                 self.copy_stream = None
                 self.staging = [None, None]
-                logging.warning(
+                LOG.warning(
                     "H3 VAE could not allocate a pinned decoder buffer; using synchronous pixel copies"
                 )
                 self.output[:, :, start : start + copy_frames].copy_(part)
@@ -1683,7 +1684,7 @@ def decode_video(
         latent.shape[-2] * latent.shape[-1]
     )
     prefetch_dynamic_vbars = vae.patcher.is_dynamic()
-    logging.info(
+    LOG.info(
         "H3 VAE shared-core multiband decoder active: windows=%d duplicate_spatial_ratio=%.2fx overlap_threshold=%.4f final_full_overlap_blocks=%d weight_lifecycle=%s",
         tile_count,
         duplicate_ratio,
@@ -1692,7 +1693,7 @@ def decode_video(
         "comfy_block_prefetch" if prefetch_dynamic_vbars else "resident",
     )
     storage_ptr = latent.untyped_storage().data_ptr()
-    logging.info(
+    LOG.info(
         "H3 VAE decode input: shape=%s dtype=%s device=%s storage=0x%x fingerprint=%s",
         tuple(latent.shape),
         latent.dtype,

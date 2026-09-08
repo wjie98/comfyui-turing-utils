@@ -10,11 +10,12 @@ ComfyUI's real data dependencies.
 
 from __future__ import annotations
 
-import logging
 from collections import Counter, deque
 from typing import Iterable, Mapping, NamedTuple
 
+from comfyui_turing_utils.log import get_logger
 
+LOG = get_logger("stage")
 STAGE_BARRIER_NODE_ID = "TuringUtilsStageBarrier"
 STAGE_PATH_NODE_ID = "TuringUtilsStagePath"
 STAGE_SCHEDULING_NODE_IDS = frozenset(
@@ -271,7 +272,7 @@ class BarrierPlanner:
             for phase, count in sorted(phase_counts.items())
         )
         if not self._logged_initial_plan or dynamic_refresh:
-            logging.info(
+            LOG.info(
                 "Stage Barrier plan%s: barriers=%d phases=[%s]",
                 " refreshed" if dynamic_refresh else "",
                 len(assigned),
@@ -385,7 +386,7 @@ class BarrierPlanner:
         # work is ready. Preserve liveness, but never hide the loss of strict
         # rendezvous ordering.
         if self._warned_unavailable_phase != active_phase:
-            logging.warning(
+            LOG.warning(
                 "Stage Barrier phase r%d/s%d has no ready ancestor; "
                 "temporarily deferring to ComfyUI scheduling",
                 active_phase.round,
@@ -418,7 +419,7 @@ def install_stage_barrier_scheduler() -> bool:
     try:
         from comfy_execution.graph import ExecutionList
     except (ImportError, AttributeError):
-        logging.warning(
+        LOG.warning(
             "Stage Barrier ordering is unavailable: this ComfyUI build has no "
             "compatible ExecutionList scheduler"
         )
@@ -426,7 +427,7 @@ def install_stage_barrier_scheduler() -> bool:
 
     original = getattr(ExecutionList, "ux_friendly_pick_node", None)
     if original is None:
-        logging.warning(
+        LOG.warning(
             "Stage Barrier ordering is unavailable: ComfyUI's ready-node picker "
             "was not found"
         )
@@ -449,7 +450,7 @@ def install_stage_barrier_scheduler() -> bool:
     setattr(stage_aware_pick_node, _PATCH_MARKER, True)
     setattr(stage_aware_pick_node, "_turing_utils_original", original)
     ExecutionList.ux_friendly_pick_node = stage_aware_pick_node
-    logging.info("Enabled dependency-first Stage Barrier scheduling")
+    LOG.info("Enabled dependency-first Stage Barrier scheduling")
     return True
 
 

@@ -22,6 +22,7 @@ comfyui-turing-utils/
 │   ├── runtime/                 # device/kernel capability resolution and diagnostics
 │   ├── hardware.py
 │   ├── kernel_api.py            # independent-kernel boundary
+│   ├── log.py                   # component logger hierarchy and console labels
 │   ├── precision.py
 │   ├── profiling.py             # disabled-by-default bounded CUDA timing
 │   └── registration.py          # sole node mapping table
@@ -74,6 +75,7 @@ effects.
 | `attention/patches.py` | thin Sol/SLA strategy composition and loader-independent ModelPatcher installation |
 | `quantization/convrot.py` | ConvRot metadata parsing and loaded-module format inspection |
 | `quantization/capabilities.py` | independent-kernel symbol and comfy-kitchen backend probes |
+| `quantization/operator_scope.py` | MODEL/CLIP-local Turing Utils-first Kitchen selection scope |
 | `quantization/workspace.py` | pure, model-independent workspace formulas |
 | `quantization/dispatch.py` | compatibility facade plus W8A8/W4A8/W4A4 quantization/GEMM dispatch |
 | `quantization/fusions.py` | model-independent fused activation and normalization operations |

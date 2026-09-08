@@ -13,6 +13,7 @@ checkpoint metadata
   -> when BF16 was selected, normalize ConvRot logical dtype without copying packed data
   -> install optional model adapter object patches
   -> install attention override
+  -> install model-local Turing Utils -> Kitchen operator selection
 ```
 
 Diffusion and CLIP loaders prepare their own runtime. Loading a
@@ -36,12 +37,17 @@ not skip attention or quantized-kernel preflight.
 | `comfyui_turing_utils/kernel_api.py` | sole lazy boundary to the independently installed kernel package |
 | `kernel/csrc/turing` | historical source path for separately installed sm75+ kernels and exact-sm75 Sage |
 
+The quantization scope is attached through ModelPatcher. It never changes
+Kitchen's process-wide priority: a matching local implementation is selected
+only while the loaded MODEL or CLIP is executing. Capability rejection happens
+before the operation starts; execution errors propagate without retry.
+
 ## Linear matrix
 
 | Weight/activation | Plain input | Fused activation input | Output |
 |---|---|---|---|
-| W8A8 | fused Kitchen rotation when it fits; BF16 row-buffer or staged fallback | SwiGLU and tanh-GELU are folded into the same rotation/quantization decision | requested dtype, BF16 fast epilogue where eligible |
-| W4A4 | fused A4 rotation when it fits; BF16 row-buffer or grouped staged fallback | bundled staged/row-buffer SwiGLU or tanh-GELU produces packed A4 directly | original BF16 boundary |
+| W8A8 | bundled BF16 row-buffer rotation and local aligned contraction; Kitchen handles calls outside the local contract | SwiGLU and tanh-GELU are folded into the same rotation/quantization decision | BF16 on the local contract; Kitchen owns other requested dtypes |
+| W4A4 | bundled BF16 row-buffer rotation with Kitchen contraction; Kitchen owns calls outside the local contract | bundled staged/row-buffer SwiGLU or tanh-GELU produces packed A4 directly | original BF16 boundary |
 | Legacy W4A8 | shares the W8 activation quantizer and consumes signed packed W4 directly | shares fused W8 SwiGLU/tanh-GELU quantization | BF16 |
 | Grouped-codebook W4A8 | shares the W8 activation quantizer; long sequences decode packed g16 codebook values directly into the W8A8 shared tile, with a bounded staged fallback | shares fused W8 SwiGLU/tanh-GELU quantization | BF16 |
 
@@ -139,14 +145,12 @@ difference is about 0.1%, so an observed whole-workflow regression should be
 profiled in projection, Q/K/V preparation, model patching, or VRAM movement;
 it is not explained by a slower bundled stable-Sage CUDA main loop.
 
-For W8A8 GEMM, Kitchen's fused Turing kernel remains first choice. The no-bias
-small-contraction fallback uses cuBLAS INT8 plus the bundled vectorized BF16
-epilogue. Once a full MxN INT32 accumulator would reach 64 MiB, dispatch tries
-the fixed-workspace fused path even for contraction/square layers. If a
-Windows Kitchen build does not export that optional entry point, the bundled
-CUTLASS contraction writes BF16 directly instead of materializing the global
-INT32 matrix; this fallback has no Triton dependency and does not narrow the
-accepted aligned H3 shapes.
+For W8A8 GEMM, the bundled CUTLASS contraction is first choice for its aligned
+BF16 sm75+ contract. Calls outside that contract are handed to Kitchen before
+execution; Kitchen may select its fused CUDA path, cuBLAS, Triton, or eager
+implementation according to its own registered capabilities. This selection is
+not an exception-driven fallback and has no effect on models loaded without a
+Turing Utils loader.
 
 Wan projections, block normalization, attention dispatch, and feed-forward
 execution stay on ComfyUI's native path; current ComfyUI folds tanh-GELU through

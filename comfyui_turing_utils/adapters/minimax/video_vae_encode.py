@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import logging
 import math
 
 import torch
@@ -10,6 +9,7 @@ import torch
 import comfy.model_management
 import comfy.model_prefetch
 
+from ...log import get_logger
 from .video_vae import (
     TILE_OVERLAP,
     TILE_SIZE,
@@ -21,6 +21,9 @@ from .video_vae import (
     require_h3_video_vae,
     split_tiles,
 )
+
+
+LOG = get_logger("minimax.vae")
 
 
 def _encoder_prefetch_stages(model):
@@ -396,7 +399,7 @@ def encode_video(vae, pixels):
                 )
             except _PinnedBufferUnavailable:
                 comfy.model_management.synchronize()
-                logging.warning(
+                LOG.warning(
                     "H3 VAE could not allocate pinned encoder buffers; using synchronous FP32 pixel copies"
                 )
                 moments = _encode_temporal_device(

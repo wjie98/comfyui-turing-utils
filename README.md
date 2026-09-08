@@ -457,9 +457,10 @@ throughput still require an actual Turing GPU.
 
 See [`docs/operator-support.md`](docs/operator-support.md) for the operator and
 feature matrix, [`docs/turing-runtime.md`](docs/turing-runtime.md) for dispatch
-and validation details, and [`docs/architecture.md`](docs/architecture.md) for the
-Python/kernel layering. Experimental Sage1/Sage2 sources are not installed or
-exposed by loader nodes.
+and validation details, [`docs/architecture.md`](docs/architecture.md) for the
+Python/kernel layering, and [`docs/logging.md`](docs/logging.md) for stable log
+components and severity rules. Experimental Sage1/Sage2 sources are not
+installed or exposed by loader nodes.
 
 ## Kernel validation
 

@@ -8,11 +8,11 @@ with an official ComfyUI loader as well as with this plugin's Wan adapter.
 from __future__ import annotations
 
 import inspect
-import logging
 import math
 
 import torch
 
+from ..log import get_logger
 from .methods import OriginalMethod, weak_method
 from ..attention.layout import (
     ATTENTION_LAYOUT_KEY,
@@ -23,7 +23,7 @@ from ..attention.layout import (
 )
 
 
-LOG = logging.getLogger("comfyui-turing-utils")
+LOG = get_logger("wan.layout")
 WAN_LAYOUT_KIND = "wan_self_attention"
 SCAIL_LAYOUT_KIND = "scail_self_attention"
 _FORWARD_ORIG_PATCH_KEY = "diffusion_model.forward_orig"

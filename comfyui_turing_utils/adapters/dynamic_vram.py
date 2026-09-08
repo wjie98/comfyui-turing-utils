@@ -2,14 +2,13 @@
 
 from __future__ import annotations
 
-import logging
-
 import torch
 
+from ..log import get_logger
 from ..profiling import CUDA_PHASE_PROFILER, WORKFLOW_TIMELINE
 
 
-LOG = logging.getLogger("comfyui-turing-utils")
+LOG = get_logger("memory")
 DYNAMIC_VRAM_FENCE_WRAPPER_KEY = "turing_utils_dynamic_vram_sample_fence"
 
 

@@ -3,11 +3,11 @@
 from __future__ import annotations
 
 import dataclasses
-import logging
 import math
 
 import torch
 
+from ...log import get_logger
 from ..memory import install_memory_hooks, scan_quantized_workspaces
 from ..methods import OriginalMethod, weak_method
 from ...quantization.dispatch import turing_int8_workspace_bytes
@@ -19,7 +19,7 @@ from .activation_policy import (
 from .layout import RUNTIME_CONTEXT_ATTR, make_minimax_runtime_context_wrapper
 
 
-LOG = logging.getLogger("comfyui-turing-utils")
+LOG = get_logger("minimax.memory")
 _MEMORY_SHAPE_KEY = "turing_utils_minimax_packed_sequence"
 _MEMORY_CONTEXT_ATTR = RUNTIME_CONTEXT_ATTR
 _MEMORY_ADAPTER_ATTR = "_turing_utils_minimax_memory_adapter"

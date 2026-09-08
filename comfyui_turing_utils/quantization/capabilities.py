@@ -9,12 +9,15 @@ BACKEND_NAME = "turing_utils_sm75"
 
 
 def kernel_available(name: str = "turing_w4a8_linear") -> bool:
-    """Return whether the independently installed extension exports *name*."""
+    """Return whether both the Python API and compiled ABI export *name*."""
     try:
         extension = load_kernel_extension("_C")
+        package = load_kernel_package()
     except (ImportError, OSError):
         return False
-    return hasattr(extension, name)
+    return callable(getattr(extension, name, None)) and callable(
+        getattr(package, name, None)
+    )
 
 
 def kernel_op(name: str):

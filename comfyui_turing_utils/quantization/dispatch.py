@@ -2,8 +2,7 @@
 
 from __future__ import annotations
 
-import logging
-import sys
+from types import SimpleNamespace
 
 import torch
 
@@ -12,16 +11,18 @@ from ..hardware import (
     is_supported_tensor_core_device,
     is_supported_turing_device,
 )
+from ..log import get_logger
 from .capabilities import (
     BACKEND_NAME,
     kernel_available as _kernel_available,
     kernel_op as _kernel_op,
     kitchen_backend_available as backend_available,
 )
+from .operator_scope import use_turing_operator_backend
 from .workspace import codebook_w4a8_workspace_bytes, int8_workspace_bytes
 
 
-LOG = logging.getLogger("comfyui-turing-utils")
+LOG = get_logger("quantization")
 KITCHEN_DEFAULT_SHARED_MEMORY_LIMIT = 48 * 1024
 TURING_OPTIN_SHARED_MEMORY_LIMIT = 64 * 1024
 # Above this point a full MxN INT32 accumulator is more expensive than the
@@ -236,14 +237,15 @@ def preflight_kitchen(device: torch.device, w4a4: bool, w8a8: bool) -> None:
             )
             packed_weight = torch.zeros((64, hidden_size // 2), dtype=torch.int8, device=device)
             weight_scale = torch.ones((64,), dtype=torch.float32, device=device)
-            output = comfy_kitchen.convrot_w4a4_linear(
-                x,
-                packed_weight,
-                weight_scale,
-                convrot_groupsize=256,
-                quant_group_size=64,
-                linear_dtype="int4",
-            )
+            with use_turing_operator_backend():
+                output = comfy_kitchen.convrot_w4a4_linear(
+                    x,
+                    packed_weight,
+                    weight_scale,
+                    convrot_groupsize=256,
+                    quant_group_size=64,
+                    linear_dtype="int4",
+                )
             if output.dtype != torch.bfloat16 or not torch.isfinite(output).all():
                 raise RuntimeError(f"Kitchen W4A4 BF16 self-test failed for K={hidden_size}")
         swiglu_input = torch.zeros((16, 512), dtype=torch.bfloat16, device=device)
@@ -269,37 +271,40 @@ def preflight_kitchen(device: torch.device, w4a4: bool, w8a8: bool) -> None:
             )
             weight = torch.zeros((64, hidden_size), dtype=torch.int8, device=device)
             weight_scale = torch.ones((), dtype=torch.float32, device=device)
-            output = comfy_kitchen.int8_linear(
-                x,
+            with use_turing_operator_backend():
+                output = comfy_kitchen.int8_linear(
+                    x,
+                    weight,
+                    weight_scale,
+                    out_dtype=torch.bfloat16,
+                    convrot=True,
+                    convrot_groupsize=256,
+                )
+            if output.dtype != torch.bfloat16 or not torch.isfinite(output).all():
+                raise RuntimeError(f"Kitchen W8A8 BF16 self-test failed for K={hidden_size}")
+        swiglu_input = torch.cat((x, x), dim=-1)
+        with use_turing_operator_backend():
+            swiglu_output = comfy_kitchen.int8_linear(
+                swiglu_input,
                 weight,
                 weight_scale,
                 out_dtype=torch.bfloat16,
                 convrot=True,
                 convrot_groupsize=256,
+                input_act="swiglu",
             )
-            if output.dtype != torch.bfloat16 or not torch.isfinite(output).all():
-                raise RuntimeError(f"Kitchen W8A8 BF16 self-test failed for K={hidden_size}")
-        swiglu_input = torch.cat((x, x), dim=-1)
-        swiglu_output = comfy_kitchen.int8_linear(
-            swiglu_input,
-            weight,
-            weight_scale,
-            out_dtype=torch.bfloat16,
-            convrot=True,
-            convrot_groupsize=256,
-            input_act="swiglu",
-        )
         if swiglu_output.dtype != torch.bfloat16 or not torch.isfinite(swiglu_output).all():
             raise RuntimeError("Kitchen SwiGLU W8A8 BF16 self-test failed")
         contraction_input = torch.zeros((129, 256), dtype=torch.bfloat16, device=device)
-        contraction_output = comfy_kitchen.int8_linear(
-            contraction_input,
-            torch.zeros((64, 256), dtype=torch.int8, device=device),
-            torch.ones((), dtype=torch.float32, device=device),
-            out_dtype=torch.bfloat16,
-            convrot=True,
-            convrot_groupsize=256,
-        )
+        with use_turing_operator_backend():
+            contraction_output = comfy_kitchen.int8_linear(
+                contraction_input,
+                torch.zeros((64, 256), dtype=torch.int8, device=device),
+                torch.ones((), dtype=torch.float32, device=device),
+                out_dtype=torch.bfloat16,
+                convrot=True,
+                convrot_groupsize=256,
+            )
         if contraction_output.dtype != torch.bfloat16 or not torch.isfinite(contraction_output).all():
             raise RuntimeError("W8A8 BF16 contraction self-test failed")
     torch.cuda.synchronize(device)
@@ -371,27 +376,32 @@ def _quantize_turing_int8_activation(
         raise ValueError("SwiGLU input width must be even")
     hidden_size = x2d.shape[1] // 2 if input_act == "swiglu" else x2d.shape[1]
     if input_act == "gelu_tanh":
-        if x2d.dtype == torch.bfloat16 and _convrot_int8_bf16_rowbuffer_fits(
-            hidden_size, x2d.device
+        if (
+            x2d.dtype == torch.bfloat16
+            and is_supported_tensor_core_device(x2d.device)
+            and _convrot_int8_bf16_rowbuffer_fits(hidden_size, x2d.device)
+            and _kernel_available("turing_bf16_gelu_int8_convrot_quantize")
         ):
-            try:
-                turing_bf16_gelu_int8_convrot_quantize = _kernel_op(
-                    "turing_bf16_gelu_int8_convrot_quantize"
-                )
-            except RuntimeError:
-                pass
-            else:
-                return turing_bf16_gelu_int8_convrot_quantize(x2d, group_size)
-        try:
-            turing_gelu_int8_convrot_quantize = _kernel_op(
-                "turing_gelu_int8_convrot_quantize"
+            return _kernel_op("turing_bf16_gelu_int8_convrot_quantize")(
+                x2d, group_size
             )
-        except RuntimeError as exc:
+        if not _kernel_available("turing_gelu_int8_convrot_quantize"):
             raise RuntimeError(
                 "W8A8 GELU requires an updated comfyui-turing-utils-kernel; "
                 "reinstall the kernel package"
-            ) from exc
-        return turing_gelu_int8_convrot_quantize(x2d, group_size)
+            )
+        return _kernel_op("turing_gelu_int8_convrot_quantize")(x2d, group_size)
+    if (
+        x2d.dtype == torch.bfloat16
+        and is_supported_tensor_core_device(x2d.device)
+        and _convrot_int8_bf16_rowbuffer_fits(hidden_size, x2d.device)
+        and _kernel_available("turing_bf16_int8_convrot_quantize")
+    ):
+        return _kernel_op("turing_bf16_int8_convrot_quantize")(
+            x2d,
+            group_size,
+            swiglu=input_act == "swiglu",
+        )
     requested_shared = _convrot_int8_shared_memory_bytes(x2d.shape[0], hidden_size)
     if requested_shared < KITCHEN_DEFAULT_SHARED_MEMORY_LIMIT:
         if input_act == "swiglu":
@@ -399,32 +409,15 @@ def _quantize_turing_int8_activation(
                 x2d, group_size, input_act="swiglu"
             )
         return kitchen_cuda.quantize_int8_rowwise_convrot64(x2d, group_size)
-    if x2d.dtype == torch.bfloat16 and _convrot_int8_bf16_rowbuffer_fits(
-        hidden_size, x2d.device
-    ):
-        try:
-            turing_bf16_int8_convrot_quantize = _kernel_op(
-                "turing_bf16_int8_convrot_quantize"
-            )
-        except RuntimeError:
-            pass
-        else:
-            return turing_bf16_int8_convrot_quantize(
-                x2d,
-                group_size,
-                swiglu=input_act == "swiglu",
-            )
     if input_act == "swiglu":
-        try:
-            turing_swiglu_int8_convrot_quantize = _kernel_op(
-                "turing_swiglu_int8_convrot_quantize"
-            )
-        except RuntimeError as exc:
+        if not _kernel_available("turing_swiglu_int8_convrot_quantize"):
             raise RuntimeError(
                 "W8A8 SwiGLU requires an updated comfyui-turing-utils-kernel; "
                 "reinstall the kernel package"
-            ) from exc
-        return turing_swiglu_int8_convrot_quantize(x2d, group_size)
+            )
+        return _kernel_op("turing_swiglu_int8_convrot_quantize")(
+            x2d, group_size
+        )
     staged = getattr(kitchen_cuda, "quantize_int8_convrot_staged", None)
     if staged is None:
         raise RuntimeError(
@@ -492,16 +485,17 @@ def quantize_convrot_swiglu_with_scale(
                 "scaled SwiGLU direct output shape, dtype, device, or stride "
                 "is incompatible"
             )
-        try:
-            operation = _kernel_op(
-                "turing_swiglu_int8_convrot_quantize_scaled_out"
-            )
-        except RuntimeError:
+        if not _kernel_available(
+            "turing_swiglu_int8_convrot_quantize_scaled_out"
+        ):
             temporary = quantize_convrot_swiglu_with_scale(
                 x, scale, group_size
             )
             output.copy_(temporary)
             return output
+        operation = _kernel_op(
+            "turing_swiglu_int8_convrot_quantize_scaled_out"
+        )
         operation(x, scale, output, int(group_size))
         return output
     operation = _kernel_op("turing_swiglu_int8_convrot_quantize_scaled")
@@ -539,76 +533,61 @@ def _quantize_turing_int4_activation(
         raise ValueError(f"unsupported fused INT4 activation: {input_act!r}")
     if input_act == "gelu_tanh":
         hidden_size = x2d.shape[1]
-        if x2d.dtype == torch.bfloat16 and _convrot_int8_bf16_rowbuffer_fits(
-            hidden_size, x2d.device
+        if (
+            x2d.dtype == torch.bfloat16
+            and is_supported_tensor_core_device(x2d.device)
+            and _convrot_int8_bf16_rowbuffer_fits(hidden_size, x2d.device)
+            and _kernel_available("turing_bf16_gelu_int4_convrot_quantize")
         ):
-            try:
-                turing_bf16_gelu_int4_convrot_quantize = _kernel_op(
-                    "turing_bf16_gelu_int4_convrot_quantize"
-                )
-            except RuntimeError:
-                pass
-            else:
-                return turing_bf16_gelu_int4_convrot_quantize(x2d, group_size)
-        try:
-            turing_gelu_int4_convrot_quantize = _kernel_op(
-                "turing_gelu_int4_convrot_quantize"
+            return _kernel_op("turing_bf16_gelu_int4_convrot_quantize")(
+                x2d, group_size
             )
-        except RuntimeError as exc:
+        if not _kernel_available("turing_gelu_int4_convrot_quantize"):
             raise RuntimeError(
                 "W4A4 GELU requires an updated comfyui-turing-utils-kernel; "
                 "reinstall the kernel package"
-            ) from exc
-        return turing_gelu_int4_convrot_quantize(x2d, group_size)
+            )
+        return _kernel_op("turing_gelu_int4_convrot_quantize")(x2d, group_size)
     if input_act == "swiglu":
         hidden_size = x2d.shape[1] // 2
         if x2d.shape[1] % 2 != 0:
             raise ValueError("SwiGLU input width must be even")
-        if x2d.dtype == torch.bfloat16 and _convrot_int8_bf16_rowbuffer_fits(
-            hidden_size, x2d.device
+        if (
+            x2d.dtype == torch.bfloat16
+            and is_supported_tensor_core_device(x2d.device)
+            and _convrot_int8_bf16_rowbuffer_fits(hidden_size, x2d.device)
+            and _kernel_available("turing_bf16_int4_convrot_quantize")
         ):
-            try:
-                turing_bf16_int4_convrot_quantize = _kernel_op(
-                    "turing_bf16_int4_convrot_quantize"
-                )
-            except RuntimeError:
-                pass
-            else:
-                return turing_bf16_int4_convrot_quantize(
-                    x2d,
-                    group_size,
-                    swiglu=True,
-                )
-        try:
-            turing_swiglu_int4_convrot_quantize = _kernel_op(
-                "turing_swiglu_int4_convrot_quantize"
+            return _kernel_op("turing_bf16_int4_convrot_quantize")(
+                x2d,
+                group_size,
+                swiglu=True,
             )
-        except RuntimeError as exc:
+        if not _kernel_available("turing_swiglu_int4_convrot_quantize"):
             raise RuntimeError(
                 "W4A4 SwiGLU requires an updated comfyui-turing-utils-kernel; reinstall the kernel package"
-            ) from exc
-        return turing_swiglu_int4_convrot_quantize(x2d, group_size)
+            )
+        return _kernel_op("turing_swiglu_int4_convrot_quantize")(
+            x2d, group_size
+        )
+
+    if (
+        x2d.dtype == torch.bfloat16
+        and is_supported_tensor_core_device(x2d.device)
+        and _convrot_int8_bf16_rowbuffer_fits(x2d.shape[1], x2d.device)
+        and _kernel_available("turing_bf16_int4_convrot_quantize")
+    ):
+        return _kernel_op("turing_bf16_int4_convrot_quantize")(
+            x2d,
+            group_size,
+            swiglu=False,
+        )
 
     requested_shared = _convrot_int4_shared_memory_bytes(
         x2d.shape[0], x2d.shape[1], x2d.element_size()
     )
     if requested_shared < KITCHEN_DEFAULT_SHARED_MEMORY_LIMIT:
         return kitchen_cuda.quantize_int4_rowwise_convrot64(x2d, group_size)
-    if x2d.dtype == torch.bfloat16 and _convrot_int8_bf16_rowbuffer_fits(
-        x2d.shape[1], x2d.device
-    ):
-        try:
-            turing_bf16_int4_convrot_quantize = _kernel_op(
-                "turing_bf16_int4_convrot_quantize"
-            )
-        except RuntimeError:
-            pass
-        else:
-            return turing_bf16_int4_convrot_quantize(
-                x2d,
-                group_size,
-                swiglu=False,
-            )
     rotate = getattr(kitchen_cuda, "rotate_int8_convrot_weight", None)
     if rotate is None:
         raise RuntimeError(
@@ -628,10 +607,9 @@ def _turing_cublas_int8_bf16(
     """Run Kitchen's cuBLAS fallback with the bundled BF16 epilogue."""
     from comfy_kitchen.backends import cuda as kitchen_cuda
 
-    try:
-        turing_dequantize_int8_bf16 = _kernel_op("turing_dequantize_int8_bf16")
-    except RuntimeError:
+    if not _kernel_available("turing_dequantize_int8_bf16"):
         return None
+    turing_dequantize_int8_bf16 = _kernel_op("turing_dequantize_int8_bf16")
 
     required = (
         "_C",
@@ -724,9 +702,7 @@ def _turing_int8_gemm(
         expanded_weight_scale = weight_scale
         if expanded_weight_scale.numel() == 1:
             expanded_weight_scale = expanded_weight_scale.expand(n).contiguous()
-        try:
-            bundled_out = _kernel_op("turing_int8_linear_out")
-        except RuntimeError:
+        if not _kernel_available("turing_int8_linear_out"):
             temporary = _turing_int8_gemm(
                 qactivation,
                 weight,
@@ -737,7 +713,7 @@ def _turing_int8_gemm(
             )
             output.copy_(temporary)
             return output
-        bundled_out(
+        _kernel_op("turing_int8_linear_out")(
             qactivation,
             weight,
             activation_scale,
@@ -747,11 +723,29 @@ def _turing_int8_gemm(
         )
         return output
 
-    prefer_fused = getattr(kitchen_cuda, "_prefer_turing_fused_int8", None)
-    fused_linear = getattr(kitchen_cuda, "_int8_linear_turing_quantized", None)
     avoid_global_workspace = (
         m * n * 4 >= TURING_INT8_GLOBAL_WORKSPACE_LIMIT
     )
+    if (
+        output_dtype == torch.bfloat16
+        and is_supported_tensor_core_device(qactivation.device)
+        and k % 16 == 0
+        and n % 8 == 0
+        and _kernel_available("turing_int8_linear")
+    ):
+        expanded_weight_scale = weight_scale
+        if expanded_weight_scale.numel() == 1:
+            expanded_weight_scale = expanded_weight_scale.expand(n).contiguous()
+        return _kernel_op("turing_int8_linear")(
+            qactivation,
+            weight,
+            activation_scale,
+            expanded_weight_scale,
+            bias,
+        )
+
+    prefer_fused = getattr(kitchen_cuda, "_prefer_turing_fused_int8", None)
+    fused_linear = getattr(kitchen_cuda, "_int8_linear_turing_quantized", None)
     if callable(fused_linear) and (
         avoid_global_workspace
         or (callable(prefer_fused) and prefer_fused(m, n, k))
@@ -766,33 +760,6 @@ def _turing_int8_gemm(
         )
         if output is not None:
             return output
-
-    # Keep the planner's fixed-workspace promise even when Kitchen's optional
-    # fused symbol is unavailable (notably some Windows builds). The bundled
-    # CUTLASS contraction writes BF16 directly and has native sm75+ cubins.
-    if (
-        avoid_global_workspace
-        and output_dtype == torch.bfloat16
-        and k % 16 == 0
-        and n % 8 == 0
-    ):
-        try:
-            bundled_linear = _kernel_op("turing_int8_linear")
-        except RuntimeError:
-            pass
-        else:
-            expanded_weight_scale = weight_scale
-            if expanded_weight_scale.numel() == 1:
-                expanded_weight_scale = (
-                    expanded_weight_scale.expand(n).contiguous()
-                )
-            return bundled_linear(
-                qactivation,
-                weight,
-                activation_scale,
-                expanded_weight_scale,
-                bias,
-            )
 
     if bias is None and output_dtype == torch.bfloat16:
         output = _turing_cublas_int8_bf16(
@@ -1070,8 +1037,6 @@ def register_backend() -> bool:
 
     cuda_status = comfy_kitchen.list_backends().get("cuda", {})
     cuda_capabilities = set(cuda_status.get("capabilities", ()))
-    if not {"convrot_w4a4_linear", "int8_linear"}.issubset(cuda_capabilities):
-        return False
     if BACKEND_NAME in comfy_kitchen.list_backends():
         return backend_available()
 
@@ -1085,6 +1050,9 @@ def register_backend() -> bool:
     cuda_devices = frozenset({"cuda"})
     standard_floats = frozenset({torch.float32, torch.float16, torch.bfloat16})
     has_w4a8_kernel = _kernel_available()
+    has_w4a4_quantizer = _kernel_available(
+        "turing_bf16_int4_convrot_quantize"
+    )
     has_codebook_w4a8_kernel = _kernel_available("turing_codebook_w4a8_linear")
 
     def require_convrot_256(kwargs):
@@ -1092,6 +1060,37 @@ def register_backend() -> bool:
             return ValidationResult.fail("convrot", "staged INT8 requires ConvRot")
         if kwargs.get("convrot_groupsize") != 256:
             return ValidationResult.fail("convrot_groupsize", "staged INT8 requires group size 256")
+        x = kwargs.get("x")
+        weight = kwargs.get("weight")
+        input_act = kwargs.get("input_act")
+        if not isinstance(x, torch.Tensor) or not isinstance(weight, torch.Tensor):
+            return ValidationResult.fail("x", "Turing W8A8 requires tensor inputs")
+        hidden = x.shape[-1] // 2 if input_act == "swiglu" else x.shape[-1]
+        if hidden % 16 or weight.shape[0] % 8 or weight.shape[1] != hidden:
+            return ValidationResult.fail(
+                "weight", "Turing W8A8 requires matching K%16=0 and N%8=0"
+            )
+        rowbuffer = _convrot_int8_bf16_rowbuffer_fits(hidden, x.device)
+        if input_act in (None, "none"):
+            local_quantizer = rowbuffer and _kernel_available(
+                "turing_bf16_int8_convrot_quantize"
+            )
+        elif input_act == "swiglu":
+            local_quantizer = (
+                rowbuffer
+                and _kernel_available("turing_bf16_int8_convrot_quantize")
+            ) or _kernel_available("turing_swiglu_int8_convrot_quantize")
+        elif input_act == "gelu_tanh":
+            local_quantizer = (
+                rowbuffer
+                and _kernel_available("turing_bf16_gelu_int8_convrot_quantize")
+            ) or _kernel_available("turing_gelu_int8_convrot_quantize")
+        else:
+            local_quantizer = False
+        if not local_quantizer:
+            return ValidationResult.fail(
+                "input_act", "no exact Turing Utils activation quantizer is available"
+            )
         return ValidationResult.ok()
 
     def require_w4_convrot_256(kwargs):
@@ -1103,6 +1102,14 @@ def register_backend() -> bool:
             return ValidationResult.fail("linear_dtype", "W4 requires int4 or int8 activation")
         if kwargs.get("linear_dtype") == "int8" and not has_w4a8_kernel:
             return ValidationResult.fail("linear_dtype", "W4A8 kernel is unavailable")
+        x = kwargs.get("x")
+        if not isinstance(x, torch.Tensor) or not (
+            has_w4a4_quantizer
+            and _convrot_int8_bf16_rowbuffer_fits(x.shape[-1], x.device)
+        ):
+            return ValidationResult.fail(
+                "x", "no exact Turing Utils INT4 activation quantizer is available"
+            )
         return ValidationResult.ok()
 
     def require_codebook_w4a8(kwargs):
@@ -1120,10 +1127,34 @@ def register_backend() -> bool:
             return ValidationResult.fail(
                 "codebook", "codebook W4A8 requires a 16-entry codebook"
             )
+        if kwargs.get("group_size") != 16:
+            return ValidationResult.fail(
+                "group_size", "codebook W4A8 requires group size 16"
+            )
+        if kwargs.get("out_dtype") is not torch.bfloat16:
+            return ValidationResult.fail(
+                "out_dtype", "codebook W4A8 local output must be BF16"
+            )
+        x = kwargs.get("x")
+        qdata = kwargs.get("qdata")
+        codebook = kwargs.get("codebook")
+        if not all(isinstance(value, torch.Tensor) for value in (x, qdata, codebook)):
+            return ValidationResult.fail("x", "codebook W4A8 requires tensor inputs")
+        if codebook.numel() != 16:
+            return ValidationResult.fail("codebook", "codebook must contain 16 values")
+        if qdata.shape[0] % 8 or qdata.shape[1] * 2 != x.shape[-1]:
+            return ValidationResult.fail(
+                "qdata", "codebook W4A8 requires matching packed K and N%8=0"
+            )
         return ValidationResult.ok()
 
-    operations = {
-        "int8_linear": FunctionConstraints(
+    operations = {}
+    implementations = {}
+    if (
+        "int8_linear" in cuda_capabilities
+        and _kernel_available("turing_int8_linear")
+    ):
+        operations["int8_linear"] = FunctionConstraints(
             params={
                 "x": ParamConstraint(
                     dtypes=frozenset({torch.bfloat16}),
@@ -1134,15 +1165,17 @@ def register_backend() -> bool:
                 ),
                 "weight_scale": ParamConstraint(dtypes=frozenset({torch.float32})),
                 "bias": ParamConstraint(dtypes=standard_floats),
-                "out_dtype": ParamConstraint(dtypes=standard_floats),
+                "out_dtype": ParamConstraint(dtypes=frozenset({torch.bfloat16})),
                 "convrot": ParamConstraint(dtypes=frozenset({bool})),
                 "convrot_groupsize": ParamConstraint(dtypes=frozenset({int})),
                 "input_act": ParamConstraint(dtypes=frozenset({str, type(None)})),
             },
             default_devices=cuda_devices,
             call_rules=(require_convrot_256,),
-        ),
-        "convrot_w4a4_linear": FunctionConstraints(
+        )
+        implementations["int8_linear"] = int8_linear
+    if "convrot_w4a4_linear" in cuda_capabilities and has_w4a4_quantizer:
+        operations["convrot_w4a4_linear"] = FunctionConstraints(
             params={
                 "x": ParamConstraint(
                     dtypes=frozenset({torch.bfloat16}),
@@ -1162,9 +1195,12 @@ def register_backend() -> bool:
             },
             default_devices=cuda_devices,
             call_rules=(require_w4_convrot_256,),
-        ),
-    }
-    if "w4a8_int8_linear" in cuda_capabilities:
+        )
+        implementations["convrot_w4a4_linear"] = convrot_w4a4_linear
+    if (
+        "w4a8_int8_linear" in cuda_capabilities
+        and has_codebook_w4a8_kernel
+    ):
         operations["w4a8_int8_linear"] = FunctionConstraints(
             params={
                 "x": ParamConstraint(
@@ -1190,8 +1226,13 @@ def register_backend() -> bool:
             default_devices=cuda_devices,
             call_rules=(require_codebook_w4a8,),
         )
-    registry.register(BACKEND_NAME, sys.modules[__name__], operations)
-    existing_priority = list(getattr(registry, "_priority", ("cuda", "triton", "eager")))
-    registry.set_priority([BACKEND_NAME, *(name for name in existing_priority if name != BACKEND_NAME)])
-    LOG.info("Registered shared sm75+ ConvRot backend")
+        implementations["w4a8_int8_linear"] = codebook_w4a8_linear
+    if not operations:
+        return False
+    registry.register(BACKEND_NAME, SimpleNamespace(**implementations), operations)
+    LOG.info(
+        "Registered scoped sm75+ operator backend: name=%s operators=%s global_priority=unchanged",
+        BACKEND_NAME,
+        ",".join(sorted(operations)),
+    )
     return True

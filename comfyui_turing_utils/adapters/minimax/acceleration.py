@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import dataclasses
 import inspect
-import logging
 import math
 import weakref
 from collections import Counter
@@ -12,6 +11,7 @@ from collections.abc import Sequence
 
 import torch
 
+from ...log import get_logger
 from ..methods import OriginalMethod, weak_method
 from ...attention.integration import AttentionSiteStatus, execute_projected_attention
 from ...attention.layout import ATTENTION_LAYOUT_REQUIREMENT_KEY, attention_semantic_layout
@@ -86,7 +86,7 @@ from .memory_planning import (
 )
 
 
-LOG = logging.getLogger("comfyui-turing-utils")
+LOG = get_logger("minimax.fusion")
 
 
 def _profile_cuda(phase: str, function, /, *args, **kwargs):

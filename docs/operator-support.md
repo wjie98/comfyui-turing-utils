@@ -22,9 +22,14 @@ cross-compilation list is supplied explicitly.
 The loader defaults to bundled W8A8 on sm75 and newer Tensor Core GPUs; Sage
 and SDPA remain explicit choices. Native cubins provide compile-time device
 specialization without a separate Python model path.
-If Kitchen rejects a shape or an incompatible installed binary at runtime, the
-single-owner container path safely delegates that call to ComfyUI's prior
-attention backend instead of leaving Q/K/V partially consumed.
+ConvRot MODEL and CLIP loaders install a model-local Kitchen selection scope.
+Exact local contracts have priority inside that scope; unsupported calls return
+to Kitchen's normal dispatcher before execution. The plugin does not change the
+global Kitchen backend priority, and it does not catch a selected operator's
+runtime failure to continue with another implementation.
+Attention has a separate single-owner container preflight: a shape or ABI that
+fails capability checks is delegated before Q/K/V are consumed. A failure from
+an attention kernel that has already started is not retried either.
 
 ## Public custom operators
 
@@ -54,10 +59,11 @@ implementation.
 | Attention | `sol_attention` | Native sm75+ online Sol routing with FP16/BF16-PV or INT8-PV |
 | Attention | `sla_attention` | Native sm75+ 128x64 fixed-Top-K SLA routing with FP16/BF16-PV or INT8-PV |
 
-W4A4 and the main W8A8 linear contraction deliberately reuse Comfy Kitchen or
-cuBLAS. The local package supplies sm75+-capable quantization, BF16
-epilogue, activation fusions, dispatch, and W4A8 contraction. It does not carry
-duplicate full W4A4 and W8A8 GEMM implementations.
+W4A4 contraction deliberately reuses Comfy Kitchen. W8A8 uses the local sm75+
+contraction for its aligned BF16 contract and otherwise returns to Kitchen's
+normal dispatcher. The local package also supplies sm75+-capable quantization,
+the BF16 epilogue, activation fusions, dispatch, and W4A8 contraction; it does
+not duplicate the full W4A4 GEMM.
 
 ## Attention feature matrix
 
@@ -105,7 +111,7 @@ another GPU's launch policy.
 
 | Format | Weight storage | Activation | Contraction owner | Local Turing additions |
 |---|---|---|---|---|
-| W8A8 | INT8 | INT8 | Kitchen/cuBLAS | sm75+ ConvRot quantization, fused SwiGLU/GELU, BF16 epilogue, workspace policy |
+| W8A8 | INT8 | INT8 | local sm75+ kernel for its exact contract; otherwise Kitchen/cuBLAS | sm75+ ConvRot quantization, fused SwiGLU/GELU, BF16 epilogue, workspace policy |
 | W4A4 | packed INT4 | INT4 | Kitchen | sm75+ BF16 input/output compatibility and fused activation quantization |
 | Legacy W4A8 | signed packed INT4 | INT8 | local sm75+ kernel | packed-weight shared-tile expansion, INT8 Tensor Core MMA, BF16 output |
 | Grouped-codebook W4A8 | 4-bit codebook indices + E4M3 g16 scales + FP32 channel scales | INT8 | local sm75+ kernel | register decode directly into the shared W8A8 tile for long sequences, bounded staged fallback, BF16 output; covers the symmetric `asym_w4a8_int8` MiniMax-H3 files |

@@ -8,11 +8,11 @@ assuming that model weights are permanently resident.
 from __future__ import annotations
 
 import dataclasses
-import logging
 import math
 
 import torch
 
+from ...log import get_logger
 from ...hardware import device_capabilities
 from .memory_state import (
     ActivationRuntimePlan,
@@ -33,7 +33,7 @@ from .policy_config import override_ffn_channels as _override_ffn_channels
 from .policy_config import override_head_group as _override_head_group
 
 
-LOG = logging.getLogger("comfyui-turing-utils")
+LOG = get_logger("minimax.policy")
 _MIB = 1024**2
 _ATTENTION_QUERY_TILE_ROWS = 64
 _ATTENTION_TARGET_WAVES = 4

@@ -3,22 +3,21 @@
 from __future__ import annotations
 
 import inspect
-import logging
 import math
 from dataclasses import dataclass
-
-import torch
 
 import comfy.ldm.common_dit
 import comfy.model_management
 import comfy.model_prefetch
 import comfy.patcher_extension
+import torch
 from comfy.ldm.minimax import model as minimax_model
 
+from ...log import get_logger
 from ..methods import weak_method
 
 
-LOG = logging.getLogger("comfyui-turing-utils")
+LOG = get_logger("minimax.cache")
 CACHE_KEY = "turing_utils_minimax_h3_block_cache"
 PATCH_KEY = "turing_utils_minimax_h3_block_cache"
 FORWARD_PATCH_KEY = "diffusion_model._forward"

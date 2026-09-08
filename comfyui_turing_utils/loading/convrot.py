@@ -7,7 +7,6 @@ policy, and adapter installation.
 
 from __future__ import annotations
 
-import logging
 import sys
 from pathlib import Path
 
@@ -22,6 +21,7 @@ import comfy.utils
 from ..adapters.dynamic_vram import install_dynamic_vram_sample_fence
 from ..adapters.registry import apply_model_adapters
 from ..attention import apply_attention_backend, normalize_attention_backend
+from ..log import get_logger
 from ..precision import (
     normalize_turing_convrot_weight_dtypes,
     prepare_turing_runtime,
@@ -34,9 +34,13 @@ from ..quantization.convrot import (
     _summarize_convrot_modules,
     configure_convrot_activation,
 )
+from ..quantization.operator_scope import (
+    install_clip_operator_scope,
+    install_model_operator_scope,
+)
 
 
-LOG = logging.getLogger("comfyui-turing-utils")
+LOG = get_logger("loader")
 DIFFUSION_FOLDER_NAME = "diffusion_models"
 CLIP_FOLDER_NAME = "text_encoders"
 
@@ -105,11 +109,11 @@ def validate_runtime_support(
         raise RuntimeError("ConvRot W4A8 requires comfy-kitchen") from exc
 
     cuda_backend = comfy_kitchen.list_backends().get("cuda", {})
-    if not cuda_backend.get("available", False) or cuda_backend.get("disabled", False):
+    if not cuda_backend.get("available", False):
         reason = cuda_backend.get("unavailable_reason")
         detail = f": {reason}" if reason else ""
         raise RuntimeError(
-            "ConvRot W4A8 requires the comfy-kitchen CUDA backend, but it is not enabled"
+            "ConvRot W4A8 requires the comfy-kitchen CUDA extension, but it is unavailable"
             f"{detail}. The eager ConvRot W4 path always computes A4, so this loader will not silently accept A8."
         )
 
@@ -189,6 +193,7 @@ def load_convrot_model(
         device=load_device,
         native_runtime=True,
     )
+    install_model_operator_scope(model)
     model.cached_patcher_init = (
         load_convrot_model,
         (str(model_path), force_int8_gemm, attention_backend),
@@ -262,6 +267,7 @@ def load_convrot_clip(
         loaded.codebook_w4a8,
         loaded.w8a8,
     )
+    install_clip_operator_scope(clip)
     clip.patcher.cached_patcher_init = (
         load_convrot_clip_patcher,
         (

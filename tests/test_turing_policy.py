@@ -163,6 +163,42 @@ class BF16PolicyTest(unittest.TestCase):
         register.assert_called_once_with()
         preflight.assert_called_once_with(torch.device("cuda", 0), False, True)
 
+    def test_scoped_runtime_accepts_installed_kitchen_cuda_when_globally_disabled(self):
+        summary = SimpleNamespace(w4a4=0, w4a8=0, w8a8=1)
+        device = torch.device("cuda", 0)
+        with (
+            mock.patch(
+                "comfy_kitchen.list_backends",
+                return_value={
+                    "cuda": {
+                        "available": True,
+                        "disabled": True,
+                        "unavailable_reason": "requires CUDA 13",
+                        "capabilities": ("int8_linear",),
+                    }
+                },
+            ),
+            mock.patch(
+                "comfyui_turing_utils.precision.is_supported_tensor_core_device",
+                return_value=True,
+            ),
+            mock.patch("comfyui_turing_utils.precision._check_kernel_contract"),
+            mock.patch("comfyui_turing_utils.precision._check_kitchen_contract"),
+            mock.patch(
+                "comfyui_turing_utils.precision.register_backend", return_value=True
+            ) as register,
+            mock.patch(
+                "comfyui_turing_utils.precision.backend_available", return_value=True
+            ),
+            mock.patch(
+                "comfyui_turing_utils.precision.preflight_kitchen"
+            ) as preflight,
+        ):
+            bf16_policy.prepare_turing_runtime(summary, device, "sdpa")
+
+        register.assert_called_once_with()
+        preflight.assert_called_once_with(device, False, True)
+
     def test_codebook_w4a8_requires_new_kernel_and_uses_its_preflight(self):
         summary = SimpleNamespace(
             w4a4=0, w4a8=0, codebook_w4a8=1, w8a8=0
@@ -405,6 +441,9 @@ class BF16PolicyTest(unittest.TestCase):
             x = torch.empty((3, hidden_size), dtype=torch.bfloat16)
             with (
                 self.subTest(hidden_size=hidden_size),
+                mock.patch.object(
+                    turing_ops, "is_supported_tensor_core_device", return_value=True
+                ),
                 mock.patch.object(kitchen_cuda, "quantize_int8_rowwise_convrot64") as fused,
                 mock.patch.object(kitchen_cuda, "quantize_int8_convrot_staged") as staged,
                 mock.patch.dict(
@@ -426,6 +465,9 @@ class BF16PolicyTest(unittest.TestCase):
         rowbuffer = mock.Mock(return_value=("q", "s"))
         staged_swiglu = mock.Mock()
         with (
+            mock.patch.object(
+                turing_ops, "is_supported_tensor_core_device", return_value=True
+            ),
             mock.patch.dict(
                 sys.modules,
                 {"comfyui_turing_utils_kernel": SimpleNamespace(
@@ -596,6 +638,9 @@ class BF16PolicyTest(unittest.TestCase):
         x = torch.empty((3, 16384), dtype=torch.bfloat16)
         rowbuffer = mock.Mock(return_value=("q", "s"))
         with (
+            mock.patch.object(
+                turing_ops, "is_supported_tensor_core_device", return_value=True
+            ),
             mock.patch.object(kitchen_cuda, "quantize_int4_rowwise_convrot64") as fused,
             mock.patch.object(kitchen_cuda, "rotate_int8_convrot_weight") as rotate,
             mock.patch.dict(
@@ -611,19 +656,30 @@ class BF16PolicyTest(unittest.TestCase):
         fused.assert_not_called()
         rotate.assert_not_called()
 
-    def test_w4a4_keeps_h3_bf16_rotation_fused_when_it_fits(self):
+    def test_w4a4_prefers_local_bf16_rotation_when_it_fits(self):
         x = torch.empty((3, 14336), dtype=torch.bfloat16)
+        rowbuffer = mock.Mock(return_value=("q", "s"))
         with (
+            mock.patch.object(
+                turing_ops, "is_supported_tensor_core_device", return_value=True
+            ),
             mock.patch.object(
                 kitchen_cuda,
                 "quantize_int4_rowwise_convrot64",
                 return_value=("q", "s"),
             ) as fused,
             mock.patch.object(kitchen_cuda, "rotate_int8_convrot_weight") as rotate,
+            mock.patch.dict(
+                sys.modules,
+                {"comfyui_turing_utils_kernel": SimpleNamespace(
+                    turing_bf16_int4_convrot_quantize=rowbuffer
+                )},
+            ),
         ):
             result = turing_ops._quantize_turing_int4_activation(x, 256)
         self.assertEqual(result, ("q", "s"))
-        fused.assert_called_once_with(x, 256)
+        rowbuffer.assert_called_once_with(x, 256, swiglu=False)
+        fused.assert_not_called()
         rotate.assert_not_called()
 
     def test_w4a4_linear_uses_int4_staged_helper(self):
@@ -692,12 +748,17 @@ class BF16PolicyTest(unittest.TestCase):
         x = torch.empty((3, 28672), dtype=torch.bfloat16)
         rowbuffer = mock.Mock(return_value=("q", "s"))
         staged = mock.Mock()
-        with mock.patch.dict(
-            sys.modules,
-            {"comfyui_turing_utils_kernel": SimpleNamespace(
-                turing_bf16_int4_convrot_quantize=rowbuffer,
-                turing_swiglu_int4_convrot_quantize=staged,
-            )},
+        with (
+            mock.patch.object(
+                turing_ops, "is_supported_tensor_core_device", return_value=True
+            ),
+            mock.patch.dict(
+                sys.modules,
+                {"comfyui_turing_utils_kernel": SimpleNamespace(
+                    turing_bf16_int4_convrot_quantize=rowbuffer,
+                    turing_swiglu_int4_convrot_quantize=staged,
+                )},
+            ),
         ):
             result = turing_ops._quantize_turing_int4_activation(
                 x, 256, input_act="swiglu"
