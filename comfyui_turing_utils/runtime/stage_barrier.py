@@ -13,7 +13,7 @@ from __future__ import annotations
 from collections import Counter, deque
 from typing import Iterable, Mapping, NamedTuple
 
-from comfyui_turing_utils.log import get_logger
+from ..log import get_logger
 
 LOG = get_logger("stage")
 STAGE_BARRIER_NODE_ID = "TuringUtilsStageBarrier"

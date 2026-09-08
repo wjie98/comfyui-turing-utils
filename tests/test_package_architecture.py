@@ -38,6 +38,28 @@ class PackageArchitectureTest(unittest.TestCase):
                     offenders.append(str(path.relative_to(ROOT)))
         self.assertEqual(offenders, [])
 
+    def test_implementation_package_uses_relative_self_imports(self):
+        """ComfyUI may load the plugin root under a generated module name."""
+
+        package = ROOT / "comfyui_turing_utils"
+        offenders = []
+        for path in package.rglob("*.py"):
+            tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+            for node in ast.walk(tree):
+                if isinstance(node, ast.Import):
+                    modules = [alias.name for alias in node.names]
+                elif isinstance(node, ast.ImportFrom) and node.level == 0:
+                    modules = [node.module or ""]
+                else:
+                    continue
+                if any(
+                    name == "comfyui_turing_utils"
+                    or name.startswith("comfyui_turing_utils.")
+                    for name in modules
+                ):
+                    offenders.append(str(path.relative_to(ROOT)))
+        self.assertEqual(offenders, [])
+
     def test_attention_depends_on_layout_contract_not_minimax_adapter(self):
         attention_root = ROOT / "comfyui_turing_utils" / "attention"
         source = "\n".join(

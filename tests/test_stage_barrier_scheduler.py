@@ -1,21 +1,16 @@
 from __future__ import annotations
 
-import importlib.util
 import random
+import sys
 import unittest
 from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
-MODULE_PATH = (
-    ROOT / "comfyui_turing_utils" / "runtime" / "stage_barrier.py"
-)
-SPEC = importlib.util.spec_from_file_location(
-    "turing_utils_stage_barrier_test_target", MODULE_PATH
-)
-stage_barrier_module = importlib.util.module_from_spec(SPEC)
-assert SPEC.loader is not None
-SPEC.loader.exec_module(stage_barrier_module)
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from comfyui_turing_utils.runtime import stage_barrier as stage_barrier_module
 BarrierPhase = stage_barrier_module.BarrierPhase
 BarrierPlanError = stage_barrier_module.BarrierPlanError
 BarrierPlanner = stage_barrier_module.BarrierPlanner
