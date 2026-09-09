@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import random
 import sys
 import unittest
@@ -17,6 +18,9 @@ BarrierPlanner = stage_barrier_module.BarrierPlanner
 STAGE_BARRIER_NODE_ID = stage_barrier_module.STAGE_BARRIER_NODE_ID
 STAGE_PATH_NODE_ID = stage_barrier_module.STAGE_PATH_NODE_ID
 stage_barrier_candidates = stage_barrier_module.stage_barrier_candidates
+_wait_for_active_barrier_phase = (
+    stage_barrier_module._wait_for_active_barrier_phase
+)
 
 
 class _Prompt:
@@ -400,6 +404,56 @@ class StageBarrierSchedulerTest(unittest.TestCase):
                     self.assertGreater(
                         target_phase.round, source_phase.round
                     )
+
+
+class _ExternallyBlockedExecutionList:
+    def __init__(self):
+        nodes = {
+            "active": _barrier(0),
+            "unrelated": _normal(),
+        }
+        self.dynprompt = _Prompt(nodes)
+        self.pendingNodes = dict.fromkeys(nodes, True)
+        self.blocking = _blocking(nodes, ())
+        self.blockCount = {"active": 1, "unrelated": 0}
+        self.externalBlocks = 1
+        self.unblockedEvent = asyncio.Event()
+
+    def is_empty(self):
+        return not self.pendingNodes
+
+    def get_ready_nodes(self):
+        return [
+            node_id
+            for node_id in self.pendingNodes
+            if self.blockCount[node_id] == 0
+        ]
+
+    def unblock_active(self):
+        self.externalBlocks = 0
+        self.blockCount["active"] = 0
+        self.unblockedEvent.set()
+
+
+class StageBarrierAsyncWaitTest(unittest.IsolatedAsyncioTestCase):
+    async def test_waits_instead_of_advancing_unrelated_work(self):
+        execution_list = _ExternallyBlockedExecutionList()
+        wait_task = asyncio.create_task(
+            _wait_for_active_barrier_phase(execution_list)
+        )
+        await asyncio.sleep(0)
+
+        self.assertFalse(wait_task.done())
+        execution_list.unblock_active()
+        await asyncio.wait_for(wait_task, timeout=1.0)
+
+    async def test_inconsistent_internal_graph_keeps_liveness_fallback(self):
+        execution_list = _ExternallyBlockedExecutionList()
+        execution_list.externalBlocks = 0
+
+        await asyncio.wait_for(
+            _wait_for_active_barrier_phase(execution_list), timeout=1.0
+        )
 
 
 if __name__ == "__main__":

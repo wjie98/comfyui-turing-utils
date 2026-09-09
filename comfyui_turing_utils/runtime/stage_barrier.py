@@ -22,6 +22,7 @@ STAGE_SCHEDULING_NODE_IDS = frozenset(
     (STAGE_BARRIER_NODE_ID, STAGE_PATH_NODE_ID)
 )
 _PATCH_MARKER = "_turing_utils_stage_barrier_scheduler"
+_STAGE_PATCH_MARKER = "_turing_utils_stage_barrier_staging"
 _PLANNER_ATTRIBUTE = "_turing_utils_stage_barrier_planner"
 
 
@@ -285,6 +286,8 @@ class BarrierPlanner:
         pending_nodes: Iterable[str],
         blocking: Mapping[str, Mapping[str, object]],
         available_nodes: Iterable[str],
+        *,
+        fallback_to_available: bool = True,
     ) -> list[str]:
         """Return ready nodes allowed to advance the earliest active phase."""
 
@@ -381,10 +384,12 @@ class BarrierPlanner:
             self._warned_unavailable_phase = None
             return candidates
 
-        # External async blockers or newly materializing lazy inputs can make
-        # the selected phase temporarily unable to advance while unrelated
-        # work is ready. Preserve liveness, but never hide the loss of strict
-        # rendezvous ordering.
+        # External async blockers can make the selected phase temporarily
+        # unable to advance while unrelated work is ready.  The async staging
+        # wrapper waits in that case.  Stateless callers and genuinely
+        # inconsistent graphs retain the old liveness fallback.
+        if not fallback_to_available:
+            return []
         if self._warned_unavailable_phase != active_phase:
             LOG.warning(
                 "Stage Barrier phase r%d/s%d has no ready ancestor; "
@@ -413,8 +418,57 @@ def stage_barrier_candidates(
     )
 
 
+def _planner_for(execution_list) -> BarrierPlanner:
+    planner = getattr(execution_list, _PLANNER_ATTRIBUTE, None)
+    if planner is None or planner.dynprompt is not execution_list.dynprompt:
+        planner = BarrierPlanner(execution_list.dynprompt)
+        setattr(execution_list, _PLANNER_ATTRIBUTE, planner)
+    return planner
+
+
+async def _wait_for_active_barrier_phase(execution_list) -> None:
+    """Wait while only unrelated work is ready for an externally blocked phase.
+
+    ``ExecutionList.ux_friendly_pick_node`` is synchronous.  Restricting its
+    candidate list alone therefore cannot distinguish a dependency cycle from
+    a barrier ancestor that is temporarily blocked by an asynchronous node.
+    ComfyUI exposes exactly that distinction through ``externalBlocks`` and
+    ``unblockedEvent``, so wait here before its normal staging method runs.
+    """
+
+    planner = _planner_for(execution_list)
+    waited = False
+    while not execution_list.is_empty():
+        available = execution_list.get_ready_nodes()
+        if not available:
+            # ComfyUI's own staging loop already handles the case where every
+            # ready node is externally blocked, including cycle reporting.
+            return
+        allowed = planner.candidates(
+            execution_list.pendingNodes,
+            execution_list.blocking,
+            available,
+            fallback_to_available=False,
+        )
+        if allowed or execution_list.externalBlocks <= 0:
+            if waited:
+                LOG.info("Stage Barrier rendezvous resumed after async work")
+            return
+
+        if not waited:
+            LOG.info(
+                "Stage Barrier is waiting for an async ancestor instead of "
+                "advancing unrelated work"
+            )
+            waited = True
+        # An unblock racing with this wait leaves the Event set, so there is no
+        # lost-wakeup window between the counter check and await.
+        await execution_list.unblockedEvent.wait()
+        execution_list.unblockedEvent.clear()
+
+
 def install_stage_barrier_scheduler() -> bool:
-    """Wrap ComfyUI's ready-node picker exactly once."""
+    """Wrap ComfyUI's async staging and ready-node picker exactly once."""
 
     try:
         from comfy_execution.graph import ExecutionList
@@ -425,31 +479,45 @@ def install_stage_barrier_scheduler() -> bool:
         )
         return False
 
-    original = getattr(ExecutionList, "ux_friendly_pick_node", None)
-    if original is None:
+    current_pick = getattr(ExecutionList, "ux_friendly_pick_node", None)
+    current_stage = getattr(ExecutionList, "stage_node_execution", None)
+    if current_pick is None or current_stage is None:
         LOG.warning(
-            "Stage Barrier ordering is unavailable: ComfyUI's ready-node picker "
-            "was not found"
+            "Stage Barrier ordering is unavailable: ComfyUI's compatible "
+            "staging methods were not found"
         )
         return False
-    if getattr(original, _PATCH_MARKER, False):
-        return True
 
-    def stage_aware_pick_node(self, node_list):
-        planner = getattr(self, _PLANNER_ATTRIBUTE, None)
-        if planner is None or planner.dynprompt is not self.dynprompt:
-            planner = BarrierPlanner(self.dynprompt)
-            setattr(self, _PLANNER_ATTRIBUTE, planner)
-        candidates = planner.candidates(
-            self.pendingNodes,
-            self.blocking,
-            node_list,
+    if not getattr(current_pick, _PATCH_MARKER, False):
+        original_pick = current_pick
+
+        def stage_aware_pick_node(self, node_list):
+            candidates = _planner_for(self).candidates(
+                self.pendingNodes,
+                self.blocking,
+                node_list,
+            )
+            return original_pick(self, candidates)
+
+        setattr(stage_aware_pick_node, _PATCH_MARKER, True)
+        setattr(stage_aware_pick_node, "_turing_utils_original", original_pick)
+        ExecutionList.ux_friendly_pick_node = stage_aware_pick_node
+
+    if not getattr(current_stage, _STAGE_PATCH_MARKER, False):
+        original_stage = current_stage
+
+        async def stage_aware_stage_node_execution(self):
+            await _wait_for_active_barrier_phase(self)
+            return await original_stage(self)
+
+        setattr(stage_aware_stage_node_execution, _STAGE_PATCH_MARKER, True)
+        setattr(
+            stage_aware_stage_node_execution,
+            "_turing_utils_original",
+            original_stage,
         )
-        return original(self, candidates)
+        ExecutionList.stage_node_execution = stage_aware_stage_node_execution
 
-    setattr(stage_aware_pick_node, _PATCH_MARKER, True)
-    setattr(stage_aware_pick_node, "_turing_utils_original", original)
-    ExecutionList.ux_friendly_pick_node = stage_aware_pick_node
     LOG.info("Enabled dependency-first Stage Barrier scheduling")
     return True
 

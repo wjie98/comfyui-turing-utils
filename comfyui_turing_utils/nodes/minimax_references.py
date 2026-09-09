@@ -7,6 +7,7 @@ import torch
 import node_helpers
 from comfy_api.latest import io
 
+from ..log import get_logger
 from ..adapters.minimax.references import (
     H3AudioReferenceData,
     H3ImageReferenceData,
@@ -35,6 +36,104 @@ from ..adapters.minimax.references import (
     _video_latent,
     h3_latent_info,
 )
+
+
+LOG = get_logger("minimax")
+_GIB = 1024**3
+_H3_SEMANTIC_MIN_HEADROOM = 3 * _GIB
+_H3_SEMANTIC_MAX_HEADROOM = 6 * _GIB
+
+
+def _loaded_clip_models(model_management, patcher) -> list[object]:
+    """Return ComfyUI LoadedModel records that own this CLIP patcher."""
+
+    matches = []
+    for loaded in getattr(model_management, "current_loaded_models", ()):
+        loaded_patcher = getattr(loaded, "model", None)
+        if loaded_patcher is patcher:
+            matches.append(loaded)
+            continue
+        try:
+            if patcher.is_clone(loaded_patcher):
+                matches.append(loaded)
+        except (AttributeError, RuntimeError, TypeError):
+            continue
+    return matches
+
+
+def _prepare_h3_semantic_encoder(clip, tokens) -> None:
+    """Load the H3 text encoder with room for quantized-weight expansion.
+
+    Qwen3-VL NVFP4 weights use an eager lookup/dequantization fallback on
+    pre-Blackwell GPUs.  ComfyUI's generic CLIP estimate currently accounts
+    for neither that transient allocation nor a resident dynamic DiT.  A
+    warm rerun can therefore load both models successfully and then OOM on the
+    first MLP.  Reserve a bounded fraction of device memory before loading the
+    encoder, and keep the encoder while releasing stale residents afterward.
+    """
+
+    patcher = getattr(clip, "patcher", None)
+    load_model = getattr(clip, "load_model", None)
+    device = getattr(patcher, "load_device", None)
+    if patcher is None or not callable(load_model) or device is None:
+        return
+    if getattr(device, "type", None) in ("cpu", "mps"):
+        return
+
+    try:
+        import comfy.model_management as model_management
+    except (ImportError, AttributeError):
+        return
+
+    total = int(model_management.get_total_memory(device))
+    headroom = min(
+        _H3_SEMANTIC_MAX_HEADROOM,
+        max(_H3_SEMANTIC_MIN_HEADROOM, total // 8),
+    )
+    try:
+        remaining_weights = max(
+            0,
+            int(patcher.model_size()) - int(patcher.loaded_size()),
+        )
+    except (AttributeError, RuntimeError, TypeError, ValueError):
+        remaining_weights = 0
+
+    # First make room for weights that are not resident yet plus the actual
+    # inference workspace. ``for_dynamic=False`` is intentional: ComfyUI's
+    # normal dynamic-to-dynamic path assumes demand paging alone is sufficient
+    # and is the source of this warm-rerun OOM.
+    reserve_limit = max(0, total - int(model_management.extra_reserved_memory()))
+    load_target = min(reserve_limit, remaining_weights + headroom)
+    before = int(model_management.get_free_memory(device))
+    if before < load_target:
+        model_management.free_memory(
+            load_target,
+            device,
+            keep_loaded=_loaded_clip_models(model_management, patcher),
+            for_dynamic=False,
+        )
+
+    # Encoding will call this a second time; ComfyUI treats an already loaded
+    # patcher as a cheap no-op. Loading here lets us make a second, accurate
+    # headroom check while protecting the encoder from eviction.
+    load_model(tokens)
+    after_load = int(model_management.get_free_memory(device))
+    if after_load < headroom:
+        model_management.free_memory(
+            headroom,
+            device,
+            keep_loaded=_loaded_clip_models(model_management, patcher),
+            for_dynamic=False,
+        )
+    final_free = int(model_management.get_free_memory(device))
+    if before < load_target or after_load < headroom:
+        LOG.info(
+            "H3 semantic encoder VRAM guard: target=%.2f GiB "
+            "free_before=%.2f GiB free_after=%.2f GiB",
+            headroom / _GIB,
+            before / _GIB,
+            final_free / _GIB,
+        )
 
 
 H3KeyframeReferenceType = io.Custom("TURING_UTILS_H3_KEYFRAME_REFERENCE")
@@ -327,6 +426,7 @@ class H3SemanticReference(io.ComfyNode):
         tokens = _tokenize_semantic(
             clip, prompt, first_frame, last_frame, presentation
         )
+        _prepare_h3_semantic_encoder(clip, tokens)
         conditioning = clip.encode_from_tokens_scheduled(tokens)
         return io.NodeOutput(H3SemanticReferenceData(conditioning, manifest))
 

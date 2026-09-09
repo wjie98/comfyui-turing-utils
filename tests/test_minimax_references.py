@@ -3,6 +3,8 @@ from __future__ import annotations
 import sys
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
+from unittest import mock
 
 import torch
 
@@ -27,6 +29,7 @@ from comfyui_turing_utils.nodes.minimax_references import (  # noqa: E402
     H3SemanticReference,
     H3SemanticReferenceData,
     H3VideoReference,
+    _prepare_h3_semantic_encoder,
 )
 
 
@@ -65,6 +68,30 @@ class _FakeClip:
         return [[torch.zeros(1, 1, 1), {"semantic": True}]]
 
 
+class _FakePatcher:
+    def __init__(self, loaded_size=0):
+        self.load_device = torch.device("cuda:0")
+        self._model_size = 15 * 1024**3
+        self._loaded_size = loaded_size
+
+    def model_size(self):
+        return self._model_size
+
+    def loaded_size(self):
+        return self._loaded_size
+
+
+class _GuardedFakeClip:
+    def __init__(self, patcher, on_load):
+        self.patcher = patcher
+        self.on_load = on_load
+        self.loaded_tokens = None
+
+    def load_model(self, tokens):
+        self.loaded_tokens = tokens
+        self.on_load()
+
+
 class _FakeAudioVAE:
     audio_sample_rate = 32000
 
@@ -85,6 +112,63 @@ class _PayloadHolder:
 
 
 class MiniMaxH3ReferencesTest(unittest.TestCase):
+    def test_semantic_encoder_guard_evicts_dynamic_residents_for_workspace(self):
+        import comfy.model_management as model_management
+
+        gib = 1024**3
+        patcher = _FakePatcher(loaded_size=5 * gib)
+        loaded_models = []
+        free_state = {"bytes": 4 * gib}
+
+        def on_load():
+            patcher._loaded_size = patcher._model_size
+            free_state["bytes"] = 5 * gib
+            loaded_models[:] = [SimpleNamespace(model=patcher)]
+
+        clip = _GuardedFakeClip(patcher, on_load)
+        free_calls = []
+
+        def free_memory(target, device, keep_loaded, for_dynamic):
+            free_calls.append((target, device, list(keep_loaded), for_dynamic))
+            free_state["bytes"] = int(target)
+            return []
+
+        with (
+            mock.patch.object(
+                model_management,
+                "current_loaded_models",
+                loaded_models,
+            ),
+            mock.patch.object(
+                model_management,
+                "get_total_memory",
+                return_value=48 * gib,
+            ),
+            mock.patch.object(
+                model_management,
+                "get_free_memory",
+                side_effect=lambda _device: free_state["bytes"],
+            ),
+            mock.patch.object(
+                model_management,
+                "extra_reserved_memory",
+                return_value=400 * 1024**2,
+            ),
+            mock.patch.object(
+                model_management,
+                "free_memory",
+                side_effect=free_memory,
+            ),
+        ):
+            tokens = {"qwen3vl_32b": [[("prompt", "test")]]}
+            _prepare_h3_semantic_encoder(clip, tokens)
+
+        self.assertIs(clip.loaded_tokens, tokens)
+        self.assertEqual([call[0] for call in free_calls], [16 * gib, 6 * gib])
+        self.assertTrue(all(call[3] is False for call in free_calls))
+        self.assertEqual(free_calls[0][2], [])
+        self.assertIs(free_calls[1][2][0].model, patcher)
+
     def test_schema_assigns_keyframe_roles_at_semantic_and_build_boundaries(self):
         frame = H3KeyframeReference.define_schema()
         semantic = H3SemanticReference.define_schema()
