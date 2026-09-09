@@ -17,6 +17,7 @@ from .activation_policy import (
     estimate_attention_lifecycle_peak,
 )
 from .layout import RUNTIME_CONTEXT_ATTR, make_minimax_runtime_context_wrapper
+from .compat import keyframe_condition_rows
 
 
 LOG = get_logger("minimax.memory")
@@ -212,8 +213,11 @@ def _minimax_memory_shape(kwargs, latent_shapes, diffusion_model):
     )
 
     keyframes = kwargs.get("minimax_keyframes") or ()
-    visual_condition_rows = len(keyframes) * frame_rows
-    audio_condition_rows = 0
+    from comfy.ldm.minimax.model import PackedLayout
+
+    visual_condition_rows, audio_condition_rows = keyframe_condition_rows(
+        PackedLayout, keyframes, frame_rows
+    )
     for ref in kwargs.get("minimax_refs") or ():
         kind = ref.get("kind")
         if kind == "image":

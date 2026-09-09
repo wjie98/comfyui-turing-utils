@@ -15,6 +15,7 @@ from comfy.ldm.minimax import model as minimax_model
 
 from ...log import get_logger
 from ..methods import weak_method
+from .compat import accepts_parameter, make_packed_layout
 
 
 LOG = get_logger("minimax.cache")
@@ -28,13 +29,30 @@ _CPU_TRANSFER_CHUNK_BYTES = 64 * _MIB
 _SHORT_PROFILE_MAX_STEPS = 10
 _SHORT_PROFILE_EDGE_BLOCKS = 6
 
-_FORWARD_PARAMETERS = (
+_LEGACY_FORWARD_PARAMETERS = (
     "x",
     "timestep",
     "context",
     "transformer_options",
     "minimax_payload",
     "kwargs",
+)
+_CURRENT_FORWARD_PARAMETERS = (
+    "x",
+    "timestep",
+    "context",
+    "transformer_options",
+    "minimax_payload",
+    "denoise_mask",
+    "audio_denoise_mask",
+    "kwargs",
+)
+_SUPPORTED_FORWARD_PARAMETERS = {
+    _LEGACY_FORWARD_PARAMETERS,
+    _CURRENT_FORWARD_PARAMETERS,
+}
+_PREFETCH_SUPPORTS_MALLOC_SCOPE = accepts_parameter(
+    comfy.model_prefetch.prefetch_queue_pop, "malloc_scope"
 )
 
 
@@ -574,6 +592,7 @@ def _run_block(
     rope_freqs,
     transformer_options,
     blocks_replace,
+    layout=None,
 ):
     block = model.blocks[index]
     replacement = blocks_replace.get(("double_block", index))
@@ -586,14 +605,19 @@ def _run_block(
             transformer_options=transformer_options,
         )
 
+    supports_attention = accepts_parameter(block.forward, "attention")
+
     def block_wrap(args):
+        kwargs = {"transformer_options": args["transformer_options"]}
+        if supports_attention and args.get("attention") is not None:
+            kwargs["attention"] = args["attention"]
         return {
             "img": block(
                 args["img"],
                 args["t_emb"],
                 args["mod_segments"],
                 args["rope_freqs"],
-                transformer_options=args["transformer_options"],
+                **kwargs,
             )
         }
 
@@ -603,6 +627,7 @@ def _run_block(
             "t_emb": t_emb,
             "mod_segments": mod_segments,
             "rope_freqs": rope_freqs,
+            "layout": layout,
             "transformer_options": transformer_options,
         },
         {"original_block": block_wrap},
@@ -619,6 +644,7 @@ def _run_blocks(
     transformer_options,
     blocks_replace,
     device,
+    layout=None,
     *,
     complete_after: int | None = None,
     complete_callback=None,
@@ -631,7 +657,12 @@ def _run_blocks(
         blocks, device, transformer_options
     )
     for index, block in zip(indices, blocks):
-        comfy.model_prefetch.prefetch_queue_pop(prefetch_queue, device, block)
+        prefetch_kwargs = {}
+        if _PREFETCH_SUPPORTS_MALLOC_SCOPE:
+            prefetch_kwargs["malloc_scope"] = "block"
+        comfy.model_prefetch.prefetch_queue_pop(
+            prefetch_queue, device, block, **prefetch_kwargs
+        )
         hidden = _run_block(
             model,
             hidden,
@@ -641,11 +672,16 @@ def _run_blocks(
             rope_freqs,
             transformer_options,
             blocks_replace,
+            layout,
         )
         if index == complete_after and complete_callback is not None:
             complete_callback(hidden, transformer_options)
-    if prefetch_queue is not None:
-        comfy.model_prefetch.prefetch_queue_pop(prefetch_queue, device, None)
+    prefetch_kwargs = {}
+    if _PREFETCH_SUPPORTS_MALLOC_SCOPE:
+        prefetch_kwargs["malloc_scope"] = "block"
+    comfy.model_prefetch.prefetch_queue_pop(
+        prefetch_queue, device, None, **prefetch_kwargs
+    )
     return hidden
 
 
@@ -660,6 +696,8 @@ def _cached_forward(
     context,
     transformer_options={},
     minimax_payload=None,
+    denoise_mask=None,
+    audio_denoise_mask=None,
     **kwargs,
 ):
     cache_group = transformer_options.get(CACHE_KEY)
@@ -680,16 +718,16 @@ def _cached_forward(
     text_len = context.shape[1]
     layout = payload.get("layout")
     if layout is None or layout.signature != (text_len, latent_t, lat_h, lat_w, audio_t):
-        layout = minimax_model.PackedLayout(
+        layout = make_packed_layout(
+            minimax_model.PackedLayout,
             text_len,
             latent_t,
             lat_h,
             lat_w,
             audio_t,
-            keyframes=payload.get("keyframes"),
-            refs=payload.get("refs"),
-            frame_count=payload.get("frame_count"),
+            payload,
         )
+    transformer_options["minimax_h3_layout"] = layout
 
     shift_v = float(
         transformer_options.get(
@@ -711,20 +749,55 @@ def _cached_forward(
     aud_aug = float(
         payload.get("audio_cond_noise_aug", minimax_model.AUDIO_COND_TIMESTEP)
     )
-    has_vis_cond = any(kind in ("cond", "ref_img") for _, _, kind in layout.segments)
-    has_aud_cond = any(kind == "ref_audio" for _, _, kind in layout.segments)
     seg_t = {
         "text": t_v,
         "video": t_v,
         "audio": t_a,
         "cond": max(t_v, vis_aug),
         "ref_img": max(t_v, vis_aug),
+        "cond_audio": max(t_a, aud_aug),
         "ref_audio": max(t_a, aud_aug),
     }
+
+    video_rows_t = None
+    audio_rows_t = None
+    mask_row_values = getattr(minimax_model, "mask_row_values", None)
+    if denoise_mask is not None and callable(mask_row_values):
+        mask = mask_row_values(
+            denoise_mask[0, 0].to(torch.float32), latent_t, lat_h, lat_w
+        )
+        if mask is not None:
+            rows_t = (1.0 - mask * sigma_v.to(mask.device)).clamp(
+                max=max(t_v, minimax_model.VISUAL_COND_TIMESTEP)
+            )
+            if rows_t.unique().numel() == 1:
+                seg_t["video"] = float(rows_t[0])
+            else:
+                video_rows_t = rows_t
+    if audio_denoise_mask is not None:
+        mask = audio_denoise_mask[0, 0].to(torch.float32).reshape(-1)
+        if not bool((mask >= 1.0 - 1e-3).all()):
+            rows_t = (1.0 - mask * (1.0 - t_a)).clamp(
+                max=max(t_a, minimax_model.AUDIO_COND_TIMESTEP)
+            )
+            if rows_t.unique().numel() == 1:
+                seg_t["audio"] = float(rows_t[0])
+            else:
+                audio_rows_t = rows_t
+
     unique_t = sorted(
         {t_v, t_a}
-        | ({seg_t["cond"]} if has_vis_cond else set())
-        | ({seg_t["ref_audio"]} if has_aud_cond else set())
+        | {seg_t[kind] for _, _, kind in layout.segments}
+        | (
+            set(video_rows_t.unique().tolist())
+            if video_rows_t is not None
+            else set()
+        )
+        | (
+            set(audio_rows_t.unique().tolist())
+            if audio_rows_t is not None
+            else set()
+        )
     )
     t_row = {value: index for index, value in enumerate(unique_t)}
     seg_tag = {
@@ -733,8 +806,18 @@ def _cached_forward(
         "audio": 2,
         "cond": 0,
         "ref_img": 0,
+        "cond_audio": 2,
         "ref_audio": 2,
     }
+
+    def rows_to_mod_index(rows_t, tag):
+        levels = rows_t.unique()
+        base = torch.tensor(
+            [t_row[value] * 3 + tag for value in levels.tolist()],
+            dtype=torch.long,
+            device=rows_t.device,
+        )
+        return base[torch.searchsorted(levels, rows_t)]
 
     text_tags = payload.get("text_token_tags")
     mod_segments = []
@@ -753,6 +836,14 @@ def _cached_forward(
                         )
                     )
                     run_start = index
+        elif kind == "video" and video_rows_t is not None:
+            mod_segments.append(
+                (start, end, rows_to_mod_index(video_rows_t, seg_tag[kind]))
+            )
+        elif kind == "audio" and audio_rows_t is not None:
+            mod_segments.append(
+                (start, end, rows_to_mod_index(audio_rows_t, seg_tag[kind]))
+            )
         else:
             mod_segments.append((start, end, row_base + seg_tag[kind]))
 
@@ -835,6 +926,7 @@ def _cached_forward(
         transformer_options,
         blocks_replace,
         device,
+        layout=layout,
     )
     force_full = _span_has_replacement(
         blocks_replace, cache.skip_start, cache.skip_end
@@ -850,6 +942,7 @@ def _cached_forward(
             transformer_options,
             blocks_replace,
             device,
+            layout=layout,
             complete_after=cache.skip_end - 1,
             complete_callback=cache.complete_middle,
         )
@@ -864,19 +957,43 @@ def _cached_forward(
             transformer_options,
             blocks_replace,
             device,
+            layout=layout,
         )
 
     video_seg = next(
-        (start, end, t_row[seg_t["video"]])
+        (
+            start,
+            end,
+            (
+                rows_to_mod_index(video_rows_t, 0) // 3
+                if video_rows_t is not None
+                else t_row[seg_t["video"]]
+            ),
+        )
         for start, end, kind in layout.segments
         if kind == "video"
     )
     audio_seg = next(
-        (start, end, t_row[seg_t["audio"]])
+        (
+            start,
+            end,
+            (
+                rows_to_mod_index(audio_rows_t, 0) // 3
+                if audio_rows_t is not None
+                else t_row[seg_t["audio"]]
+            ),
+        )
         for start, end, kind in layout.segments
         if kind == "audio"
     )
-    video, audio = self.final_layer(hidden, t_emb, video_seg, audio_seg)
+    final_args = (hidden, t_emb, video_seg, audio_seg)
+    if accepts_parameter(self.final_layer.forward, "sigma"):
+        final_args += (
+            sigma_v,
+            transformer_options.get("sample_sigmas"),
+            (shift_v, shift_a),
+        )
+    video, audio = self.final_layer(*final_args)
     video_out = minimax_model.unpatchify_video(
         video,
         latent_t,
@@ -897,7 +1014,7 @@ def _compatible_forward(forward) -> bool:
         return False
     if parameters and parameters[0] == "self":
         parameters = parameters[1:]
-    if parameters != _FORWARD_PARAMETERS:
+    if parameters not in _SUPPORTED_FORWARD_PARAMETERS:
         return False
     code = getattr(forward, "__code__", None)
     if code is None:
@@ -913,6 +1030,8 @@ def _compatible_forward(forward) -> bool:
         "unpatchify_video",
         "unpack_audio",
     }
+    if parameters == _CURRENT_FORWARD_PARAMETERS:
+        required.add("mask_row_values")
     return required.issubset(code.co_names)
 
 
@@ -924,6 +1043,8 @@ def _make_cached_forward(diffusion_model):
         context,
         transformer_options={},
         minimax_payload=None,
+        denoise_mask=None,
+        audio_denoise_mask=None,
         **kwargs,
     ):
         return _cached_forward(
@@ -933,6 +1054,8 @@ def _make_cached_forward(diffusion_model):
             context,
             transformer_options=transformer_options,
             minimax_payload=minimax_payload,
+            denoise_mask=denoise_mask,
+            audio_denoise_mask=audio_denoise_mask,
             **kwargs,
         )
 

@@ -16,6 +16,7 @@ sys.path.insert(0, str(COMFY_ROOT))
 sys.path.insert(0, str(PLUGIN_ROOT))
 
 from comfyui_turing_utils.adapters.minimax import acceleration as minimax_adapter  # noqa: E402
+from comfyui_turing_utils.adapters.minimax.compat import make_packed_layout  # noqa: E402
 from comfyui_turing_utils.attention.protocol import (  # noqa: E402
     ATTENTION_EXECUTOR_KEY,
     AttentionExecutionOutcome,
@@ -73,6 +74,11 @@ class FakePatcher:
 
 
 class MiniMaxAdapterTest(unittest.TestCase):
+    def test_current_comfy_block_contract_is_supported(self):
+        from comfy.ldm.minimax.model import DiTBlock
+
+        self.assertTrue(minimax_adapter._compatible_block_forward(DiTBlock))
+
     def test_attention_forward_hands_raw_qk_to_fused_preprocessor(self):
         from comfy.ldm.modules.attention import AttentionTensorContainer
 
@@ -319,8 +325,14 @@ class MiniMaxAdapterTest(unittest.TestCase):
         from comfy.ldm.minimax.model import PackedLayout
 
         keyframes = [
-            {"resolved_frame_index": 0},
-            {"resolved_frame_index": 99},
+            {
+                "resolved_frame_index": 0,
+                "latent": torch.empty(1, 24, 1, 8, 10),
+            },
+            {
+                "resolved_frame_index": 99,
+                "latent": torch.empty(1, 24, 1, 8, 10),
+            },
         ]
         refs = [
             {"kind": "image", "latent_h": 6, "latent_w": 8},
@@ -341,15 +353,18 @@ class MiniMaxAdapterTest(unittest.TestCase):
         plan = minimax_adapter._minimax_memory_shape(
             kwargs, self._latent_shapes(), self._diffusion_spec()
         )
-        layout = PackedLayout(
+        layout = make_packed_layout(
+            PackedLayout,
             11,
             7,
             8,
             10,
             12,
-            keyframes=keyframes,
-            refs=refs,
-            frame_count=100,
+            {
+                "keyframes": keyframes,
+                "refs": refs,
+                "frame_count": 100,
+            },
         )
 
         self.assertEqual(plan.full_rows, layout.seq_len)

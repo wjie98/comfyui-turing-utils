@@ -362,6 +362,80 @@ class MiniMaxH3BlockCacheTest(unittest.TestCase):
             )
         )
 
+    def test_current_comfy_full_cache_pass_matches_native_masked_forward(self):
+        operations = SimpleNamespace(
+            Linear=torch.nn.Linear,
+            RMSNorm=torch.nn.RMSNorm,
+        )
+        torch.manual_seed(123)
+        model = block_cache.minimax_model.MiniMaxH3Model(
+            hidden_size=128,
+            num_layers=2,
+            token_refiner_num_layers=1,
+            num_attention_heads=1,
+            attention_head_dim=128,
+            ffn_hidden_size=64,
+            latents_dim=2,
+            audio_latents_dim=4,
+            patch_size=(1, 2, 2),
+            text_dim=128,
+            timestep_input_dim=32,
+            time_embed_hidden_size=64,
+            time_embed_dim=32,
+            rope_inv_freq_len=16,
+            dtype=torch.float32,
+            operations=operations,
+        ).eval()
+        with torch.no_grad():
+            for parameter in model.parameters():
+                if parameter.ndim > 1:
+                    torch.nn.init.normal_(parameter, std=0.02)
+                else:
+                    parameter.zero_()
+            model.rope.inv_freq.fill_(0.01)
+
+        video = torch.randn(1, 2, 1, 4, 2)
+        audio = torch.randn(1, 4, 2, 2)
+        context = torch.randn(1, 3, 128)
+        timestep = torch.tensor([700.0])
+        denoise_mask = torch.tensor(
+            [[[[[0.5, 0.5], [0.5, 0.5], [1.0, 1.0], [1.0, 1.0]]]]]
+        )
+        audio_denoise_mask = torch.tensor([[[[0.5, 1.0], [0.25, 1.0]]]])
+        base_options = {
+            "sample_sigmas": torch.tensor([0.7, 0.4, 0.0]),
+            "sigmas": torch.tensor([0.7]),
+        }
+
+        with (
+            mock.patch.object(block_cache.comfy.model_management, "in_training", True),
+            torch.no_grad(),
+        ):
+            expected = model._forward(
+                [video, audio],
+                timestep,
+                context,
+                transformer_options=dict(base_options),
+                denoise_mask=denoise_mask,
+                audio_denoise_mask=audio_denoise_mask,
+            )
+            options = dict(base_options)
+            options[block_cache.CACHE_KEY] = MiniMaxH3BlockCacheGroup(
+                "standard", "gpu", 2
+            )
+            actual = block_cache._cached_forward(
+                model,
+                [video, audio],
+                timestep,
+                context,
+                transformer_options=options,
+                denoise_mask=denoise_mask,
+                audio_denoise_mask=audio_denoise_mask,
+            )
+
+        for native, cached in zip(expected, actual):
+            self.assertTrue(torch.equal(native, cached))
+
     def test_cleanup_callback_releases_every_branch_cache(self):
         group = MiniMaxH3BlockCacheGroup("standard", "gpu", 50)
         state = group.state_for({"sample_sigmas": torch.ones(6)})
@@ -455,8 +529,15 @@ class MiniMaxH3BlockCacheTest(unittest.TestCase):
         )
         self.assertEqual(
             [call.args[2] for call in pop_queue.call_args_list],
-            [model.blocks[0], model.blocks[3], model.blocks[4]],
+            [model.blocks[0], model.blocks[3], model.blocks[4], None],
         )
+        if block_cache._PREFETCH_SUPPORTS_MALLOC_SCOPE:
+            self.assertTrue(
+                all(
+                    call.kwargs == {"malloc_scope": "block"}
+                    for call in pop_queue.call_args_list
+                )
+            )
 
 
 if __name__ == "__main__":

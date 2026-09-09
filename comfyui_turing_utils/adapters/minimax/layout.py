@@ -23,6 +23,7 @@ from ...attention.layout import (
 )
 from ..methods import OriginalMethod, weak_method
 from .activation_policy import ActivationRuntimePlan
+from .compat import accepts_parameter, make_packed_layout
 
 
 LOG = get_logger("minimax.layout")
@@ -42,6 +43,10 @@ _BLOCK_FORWARD_PARAMETERS = (
     "mod_segments",
     "rope_freqs",
     "transformer_options",
+)
+_BLOCK_FORWARD_PARAMETERS_WITH_ATTENTION = (
+    *_BLOCK_FORWARD_PARAMETERS,
+    "attention",
 )
 _LAYOUT_FIELDS = {
     "protocol_version",
@@ -89,7 +94,10 @@ def _compatible_block_forward(forward) -> bool:
         return False
     if parameters and parameters[0] == "self":
         parameters = parameters[1:]
-    return parameters == _BLOCK_FORWARD_PARAMETERS
+    return parameters in {
+        _BLOCK_FORWARD_PARAMETERS,
+        _BLOCK_FORWARD_PARAMETERS_WITH_ATTENTION,
+    }
 
 
 def make_minimax_runtime_context_wrapper(base_model):
@@ -166,15 +174,14 @@ def _resolve_packed_layout(diffusion_model, x, context, payload):
         layout = payload.get("layout")
         if layout is not None and getattr(layout, "signature", None) == signature:
             return layout
-        return PackedLayout(
+        return make_packed_layout(
+            PackedLayout,
             signature[0],
             latent_t,
             latent_h,
             latent_w,
             signature[4],
-            keyframes=payload.get("keyframes"),
-            refs=payload.get("refs"),
-            frame_count=payload.get("frame_count"),
+            payload,
         )
     except (AttributeError, ImportError, TypeError, ValueError):
         return None
@@ -230,6 +237,8 @@ def minimax_attention_segments(base_model):
             role = "text"
         elif kind == "cond":
             role = "reference_image"
+        elif kind == "cond_audio":
+            role = "reference_audio"
         elif kind in ("ref_img", "ref_audio"):
             descriptor = next(reference_descriptors, None)
             role = descriptor[0] if descriptor is not None else None
@@ -512,6 +521,7 @@ def _make_layout_forward(
     diffusion_model,
 ):
     original = OriginalMethod.capture(original, block)
+    supports_attention = accepts_parameter(original.function, "attention")
     base_model = weakref.proxy(base_model)
     diffusion_model = weakref.proxy(diffusion_model)
 
@@ -522,6 +532,7 @@ def _make_layout_forward(
         mod_segments,
         rope_freqs,
         transformer_options={},
+        attention=None,
     ):
         publish_minimax_attention_layout(
             transformer_options,
@@ -531,13 +542,11 @@ def _make_layout_forward(
             base_model=base_model,
             diffusion_model=diffusion_model,
         )
+        kwargs = {"transformer_options": transformer_options}
+        if supports_attention:
+            kwargs["attention"] = attention
         return original(
-            self,
-            x,
-            t_emb,
-            mod_segments,
-            rope_freqs,
-            transformer_options=transformer_options,
+            self, x, t_emb, mod_segments, rope_freqs, **kwargs
         )
 
     setattr(forward, _FORWARD_PROVIDER_ATTR, True)

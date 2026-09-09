@@ -221,7 +221,6 @@ class MiniMaxLayoutProviderTest(unittest.TestCase):
             13,
             keyframes=None,
             refs=[],
-            frame_count=None,
         )
 
     def test_h3_image_sol_dense_slice_patterns(self):

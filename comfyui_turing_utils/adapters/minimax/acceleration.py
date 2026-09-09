@@ -135,6 +135,10 @@ _BLOCK_FORWARD_PARAMETERS = (
     "rope_freqs",
     "transformer_options",
 )
+_BLOCK_FORWARD_PARAMETERS_WITH_ATTENTION = (
+    *_BLOCK_FORWARD_PARAMETERS,
+    "attention",
+)
 _ATTENTION_FORWARD_PARAMETERS = (
     "x",
     "rope_freqs",
@@ -267,7 +271,10 @@ def _audit_fc2(blocks: Sequence[torch.nn.Module]) -> int:
 
 def _compatible_block_forward(block_type: type[torch.nn.Module]) -> bool:
     parameters = tuple(inspect.signature(block_type.forward).parameters)
-    return parameters == ("self", *_BLOCK_FORWARD_PARAMETERS)
+    return parameters in {
+        ("self", *_BLOCK_FORWARD_PARAMETERS),
+        ("self", *_BLOCK_FORWARD_PARAMETERS_WITH_ATTENTION),
+    }
 
 
 def _compatible_attention_forward(attention_type: type[torch.nn.Module]) -> bool:
@@ -2031,6 +2038,9 @@ def _make_block_forward(
     diffusion_model=None,
 ):
     original = OriginalMethod.capture(block.forward, block)
+    supports_attention = "attention" in inspect.signature(
+        original.function
+    ).parameters
     if base_model is not None:
         base_model = weakref.proxy(base_model)
     if diffusion_model is not None:
@@ -2043,6 +2053,7 @@ def _make_block_forward(
         mod_segments,
         rope_freqs,
         transformer_options={},
+        attention=None,
     ):
         publish_minimax_attention_layout(
             transformer_options,
@@ -2055,22 +2066,23 @@ def _make_block_forward(
         blocker = _block_fusion_blocker(x, t_emb, device_index)
         audit.record("block", blocker is None, x, blocker)
         if blocker is not None:
-            return original(
-                self,
-                x,
-                t_emb,
-                mod_segments,
-                rope_freqs,
-                transformer_options=transformer_options,
-            )
+            kwargs = {"transformer_options": transformer_options}
+            if supports_attention:
+                kwargs["attention"] = attention
+            return original(self, x, t_emb, mod_segments, rope_freqs, **kwargs)
 
         shift_msa, scale_msa, gate_msa, shift_mlp, scale_mlp, gate_mlp = self.adaln_proj(t_emb)
         h = segmented_rms_adaln(self.norm1, x, shift_msa, scale_msa, mod_segments)
+        attention_impl = self.attn if attention is None else attention
         x, h = segmented_mod_gate_rms_adaln(
             self.norm2,
             x,
             gate_msa,
-            self.attn(h, rope_freqs=rope_freqs, transformer_options=transformer_options),
+            attention_impl(
+                h,
+                rope_freqs=rope_freqs,
+                transformer_options=transformer_options,
+            ),
             shift_mlp,
             scale_mlp,
             mod_segments,
