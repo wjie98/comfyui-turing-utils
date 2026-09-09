@@ -1,14 +1,12 @@
 from __future__ import annotations
 
 import os
-from fractions import Fraction
 from pathlib import Path
 import sys
 import unittest
 from unittest.mock import patch
 
 import torch
-from comfy_api.latest import VideoComponents, VideoFromComponents
 
 
 PLUGIN_ROOT = Path(__file__).resolve().parents[1]
@@ -43,8 +41,12 @@ class MultimodalPromptChatTest(unittest.TestCase):
         self.assertEqual(schema.inputs[5].id, "cache_buster")
         self.assertEqual(inputs["cache_buster"].default, 0)
         self.assertTrue(inputs["cache_buster"].control_after_generate)
+        self.assertEqual(inputs["first_frame"].io_type, "IMAGE")
+        self.assertEqual(inputs["last_frame"].io_type, "IMAGE")
+        self.assertTrue(inputs["first_frame"].optional)
+        self.assertTrue(inputs["last_frame"].optional)
         self.assertEqual(inputs["images"].template.input.io_type, "IMAGE")
-        self.assertEqual(inputs["videos"].template.input.io_type, "VIDEO")
+        self.assertEqual(inputs["videos"].template.input.io_type, "IMAGE")
         self.assertTrue(inputs["images"].optional)
         self.assertTrue(inputs["videos"].optional)
         self.assertTrue(inputs["options"].optional)
@@ -135,6 +137,8 @@ class MultimodalPromptChatTest(unittest.TestCase):
         blue[..., 2] = 1.0
         content, metadata = build_user_content(
             "edit",
+            None,
+            None,
             {"image_10": blue, "image_2": red},
             None,
             ChatOptions(max_image_edge=256, video_max_edge=256),
@@ -148,21 +152,41 @@ class MultimodalPromptChatTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "exactly one image"):
             build_user_content(
                 "edit",
+                None,
+                None,
                 {"image_0": torch.zeros((2, 8, 8, 3))},
                 None,
                 ChatOptions(max_image_edge=256, video_max_edge=256),
             )
 
-    def test_video_is_sampled_and_labeled_with_timestamps(self):
-        frames = torch.zeros((10, 8, 8, 3))
-        frames[..., 1] = 1.0
-        video = VideoFromComponents(
-            VideoComponents(images=frames, frame_rate=Fraction(5, 1))
+    def test_first_and_last_frames_have_explicit_labels_before_pictures(self):
+        frame = torch.zeros((1, 8, 8, 3))
+        content, metadata = build_user_content(
+            "edit",
+            frame,
+            frame,
+            {"image_0": frame},
+            None,
+            ChatOptions(max_image_edge=256, video_max_edge=256),
         )
+        labels = [item["text"] for item in content if item["type"] == "text"]
+        self.assertEqual(
+            labels[1:4],
+            ["<First Frame>", "<Last Frame>", "<Picture 1>"],
+        )
+        self.assertTrue(metadata["first_frame"])
+        self.assertTrue(metadata["last_frame"])
+        self.assertEqual(metadata["pictures"], 1)
+
+    def test_image_sequence_video_is_sampled_as_24_fps_and_labeled(self):
+        frames = torch.zeros((49, 8, 8, 3))
+        frames[..., 1] = 1.0
         content, metadata = build_user_content(
             "describe motion",
             None,
-            {"video_0": video},
+            None,
+            None,
+            {"video_0": frames},
             ChatOptions(max_image_edge=256, video_max_edge=256),
         )
         labels = [item["text"] for item in content if item["type"] == "text"]
@@ -170,7 +194,7 @@ class MultimodalPromptChatTest(unittest.TestCase):
         self.assertEqual(metadata["videos"], 1)
         self.assertEqual(metadata["video_frames"], 5)
         self.assertEqual(metadata["video_timestamps"][0][0], 0.0)
-        self.assertEqual(metadata["video_timestamps"][0][-1], 1.8)
+        self.assertEqual(metadata["video_timestamps"][0][-1], 2.0)
 
     def test_response_extracts_text_without_returning_reasoning(self):
         response = {
