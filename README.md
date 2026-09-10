@@ -84,6 +84,23 @@ only after its CUDA sources or required version change.
 - `H3 Concat AV Latent` combines standalone H3 video and audio latents into the
   model's native nested AV latent. `H3 Separate AV Latent` splits the streams
   again; both nodes preserve matching video/audio noise masks.
+- `H3 Add Noise` prepares **clean x0** for a continuation sampler using
+  `DisableNoise` (or `add_noise=disable`). Connect the continuation H3 `MODEL`,
+  `RandomNoise`, the remaining `SIGMAS`, and a clean `LATENT`; the first sigma
+  is the target level, not the difference between the schedule endpoints.
+  It processes every supplied stream: standalone video, standalone audio, or
+  both in a native AV latent. H3's current audio/video shift ratio is honored
+  even for standalone audio, using the same **video** schedule as the sampler.
+  For a 6+2 upscale workflow, split the first sampler's `denoised_output`,
+  upscale its clean video, then use this node on that video. Join it with the
+  unchanged audio from the first sampler's **`output`**, and resume with the
+  remaining two-step schedule and noise disabled. Do not re-noise that audio
+  unless you deliberately restart it from clean x0 as well.
+  Empty schedules and sigma zero are no-ops; sigma one cannot be represented
+  for `DisableNoise` and is rejected. Masks and metadata are preserved for the
+  next sampler, not applied by this node. Half-precision latents are promoted
+  to float32 for continuation arithmetic. This prepares a new noisy state;
+  it does not preserve multistep solver history across two sampler nodes.
 - `H3 Latent Info` reports the decoded pixel width, height, frame count, and
   H3's 24 FPS model rate without running the VAE.
 - `H3 Keyframe Reference` dynamically adds `image_N` inputs and matching

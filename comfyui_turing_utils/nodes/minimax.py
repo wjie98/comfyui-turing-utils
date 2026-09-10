@@ -9,6 +9,7 @@ import comfy.utils
 import folder_paths
 from comfy_api.latest import io
 from ..adapters.minimax.block_cache import install_minimax_block_cache
+from ..adapters.minimax.latent_noise import add_h3_noise_for_resampling
 from ..adapters.minimax.latent_upscaler import (
     load_h3_latent_upscaler,
     upscale_h3_latent,
@@ -287,6 +288,33 @@ class H3SeparateAVLatent(io.ComfyNode):
             video_latent["noise_mask"] = video_mask
             audio_latent["noise_mask"] = audio_mask
         return io.NodeOutput(video_latent, audio_latent)
+
+
+class H3AddNoise(io.ComfyNode):
+    @classmethod
+    def define_schema(cls):
+        return io.Schema(
+            node_id="TuringUtilsH3AddNoise",
+            display_name="H3 Add Noise",
+            category="Turing Utils/latent",
+            description=(
+                "Re-noise clean H3 latents for continuation with DisableNoise. "
+                "Processes every supplied stream, including both video and audio in an AV latent. "
+                "Uses the continuation video schedule for standalone audio too; split AV upstream "
+                "if only one stream should change."
+            ),
+            inputs=[
+                io.Model.Input("model", tooltip="The H3 MODEL used by the continuation sampler, including its sampling patches."),
+                io.Noise.Input("noise", tooltip="Connect RandomNoise to control the new noise seed."),
+                io.Sigmas.Input("sigmas", tooltip="Remaining sampling schedule. Its FIRST sigma is the target level (0 <= sigma < 1)."),
+                io.Latent.Input("latent_image", tooltip="Clean x0: denoised_output, VAE-encoded latent, or upscaled clean latent. Do not pass an already-noisy sampler output."),
+            ],
+            outputs=[io.Latent.Output(display_name="latent")],
+        )
+
+    @classmethod
+    def execute(cls, model, noise, sigmas, latent_image) -> io.NodeOutput:
+        return io.NodeOutput(add_h3_noise_for_resampling(model, noise, sigmas, latent_image))
 
 
 class MiniMaxH3LatentUpscaleModelLoader(io.ComfyNode):

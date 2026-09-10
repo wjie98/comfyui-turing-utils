@@ -182,6 +182,7 @@ class PackageArchitectureTest(unittest.TestCase):
                 "TuringUtilsStagePath",
                 "TuringUtilsH3ConcatAVLatent",
                 "TuringUtilsH3SeparateAVLatent",
+                "TuringUtilsH3AddNoise",
                 "TuringUtilsH3LatentInfo",
                 "TuringUtilsH3KeyframeReference",
                 "TuringUtilsH3ImageReference",

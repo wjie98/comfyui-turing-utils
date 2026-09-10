@@ -16,6 +16,7 @@ from .nodes.logic import IsInputPresent, LazyIfElse, StageBarrier, StagePath
 from .nodes.media import ResizeImageIfPresent, VideoMotionContactSheet
 from .nodes.multimodal_chat import MultimodalChatOptions, MultimodalPromptChat
 from .nodes.minimax import (
+    H3AddNoise,
     H3ConcatAVLatent,
     H3SeparateAVLatent,
     MiniMaxH3BlockCachePatch,
@@ -56,6 +57,7 @@ NODE_CLASS_MAPPINGS = {
     "TuringUtilsStagePath": StagePath,
     "TuringUtilsH3ConcatAVLatent": H3ConcatAVLatent,
     "TuringUtilsH3SeparateAVLatent": H3SeparateAVLatent,
+    "TuringUtilsH3AddNoise": H3AddNoise,
     "TuringUtilsH3LatentInfo": H3LatentInfo,
     "TuringUtilsH3KeyframeReference": H3KeyframeReference,
     "TuringUtilsH3ImageReference": H3ImageReference,
@@ -96,6 +98,7 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "TuringUtilsStagePath": "Stage Path (Internal)",
     "TuringUtilsH3ConcatAVLatent": "H3 Concat AV Latent",
     "TuringUtilsH3SeparateAVLatent": "H3 Separate AV Latent",
+    "TuringUtilsH3AddNoise": "H3 Add Noise",
     "TuringUtilsH3LatentInfo": "H3 Latent Info",
     "TuringUtilsH3KeyframeReference": "H3 Keyframe Reference",
     "TuringUtilsH3ImageReference": "H3 Image Reference",
