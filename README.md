@@ -197,9 +197,9 @@ only after its CUDA sources or required version change.
   tensor lifetime, and inherited W8A8/FP16 numeric path, but deliberately does
   not add Sol's local blocks or skipped-block residual. Use it with the SLA-trained
   LoRA; `sparsity_ratio=0.85` matches the published runtime hyperparameter.
-  Existing `Patch Sol/SLA Sparse Attention` node IDs remain registered as
-  legacy compatibility nodes so saved positional `use_w8a8` widgets do not
-  shift. New workflows should use the `Configure` nodes.
+  The legacy `Patch Sol/SLA Sparse Attention` nodes have been removed.
+  Replace them with the `Configure` nodes in existing workflows; the dense
+  backend is selected by the loader, not by the old `use_w8a8` widget.
 
 The asymmetric-Q/K and independent-Q/K-RoPE protocol underneath virtual K/V is
 model-independent. The five-frame validation and temporal source mapping are

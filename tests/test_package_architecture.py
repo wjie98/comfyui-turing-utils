@@ -193,8 +193,6 @@ class PackageArchitectureTest(unittest.TestCase):
                 "TuringUtilsMiniMaxH3LatentUpscaleModelLoader",
                 "TuringUtilsMiniMaxH3LatentUpscale",
                 "TuringUtilsMiniMaxH3BlockCachePatch",
-                "TuringUtilsSolSparseAttentionPatch",
-                "TuringUtilsSlaSparseAttentionPatch",
                 "TuringUtilsSolAttentionStrategy",
                 "TuringUtilsSlaAttentionStrategy",
                 "TuringUtilsH3ImageSolAttention",

@@ -318,14 +318,9 @@ class SparseAttentionNodeTest(unittest.TestCase):
         optional = node.INPUT_TYPES()["optional"]
         self.assertEqual(tuple(optional), ("debug_route_density",))
 
-    def test_legacy_node_schema_preserves_positional_w8a8_widget(self):
-        for node in (
-            attention_nodes.LegacySolSparseAttentionPatch,
-            attention_nodes.LegacySlaSparseAttentionPatch,
-        ):
-            optional = node.INPUT_TYPES()["optional"]
-            self.assertEqual(tuple(optional), ("use_w8a8", "debug_route_density"))
-            self.assertTrue(optional["use_w8a8"][1]["default"])
+    def test_legacy_node_classes_are_removed(self):
+        self.assertFalse(hasattr(attention_nodes, "LegacySolSparseAttentionPatch"))
+        self.assertFalse(hasattr(attention_nodes, "LegacySlaSparseAttentionPatch"))
 
     def test_sla_node_returns_the_patched_model(self):
         model = object()

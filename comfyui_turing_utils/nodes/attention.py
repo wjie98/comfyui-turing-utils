@@ -33,7 +33,7 @@ class H3StaticVirtualKV:
         return (apply_h3_virtual_kv(model, mode=mode),)
 
 
-class LegacySolSparseAttentionPatch:
+class SolSparseAttentionPatch:
     @classmethod
     def INPUT_TYPES(cls):
         return {
@@ -102,7 +102,7 @@ class LegacySolSparseAttentionPatch:
                         "min": 0,
                         "max": 1000,
                         "step": 1,
-                        "tooltip": "Number of early denoising steps that use the selected dense backend across every transformer layer (stable Sage, or W8A8 when enabled).",
+                        "tooltip": "Leading steps of every sampler invocation that use the loader-selected dense backend across every transformer layer.",
                     },
                 ),
                 "dense_suffix_steps": (
@@ -112,7 +112,7 @@ class LegacySolSparseAttentionPatch:
                         "min": 0,
                         "max": 1000,
                         "step": 1,
-                        "tooltip": "Number of final denoising steps that use the selected dense backend across every transformer layer (stable Sage, or W8A8 when enabled).",
+                        "tooltip": "Trailing steps of every sampler invocation that use the loader-selected dense backend across every transformer layer.",
                     },
                 ),
                 "dense_prefix_layers": (
@@ -122,7 +122,7 @@ class LegacySolSparseAttentionPatch:
                         "min": 0,
                         "max": 256,
                         "step": 1,
-                        "tooltip": "Keep this many transformer layers at the beginning of every sparse step on the selected dense backend. If prefix + suffix reaches the model layer count, all layers use the dense backend without Sol preprocessing.",
+                        "tooltip": "Leading transformer layers kept on the loader-selected dense backend during sparse steps.",
                     },
                 ),
                 "dense_suffix_layers": (
@@ -132,18 +132,11 @@ class LegacySolSparseAttentionPatch:
                         "min": 0,
                         "max": 256,
                         "step": 1,
-                        "tooltip": "Keep this many transformer layers at the end of every sparse step on the selected dense backend. Requires layer-count metadata; overlap with the prefix intentionally makes all layers dense.",
+                        "tooltip": "Trailing transformer layers kept on the loader-selected dense backend during sparse steps.",
                     },
                 ),
             },
             "optional": {
-                "use_w8a8": (
-                    "BOOLEAN",
-                    {
-                        "default": True,
-                        "tooltip": "Use signed INT8 V and unsigned INT8 probability Tensor Cores for Sol exact blocks and protected dense steps/layers. Enabled is the default Turing fast path.",
-                    },
-                ),
                 "debug_route_density": (
                     "BOOLEAN",
                     {
@@ -158,7 +151,7 @@ class LegacySolSparseAttentionPatch:
     RETURN_NAMES = ("model",)
     FUNCTION = "patch"
     CATEGORY = "Turing Utils/patches"
-    TITLE = "Patch Sol Sparse Attention"
+    TITLE = "Configure Sol Sparse Attention"
 
     def patch(
         self,
@@ -174,7 +167,6 @@ class LegacySolSparseAttentionPatch:
         dense_suffix_steps: int = 0,
         dense_prefix_layers: int = 2,
         dense_suffix_layers: int = 0,
-        use_w8a8: bool = True,
         debug_route_density: bool = False,
     ):
         return (
@@ -191,13 +183,12 @@ class LegacySolSparseAttentionPatch:
                 dense_suffix_steps=dense_suffix_steps,
                 dense_prefix_layers=dense_prefix_layers,
                 dense_suffix_layers=dense_suffix_layers,
-                use_w8a8=use_w8a8,
                 debug_route_density=debug_route_density,
             ),
         )
 
 
-class LegacySlaSparseAttentionPatch:
+class SlaSparseAttentionPatch:
     @classmethod
     def INPUT_TYPES(cls):
         return {
@@ -259,7 +250,7 @@ class LegacySlaSparseAttentionPatch:
                         "min": 0,
                         "max": 1000,
                         "step": 1,
-                        "tooltip": "Early denoising steps that use the selected dense backend in every layer. Set 0 to reproduce all-step SLA routing.",
+                        "tooltip": "Leading steps of every sampler invocation that use the loader-selected dense backend across every transformer layer.",
                     },
                 ),
                 "dense_suffix_steps": (
@@ -269,7 +260,7 @@ class LegacySlaSparseAttentionPatch:
                         "min": 0,
                         "max": 1000,
                         "step": 1,
-                        "tooltip": "Final denoising steps that use the selected dense backend in every layer.",
+                        "tooltip": "Trailing steps of every sampler invocation that use the loader-selected dense backend across every transformer layer.",
                     },
                 ),
                 "dense_prefix_layers": (
@@ -279,7 +270,7 @@ class LegacySlaSparseAttentionPatch:
                         "min": 0,
                         "max": 256,
                         "step": 1,
-                        "tooltip": "Leading transformer layers kept dense in sparse steps. Prefix plus suffix reaching the model layer count makes the complete patch dense.",
+                        "tooltip": "Leading transformer layers kept on the loader-selected dense backend during sparse steps.",
                     },
                 ),
                 "dense_suffix_layers": (
@@ -289,18 +280,11 @@ class LegacySlaSparseAttentionPatch:
                         "min": 0,
                         "max": 256,
                         "step": 1,
-                        "tooltip": "Trailing transformer layers kept dense in sparse steps.",
+                        "tooltip": "Trailing transformer layers kept on the loader-selected dense backend during sparse steps.",
                     },
                 ),
             },
             "optional": {
-                "use_w8a8": (
-                    "BOOLEAN",
-                    {
-                        "default": True,
-                        "tooltip": "Use INT8 V and probability Tensor Cores for selected SLA blocks and protected dense steps/layers.",
-                    },
-                ),
                 "debug_route_density": (
                     "BOOLEAN",
                     {
@@ -315,7 +299,7 @@ class LegacySlaSparseAttentionPatch:
     RETURN_NAMES = ("model",)
     FUNCTION = "patch"
     CATEGORY = "Turing Utils/patches"
-    TITLE = "Patch SLA Sparse Attention"
+    TITLE = "Configure SLA Sparse Attention"
 
     def patch(
         self,
@@ -330,7 +314,6 @@ class LegacySlaSparseAttentionPatch:
         dense_suffix_steps: int = 0,
         dense_prefix_layers: int = 0,
         dense_suffix_layers: int = 0,
-        use_w8a8: bool = True,
         debug_route_density: bool = False,
     ):
         return (
@@ -339,74 +322,6 @@ class LegacySlaSparseAttentionPatch:
                 sparsity_ratio=sparsity_ratio,
                 prefix_policy=prefix_policy,
                 manual_prefix_tokens=manual_prefix_tokens,
-                sparse_reference_image=sparse_reference_image,
-                sparse_reference_video=sparse_reference_video,
-                sparse_reference_audio=sparse_reference_audio,
-                dense_prefix_steps=dense_prefix_steps,
-                dense_suffix_steps=dense_suffix_steps,
-                dense_prefix_layers=dense_prefix_layers,
-                dense_suffix_layers=dense_suffix_layers,
-                use_w8a8=use_w8a8,
-                debug_route_density=debug_route_density,
-            ),
-        )
-
-
-def _rewrite_dense_backend_tooltips(required: dict) -> dict:
-    required = dict(required)
-    explanations = {
-        "dense_prefix_steps": "Leading steps of every sampler invocation that use the loader-selected dense backend across every transformer layer.",
-        "dense_suffix_steps": "Trailing steps of every sampler invocation that use the loader-selected dense backend across every transformer layer.",
-        "dense_prefix_layers": "Leading transformer layers kept on the loader-selected dense backend during sparse steps.",
-        "dense_suffix_layers": "Trailing transformer layers kept on the loader-selected dense backend during sparse steps.",
-    }
-    for name, tooltip in explanations.items():
-        kind, settings = required[name]
-        settings = dict(settings)
-        settings["tooltip"] = tooltip
-        required[name] = (kind, settings)
-    return required
-
-
-class SolSparseAttentionPatch(LegacySolSparseAttentionPatch):
-    """Configure Sol while inheriting the loader-selected dense backend."""
-
-    TITLE = "Configure Sol Sparse Attention"
-
-    @classmethod
-    def INPUT_TYPES(cls):
-        inputs = LegacySolSparseAttentionPatch.INPUT_TYPES()
-        required = _rewrite_dense_backend_tooltips(inputs["required"])
-        return {
-            "required": required,
-            "optional": {
-                "debug_route_density": inputs["optional"]["debug_route_density"]
-            },
-        }
-
-    def patch(
-        self,
-        model,
-        routing_threshold: float = 1.0,
-        prefix_policy: str = "auto",
-        manual_prefix_tokens: int = 0,
-        skipped_residual: str = "1x64",
-        sparse_reference_image: bool = False,
-        sparse_reference_video: bool = True,
-        sparse_reference_audio: bool = False,
-        dense_prefix_steps: int = 1,
-        dense_suffix_steps: int = 0,
-        dense_prefix_layers: int = 2,
-        dense_suffix_layers: int = 0,
-        debug_route_density: bool = False,
-    ):
-        return (
-            apply_sparse_attention_patch(
-                model,
-                routing_threshold=routing_threshold,
-                prefix_policy=prefix_policy,
-                manual_prefix_tokens=manual_prefix_tokens,
-                skipped_residual=skipped_residual,
                 sparse_reference_image=sparse_reference_image,
                 sparse_reference_video=sparse_reference_video,
                 sparse_reference_audio=sparse_reference_audio,
@@ -472,55 +387,6 @@ class H3ImageSolAttentionPatch:
             apply_h3_image_sol_attention(
                 model,
                 temporal_layout=temporal_layout,
-                sparse_reference_image=sparse_reference_image,
-                sparse_reference_video=sparse_reference_video,
-                sparse_reference_audio=sparse_reference_audio,
-                dense_prefix_steps=dense_prefix_steps,
-                dense_suffix_steps=dense_suffix_steps,
-                dense_prefix_layers=dense_prefix_layers,
-                dense_suffix_layers=dense_suffix_layers,
-                debug_route_density=debug_route_density,
-            ),
-        )
-
-
-class SlaSparseAttentionPatch(LegacySlaSparseAttentionPatch):
-    """Configure SLA while inheriting the loader-selected dense backend."""
-
-    TITLE = "Configure SLA Sparse Attention"
-
-    @classmethod
-    def INPUT_TYPES(cls):
-        inputs = LegacySlaSparseAttentionPatch.INPUT_TYPES()
-        required = _rewrite_dense_backend_tooltips(inputs["required"])
-        return {
-            "required": required,
-            "optional": {
-                "debug_route_density": inputs["optional"]["debug_route_density"]
-            },
-        }
-
-    def patch(
-        self,
-        model,
-        sparsity_ratio: float = 0.85,
-        prefix_policy: str = "auto",
-        manual_prefix_tokens: int = 0,
-        sparse_reference_image: bool = False,
-        sparse_reference_video: bool = True,
-        sparse_reference_audio: bool = False,
-        dense_prefix_steps: int = 0,
-        dense_suffix_steps: int = 0,
-        dense_prefix_layers: int = 0,
-        dense_suffix_layers: int = 0,
-        debug_route_density: bool = False,
-    ):
-        return (
-            apply_sla_attention_patch(
-                model,
-                sparsity_ratio=sparsity_ratio,
-                prefix_policy=prefix_policy,
-                manual_prefix_tokens=manual_prefix_tokens,
                 sparse_reference_image=sparse_reference_image,
                 sparse_reference_video=sparse_reference_video,
                 sparse_reference_audio=sparse_reference_audio,

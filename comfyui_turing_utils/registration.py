@@ -4,8 +4,6 @@ from .adapters.minimax.conditioning import install_combined_minimax_conditioning
 from .nodes.attention import (
     H3ImageSolAttentionPatch,
     H3StaticVirtualKV,
-    LegacySlaSparseAttentionPatch,
-    LegacySolSparseAttentionPatch,
     SlaSparseAttentionPatch,
     SolSparseAttentionPatch,
 )
@@ -68,10 +66,6 @@ NODE_CLASS_MAPPINGS = {
     "TuringUtilsMiniMaxH3LatentUpscaleModelLoader": MiniMaxH3LatentUpscaleModelLoader,
     "TuringUtilsMiniMaxH3LatentUpscale": MiniMaxH3LatentUpscale,
     "TuringUtilsMiniMaxH3BlockCachePatch": MiniMaxH3BlockCachePatch,
-    # Preserve positional widget decoding for existing workflows.  New nodes
-    # inherit the loader-selected dense backend and omit the old use_w8a8 flag.
-    "TuringUtilsSolSparseAttentionPatch": LegacySolSparseAttentionPatch,
-    "TuringUtilsSlaSparseAttentionPatch": LegacySlaSparseAttentionPatch,
     "TuringUtilsSolAttentionStrategy": SolSparseAttentionPatch,
     "TuringUtilsSlaAttentionStrategy": SlaSparseAttentionPatch,
     "TuringUtilsH3ImageSolAttention": H3ImageSolAttentionPatch,
@@ -109,8 +103,6 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "TuringUtilsMiniMaxH3LatentUpscaleModelLoader": "Load MiniMax H3 Latent Upscaler",
     "TuringUtilsMiniMaxH3LatentUpscale": "MiniMax H3 Latent Upscale",
     "TuringUtilsMiniMaxH3BlockCachePatch": "Patch MiniMax H3 Block Cache (Experimental)",
-    "TuringUtilsSolSparseAttentionPatch": "Patch Sol Sparse Attention",
-    "TuringUtilsSlaSparseAttentionPatch": "Patch SLA Sparse Attention",
     "TuringUtilsSolAttentionStrategy": "Configure Sol Sparse Attention",
     "TuringUtilsSlaAttentionStrategy": "Configure SLA Sparse Attention",
     "TuringUtilsH3ImageSolAttention": "Configure H3 Image Sol Attention",
