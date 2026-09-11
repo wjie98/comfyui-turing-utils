@@ -23,6 +23,8 @@ The loader defaults to bundled W8A8 on sm75 and newer Tensor Core GPUs; Sage
 and SDPA remain explicit choices. Native cubins provide compile-time device
 specialization without a separate Python model path.
 ConvRot MODEL and CLIP loaders install a model-local Kitchen selection scope.
+H3 VAE Encode/Decode nodes also enter a scope for the duration of their call,
+including VAEs loaded by the official loader; they do not change VAE precision.
 Exact local contracts have priority inside that scope; unsupported calls return
 to Kitchen's normal dispatcher before execution. The plugin does not change the
 global Kitchen backend priority, and it does not catch a selected operator's
@@ -41,10 +43,12 @@ implementation.
 | Linear | `w4a8_linear` | Packed INT4 weights with INT8 activations on sm75+ Tensor Cores; BF16 output |
 | Linear | `codebook_w4a8_linear` | Grouped-codebook INT4 storage with E4M3 group scales, inline packed-to-shared decode for long sequences, bounded staged fallback, sm75+ INT8 Tensor Core contraction, and BF16 output |
 | Linear | `int8_linear` | Raw prequantized sm75+ W8A8 contraction used by the grouped-codebook path and backend regression gates |
+| Linear | `fp16_int8_linear` | W8A8 with FP16 scale/bias rounding and FP16 output; native `[N,K]` weight layout |
 | Epilogue | `dequantize_int8_bf16` | INT32 GEMM workspace to packed BF16 output |
 | Activation quantization | `swiglu_int8_convrot_quantize`, `swiglu_int4_convrot_quantize` | Fused SwiGLU and ConvRot activation quantization |
 | Activation quantization | `gelu_int8_convrot_quantize`, `gelu_int4_convrot_quantize` | Fused tanh-GELU and ConvRot activation quantization |
 | Activation quantization | `bf16_int8_convrot_quantize`, `bf16_int4_convrot_quantize` | BF16 row-buffer ConvRot quantization, optionally with SwiGLU |
+| Activation quantization | `fp16_int8_quantize` | FP16 row quantization after native activation/rotation; eager scale and rounding boundaries |
 | Activation quantization | `swiglu_int8_convrot_quantize_scaled` | Quantize one aligned FFN channel interval with a precomputed whole-row scale |
 | Activation quantization | `swiglu_convrot_shard_inplace`, `int8_convrot_quantize_from_partials` | Single-pass half-width FC1 staging with in-place SwiGLU+ConvRot and exact whole-row quantization |
 | Activation quantization | `bf16_gelu_int8_convrot_quantize`, `bf16_gelu_int4_convrot_quantize` | BF16 row-buffer GELU and ConvRot quantization |
@@ -60,7 +64,7 @@ implementation.
 | Attention | `sla_attention` | Native sm75+ 128x64 fixed-Top-K SLA routing with FP16/BF16-PV or INT8-PV |
 
 W4A4 contraction deliberately reuses Comfy Kitchen. W8A8 uses the local sm75+
-contraction for its aligned BF16 contract and otherwise returns to Kitchen's
+contraction for its aligned BF16/FP16 contracts and otherwise returns to Kitchen's
 normal dispatcher. The local package also supplies sm75+-capable quantization,
 the BF16 epilogue, activation fusions, dispatch, and W4A8 contraction; it does
 not duplicate the full W4A4 GEMM.
@@ -189,7 +193,8 @@ them. The ladder has no Triton dependency; on Windows, a missing optional
 Kitchen fixed-workspace entry point falls through to the bundled CUTLASS W8
 contraction rather than a sequence-sized INT32 workspace.
 
-The H3 video-VAE overlap accumulator follows the same sm75+ capability contract.
+The retained overlap accumulator follows the same sm75+ capability contract;
+the H3 VAE decoder now uses native linear stitching instead.
 Legacy `turing` and `_sm75` names are retained only as public/package ABI; CUDA
 selects the architecture-specific cubin and instruction sequence internally.
 

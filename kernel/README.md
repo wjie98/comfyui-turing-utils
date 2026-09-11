@@ -1,7 +1,10 @@
 # comfyui-turing-utils-kernel
 
 Separately installed CUDA/PyTorch extension for the ComfyUI plugin's quantized
-runtime. Version 0.41.0 completes the mapped physical-K/logical-RoPE Sol path
+runtime. Version 0.42.0 adds FP16 row quantization and an FP16 W8A8 epilogue
+for the H3 video VAE, preserving native activation/rotation and original INT8 weight
+layout and the existing BF16 APIs. It does not force BF16 VAE execution.
+Version 0.41.0 completed the mapped physical-K/logical-RoPE Sol path
 for both integer and floating V. W8A8 uses mapped summaries plus its INT8-V
 gather, while Sage/SDPA-derived policies keep physical FP16/BF16 V and map both
 summary construction and exact selected-tile loads. A virtual-K/V adapter can
@@ -55,11 +58,9 @@ Every stable public tensor operator is registered through
 raw W8A8 contraction used by the grouped-codebook path and regression tests, BF16
 epilogue, ConvRot activation fusions, normalization fusions, fixed and varlen
 Sage, dense W8A8, Sol, SLA, and fused Q/K RMSNorm+RoPE+INT8 preprocessing.
-The same extension also provides a deterministic FP32 overlap epilogue for
-isolated validation and a streaming FP32 accumulator for the production
-MiniMax H3 shared-core VAE decoder. The streaming path consumes compact
-decode-local inverse maps, preserves the validated window order, and falls
-back to the ordered Python reduction when the new ABI is unavailable.
+The same extension also retains deterministic FP32 overlap operators for ABI
+compatibility and isolated validation. The H3 VAE decoder no longer uses them;
+it follows native independent-window decoding and linear pixel stitching.
 Prequantized Python state objects deliberately stay
 outside this boundary because they are ComfyUI tensor-lifetime coordination,
 not graph-level tensor operators.

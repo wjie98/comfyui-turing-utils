@@ -401,10 +401,21 @@ struct TuringW4A8Gemm {
         ElementCompute,
         ElementCompute,
         cutlass::FloatRoundStyle::round_to_nearest>;
-    using ScaledOutput = cutlass::epilogue::threadblock::Sm80EVT<
+    using BF16ScaledOutput = cutlass::epilogue::threadblock::Sm80EVT<
         ScaleWeight,
         ScaledActivation,
         WeightScale>;
+    // FP16 VAE matches eager's tensor boundaries: combine FP32 scales first,
+    // round the scaled accumulator to FP16, then add the FP16-rounded bias.
+    using FP16Scale = cutlass::epilogue::threadblock::VisitorCompute<
+        cutlass::multiplies, ElementC, ElementCompute,
+        cutlass::FloatRoundStyle::round_to_nearest>;
+    using FP16ScaledOutput = cutlass::epilogue::threadblock::Sm80EVT<
+        FP16Scale,
+        Accumulator,
+        cutlass::epilogue::threadblock::Sm80EVT<ScaleWeight, ActivationScale, WeightScale>>;
+    using ScaledOutput = std::conditional_t<
+        std::is_same_v<ElementC, cutlass::half_t>, FP16ScaledOutput, BF16ScaledOutput>;
     using AddBias = cutlass::epilogue::threadblock::VisitorCompute<
         cutlass::plus,
         ElementC,
@@ -472,12 +483,18 @@ struct TuringW4A8Gemm {
                     const uint8_t *group_scale = nullptr,
                     const float *codebook = nullptr) {
         cutlass::gemm::GemmCoord problem(m, n, k);
+        auto scale_arguments = [&]() -> typename ScaledOutput::Arguments {
+            if constexpr (std::is_same_v<ElementC, cutlass::half_t>) {
+                return {{},
+                        {{const_cast<float *>(activation_scale), 0.0f, {_1{}, _0{}, m}},
+                         {const_cast<float *>(weight_scale), 0.0f, {_0{}, _1{}, n}}, {}}, {}};
+            } else {
+                return {{{}, {const_cast<float *>(activation_scale), 0.0f, {_1{}, _0{}, m}}, {}},
+                        {const_cast<float *>(weight_scale), 0.0f, {_0{}, _1{}, n}}, {}};
+            }
+        };
         typename Callbacks::Arguments callbacks{
-            {{{{},
-               {const_cast<float *>(activation_scale), 0.0f, {_1{}, _0{}, m}},
-               {}},
-              {const_cast<float *>(weight_scale), 0.0f, {_0{}, _1{}, n}},
-              {}},
+            {scale_arguments(),
              {const_cast<float *>(bias), 0.0f, {_0{}, _1{}, n}},
              {}},
             {output, {output_stride, _1{}, static_cast<int64_t>(m) * output_stride}}};
@@ -575,26 +592,26 @@ bool run_k_tail_tile(const int8_t *activation,
         stream);
 }
 
-template <int TBM, int TBN, int WM, int WN>
+template <int TBM, int TBN, int WM, int WN, typename Output>
 bool run_int8_tile(const int8_t *activation,
                    const int8_t *weight,
                    const float *activation_scale,
                    const float *weight_scale,
                    const float *bias,
-                   __nv_bfloat16 *output,
+                   Output *output,
                    int m,
                    int n,
                    int k,
                    int output_stride,
                    cudaStream_t stream) {
     return TuringW4A8Gemm<
-        cutlass::bfloat16_t, WeightKind::kInt8, TBM, TBN, WM, WN>::run(
+        Output, WeightKind::kInt8, TBM, TBN, WM, WN>::run(
         activation,
         weight,
         activation_scale,
         weight_scale,
         bias,
-        reinterpret_cast<cutlass::bfloat16_t *>(output),
+        output,
         m,
         n,
         k,
@@ -605,11 +622,11 @@ bool run_int8_tile(const int8_t *activation,
 // Native SM80 INT8 Tensor Core mainloop.  Keeping the same EVT epilogue as
 // the SM75 implementation makes this a schedule substitution only: integer
 // accumulation, row/channel scales, bias, and BF16 rounding are unchanged.
-template <int TBM, int TBN, int TBK, int WM, int WN, int WK, int Stages>
+template <int TBM, int TBN, int TBK, int WM, int WN, int WK, int Stages, typename Output>
 struct AmpereInt8Gemm {
     using ElementA = int8_t;
     using ElementB = int8_t;
-    using ElementC = cutlass::bfloat16_t;
+    using ElementC = Output;
     using AccumulatorT = int32_t;
     using ComputeT = float;
     using LayoutA = cutlass::layout::RowMajor;
@@ -637,8 +654,16 @@ struct AmpereInt8Gemm {
         cutlass::FloatRoundStyle::round_to_nearest>;
     using ScaledActivation = cutlass::epilogue::threadblock::Sm80EVT<
         Multiply, Accumulator, XScale>;
-    using ScaledOutput = cutlass::epilogue::threadblock::Sm80EVT<
+    using BF16ScaledOutput = cutlass::epilogue::threadblock::Sm80EVT<
         Multiply, ScaledActivation, WScale>;
+    using FP16Scale = cutlass::epilogue::threadblock::VisitorCompute<
+        cutlass::multiplies, ElementC, ComputeT,
+        cutlass::FloatRoundStyle::round_to_nearest>;
+    using FP16ScaledOutput = cutlass::epilogue::threadblock::Sm80EVT<
+        FP16Scale, Accumulator,
+        cutlass::epilogue::threadblock::Sm80EVT<Multiply, XScale, WScale>>;
+    using ScaledOutput = std::conditional_t<
+        std::is_same_v<ElementC, cutlass::half_t>, FP16ScaledOutput, BF16ScaledOutput>;
     using Add = cutlass::epilogue::threadblock::VisitorCompute<
         cutlass::plus, ElementC, ComputeT,
         cutlass::FloatRoundStyle::round_to_nearest>;
@@ -664,19 +689,25 @@ struct AmpereInt8Gemm {
                     const float *activation_scale,
                     const float *weight_scale,
                     const float *bias,
-                    __nv_bfloat16 *output,
+                    Output *output,
                     int m,
                     int n,
                     int k,
                     int output_stride,
                     cudaStream_t stream) {
         cutlass::gemm::GemmCoord problem(m, n, k);
+        auto scale_arguments = [&]() -> typename ScaledOutput::Arguments {
+            if constexpr (std::is_same_v<ElementC, cutlass::half_t>) {
+                return {{},
+                        {{const_cast<float *>(activation_scale), 0.0f, {_1{}, _0{}, m}},
+                         {const_cast<float *>(weight_scale), 0.0f, {_0{}, _1{}, n}}, {}}, {}};
+            } else {
+                return {{{}, {const_cast<float *>(activation_scale), 0.0f, {_1{}, _0{}, m}}, {}},
+                        {const_cast<float *>(weight_scale), 0.0f, {_0{}, _1{}, n}}, {}};
+            }
+        };
         typename Callbacks::Arguments callbacks{
-            {{{{},
-               {const_cast<float *>(activation_scale), 0.0f, {_1{}, _0{}, m}},
-               {}},
-              {const_cast<float *>(weight_scale), 0.0f, {_0{}, _1{}, n}},
-              {}},
+            {scale_arguments(),
              {const_cast<float *>(bias), 0.0f, {_0{}, _1{}, n}},
              {}},
             {reinterpret_cast<ElementC *>(output),
@@ -710,20 +741,20 @@ struct AmpereInt8Gemm {
     }
 };
 
-template <int TBM, int TBN, int TBK, int WM, int WN, int WK, int Stages>
+template <int TBM, int TBN, int TBK, int WM, int WN, int WK, int Stages, typename Output>
 bool run_ampere_int8_tile(const int8_t *activation,
                           const int8_t *weight,
                           const float *activation_scale,
                           const float *weight_scale,
                           const float *bias,
-                          __nv_bfloat16 *output,
+                          Output *output,
                           int m,
                           int n,
                           int k,
                           int output_stride,
                           cudaStream_t stream) {
     return AmpereInt8Gemm<
-        TBM, TBN, TBK, WM, WN, WK, Stages>::run(
+        TBM, TBN, TBK, WM, WN, WK, Stages, Output>::run(
         activation, weight, activation_scale, weight_scale, bias, output,
         m, n, k, output_stride, stream);
 }
@@ -774,12 +805,13 @@ bool dispatch(const int8_t *activation,
         output, m, n, k, output_stride, stream);
 }
 
+template <typename Output>
 bool dispatch_int8(const int8_t *activation,
                    const int8_t *weight,
                    const float *activation_scale,
                    const float *weight_scale,
                    const float *bias,
-                   __nv_bfloat16 *output,
+                   Output *output,
                    int m,
                    int n,
                    int k,
@@ -1085,7 +1117,7 @@ void turing_codebook_w4a8_linear(Tensor activation,
                 activation_scale_ptr,
                 channel_scale_ptr + row,
                 bias_ptr == nullptr ? nullptr : bias_ptr + row,
-                output_ptr + row,
+                reinterpret_cast<cutlass::bfloat16_t *>(output_ptr + row),
                 m,
                 rows,
                 k,
@@ -1112,18 +1144,18 @@ void turing_int8_linear(Tensor activation,
     if (k % 16 != 0 || n % 8 != 0) {
         throw std::runtime_error("Turing INT8 linear requires K%16=0 and N%8=0");
     }
-    const bool launched = dispatch_int8(
-        activation.data_ptr<int8_t>(),
-        weight.data_ptr<int8_t>(),
-        activation_scale.data_ptr<float>(),
-        weight_scale.data_ptr<float>(),
-        bias.valid() ? bias.data_ptr<float>() : nullptr,
-        output.data_ptr<__nv_bfloat16>(),
-        m,
-        n,
-        k,
-        static_cast<int>(output.stride(0)),
-        getCurrentCUDAStream());
+    // Row-major [N,K] weights are already a column-major [K,N] GEMM operand.
+    // Never transpose/materialize a second weight buffer.
+    const auto launch = [&](auto *output_ptr) {
+        return dispatch_int8(
+            activation.data_ptr<int8_t>(), weight.data_ptr<int8_t>(),
+            activation_scale.data_ptr<float>(), weight_scale.data_ptr<float>(),
+            bias.valid() ? bias.data_ptr<float>() : nullptr, output_ptr,
+            m, n, k, static_cast<int>(output.stride(0)), getCurrentCUDAStream());
+    };
+    const bool launched = output.scalar_type() == Tensor::FP16
+        ? launch(static_cast<cutlass::half_t *>(output.ptr))
+        : launch(static_cast<cutlass::bfloat16_t *>(output.ptr));
 
     if (!launched) {
         throw std::runtime_error("CUTLASS SM75 INT8 kernel rejected the problem shape");

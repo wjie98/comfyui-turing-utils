@@ -26,38 +26,16 @@ class MiniMaxH3VideoVAEDecode:
                     },
                 ),
             },
-            "optional": {
-                "overlap_query_threshold": (
-                    "FLOAT",
-                    {
-                        "default": 0.0,
-                        "min": 0.0,
-                        "max": 0.5,
-                        "step": 0.01,
-                        "tooltip": "Experimental speed/quality control. Window-query memberships below this normalized cosine weight are skipped and the survivors are renormalized. Zero preserves the stable full-overlap path.",
-                    },
-                ),
-                "final_full_overlap_blocks": (
-                    "INT",
-                    {
-                        "default": 36,
-                        "min": 0,
-                        "max": 36,
-                        "step": 1,
-                        "tooltip": "Number of final decoder Transformer blocks that always keep every overlapping window contribution. Earlier blocks may prune low-weight overlap queries using overlap_query_threshold.",
-                    },
-                ),
-            },
         }
 
     RETURN_TYPES = ("IMAGE",)
     FUNCTION = "decode"
     CATEGORY = "Turing Utils/MiniMax H3"
     DESCRIPTION = (
-        "MiniMax H3 video decoder with automatic W8A8 SwiGLU "
-        "fusion, asynchronous pixel double buffering, ComfyUI-managed "
-        "block-level dynamic-weight prefetch, and output storage matching "
-        "ComfyUI's VAE intermediate dtype."
+        "Native H3 independent-window decoding and linear stitching with fused "
+        "operators, selectable attention, and completed-tile progress. Accepts "
+        "the official VAELoader; operators activate only during this node. Weight "
+        "prefetch and output storage follow ComfyUI's VAE lifecycle."
     )
 
     def decode(
@@ -65,8 +43,6 @@ class MiniMaxH3VideoVAEDecode:
         samples,
         vae,
         attention,
-        overlap_query_threshold=0.0,
-        final_full_overlap_blocks=36,
     ):
         require_h3_video_vae(vae)
         latent = samples["samples"]
@@ -77,8 +53,6 @@ class MiniMaxH3VideoVAEDecode:
                 vae,
                 latent,
                 attention,
-                overlap_query_threshold=overlap_query_threshold,
-                final_full_overlap_blocks=final_full_overlap_blocks,
             )
         if images.ndim == 5:
             images = images.reshape(-1, *images.shape[-3:])
@@ -101,7 +75,8 @@ class MiniMaxH3VideoVAEEncode:
     DESCRIPTION = (
         "MiniMax H3 video encoder with asynchronous pixel buffering, automatic "
         "tile batching, ComfyUI-managed block-level dynamic-weight prefetch, "
-        "and output storage matching ComfyUI's VAE intermediate dtype."
+        "and output storage matching ComfyUI's VAE intermediate dtype. Accepts "
+        "the official VAELoader and preserves its compute dtype."
     )
 
     def encode(

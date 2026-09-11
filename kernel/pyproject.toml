@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "comfyui-turing-utils-kernel"
-version = "0.41.0"
+version = "0.42.0"
 description = "Turing operators and multi-architecture integer attention for ComfyUI"
 readme = "README.md"
 requires-python = ">=3.10"

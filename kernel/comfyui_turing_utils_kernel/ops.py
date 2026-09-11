@@ -159,6 +159,41 @@ def _turing_int8_linear_out_fake(
     return None
 
 
+@torch.library.custom_op("turing_utils::fp16_int8_linear", mutates_args=())
+def turing_fp16_int8_linear(
+    activation: torch.Tensor,
+    weight: torch.Tensor,
+    activation_scale: torch.Tensor,
+    weight_scale: torch.Tensor,
+    bias: torch.Tensor | None = None,
+) -> torch.Tensor:
+    """W8A8 with FP16 output; scales and bias follow eager FP16 rounding."""
+    return _C.turing_fp16_int8_linear(
+        activation, weight, activation_scale, weight_scale, bias
+    )
+
+
+@turing_fp16_int8_linear.register_fake
+def _turing_fp16_int8_linear_fake(activation, weight, activation_scale, weight_scale, bias=None):
+    return torch.empty((activation.size(0), weight.size(0)), dtype=torch.float16, device=activation.device)
+
+
+@torch.library.custom_op("turing_utils::fp16_int8_quantize", mutates_args=())
+def turing_fp16_int8_quantize(
+    x: torch.Tensor,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """FP16 row quantization with eager's scale and rounding boundaries."""
+    return _C.turing_fp16_int8_quantize(x)
+
+
+@turing_fp16_int8_quantize.register_fake
+def _turing_fp16_int8_quantize_fake(x):
+    return (
+        torch.empty(x.shape, dtype=torch.int8, device=x.device),
+        torch.empty((x.size(0), 1), dtype=torch.float32, device=x.device),
+    )
+
+
 @torch.library.custom_op("turing_utils::dequantize_int8_bf16", mutates_args=())
 def turing_dequantize_int8_bf16(
     accumulator: torch.Tensor,

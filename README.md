@@ -128,11 +128,11 @@ only after its CUDA sources or required version change.
   learned model, while Ref2AV image/video/audio references retain their
   independent geometry. Without it, only the AV latent is processed. No text
   or VAE conditioning stage is rerun.
-- `MiniMax H3 Video VAE Decode/Encode` provide fixed 256px H3
-  tiling, full-overlap shared-core decode, a deterministic FP32 overlap
-  epilogue, global multiband stitching, and ComfyUI-managed block-level weight
+- `MiniMax H3 Video VAE Decode/Encode` retain native H3 independent-window
+  computation and linear stitching, with fused operators, decoder attention
+  selection, completed-tile tqdm/UI progress, and ComfyUI-managed weight
   prefetch. Their public tensors follow ComfyUI's configured VAE intermediate
-  dtype while numerically sensitive accumulation remains FP32.
+  dtype. Shared-state decoding and experimental overlap controls are removed.
 - `Patch MiniMax H3 Block Cache (Experimental)` skips stable transformer-block
   spans by reusing one exact trajectory residual. It provides conservative
   standard, 4-step, and 8-step profiles, isolates sampler branches, prefetches
@@ -275,9 +275,7 @@ FFN call, the adapter reads ComfyUI's immediately usable memory and the
 - a dynamically resident DiT does not retain the optional full-sequence INT8
   input cache during head sharding. Recomputing the inexpensive row
   quantization preserves roughly one hidden tensor of weight residency and
-  avoids PCIe page churn;
-- the H3 video-VAE overlap accumulator uses the same sm75+ native capability
-  gate, so Ampere does not lose that fused decode path.
+  avoids PCIe page churn.
 
 No workflow socket or node changes are required. For a 16 GiB display card
 that must leave 4 GiB to Windows and the compositor, launch ComfyUI with

@@ -16,7 +16,8 @@ from .video_vae import (
     _AUTO_ENCODE_TILE_BATCH_LIMIT,
     _TileProgress,
     _encode_memory_requirement,
-    _select_tiles_per_batch,
+    _load_vae_for_tiles,
+    _vae_operator_scope,
     _spatial_tile_count,
     require_h3_video_vae,
     split_tiles,
@@ -327,6 +328,7 @@ def _prepare_encode_pixels(vae, pixels):
     return pixels.movedim(-1, 1)
 
 
+@_vae_operator_scope()
 def encode_video(vae, pixels):
     model = require_h3_video_vae(vae)
     pixels = _prepare_encode_pixels(vae, pixels)
@@ -337,7 +339,7 @@ def encode_video(vae, pixels):
         pixels.shape[-1],
         tile_size,
     )
-    batch_tiles, memory = _select_tiles_per_batch(
+    batch_tiles, _ = _load_vae_for_tiles(
         vae,
         tile_count,
         lambda count: _encode_memory_requirement(
@@ -350,10 +352,6 @@ def encode_video(vae, pixels):
         _AUTO_ENCODE_TILE_BATCH_LIMIT,
     )
     tile_overlap = TILE_OVERLAP
-    comfy.model_management.load_models_gpu(
-        [vae.patcher], memory_required=memory, force_full_load=vae.disable_offload
-    )
-
     progress = None
     try:
         prefetch_dynamic_vbars = vae.patcher.is_dynamic()

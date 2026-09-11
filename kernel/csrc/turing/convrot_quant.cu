@@ -10,6 +10,7 @@
 #include <cuda_bf16.h>
 #include <cuda_fp16.h>
 #include <cuda_runtime.h>
+#include <math_constants.h>
 
 #include <cfloat>
 #include <cmath>
@@ -113,6 +114,33 @@ __device__ __forceinline__ void fht_stage(
     dst[base + S] = 0.5f * (x0 + x1 - x2 + x3);
     dst[base + 2 * S] = 0.5f * (x0 - x1 + x2 + x3);
     dst[base + 3 * S] = 0.5f * (-x0 + x1 + x2 + x3);
+}
+
+// Preserve eager's FP16 rotation; fuse only the following row quantization.
+__global__ void fp16_int8_rowwise_kernel(
+    const half *__restrict__ input, int8_t *__restrict__ output,
+    float *__restrict__ scales, int k) {
+    __shared__ float warp_values[8];
+    __shared__ float block_value;
+    const int64_t offset = static_cast<int64_t>(blockIdx.x) * k;
+    float abs_max = 0.0f;
+    bool has_nan = false;
+    for (int col = threadIdx.x; col < k; col += blockDim.x) {
+        const float value = __half2float(input[offset + col]);
+        has_nan |= isnan(value);
+        abs_max = fmaxf(abs_max, fabsf(value));
+    }
+    const bool row_nan = __syncthreads_or(has_nan);
+    abs_max = block_reduce_max<8>(abs_max, warp_values, &block_value);
+    const float scale = row_nan ? CUDART_NAN_F : fmaxf(abs_max * (1.0f / 127.0f), 1.0e-30f);
+    if (threadIdx.x == 0) scales[blockIdx.x] = scale;
+    float math_scale = __half2float(__float2half_rn(scale));
+    if (math_scale == 0.0f) math_scale = 0.00006103515625f;
+    for (int col = threadIdx.x; col < k; col += blockDim.x) {
+        const float divided = __half2float(__float2half_rn(__fdiv_rn(__half2float(input[offset + col]), math_scale)));
+        output[offset + col] = isnan(divided) ? 0 : static_cast<int8_t>(
+            fminf(127.0f, fmaxf(-128.0f, nearbyintf(divided))));
+    }
 }
 
 template <int S, typename OutputType>
@@ -847,6 +875,13 @@ void turing_bf16_int4_convrot_quantize(Tensor input,
     } else {
         launch_bf16_rowbuffer<512, false, true>(input, output, scales);
     }
+}
+
+void turing_fp16_int8_quantize(Tensor input, Tensor output, Tensor scales) {
+    fp16_int8_rowwise_kernel<<<input.size(0), 256, 0, getCurrentCUDAStream()>>>(
+        static_cast<const half *>(input.ptr), static_cast<int8_t *>(output.ptr),
+        static_cast<float *>(scales.ptr), input.size(1));
+    checkCUDA(cudaGetLastError());
 }
 
 void turing_bf16_gelu_int8_convrot_quantize(Tensor input,

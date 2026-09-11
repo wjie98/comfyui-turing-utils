@@ -30,6 +30,8 @@ void turing_int8_linear(Tensor activation,
                         Tensor bias,
                         Tensor output);
 
+void turing_fp16_int8_quantize(Tensor input, Tensor output, Tensor scales);
+
 void turing_dequantize_int8_bf16(Tensor accumulator,
                                  Tensor activation_scale,
                                  Tensor weight_scale,

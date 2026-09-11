@@ -1,84 +1,86 @@
 # MiniMax H3 Video VAE
 
-The MiniMax H3 VAE nodes provide a focused Turing execution path for the
-official H3 video VAE. They accept the normal ComfyUI `VAE`, `LATENT`, and
-`IMAGE` types and do not require the Turing Utils model loader. The decoder is
-the production path, and the encoder follows the same public ComfyUI VAE
-storage contract.
+The H3 VAE nodes accept normal ComfyUI `VAE`, `LATENT`, and `IMAGE` types.
+They retain native H3 spatial/temporal reconstruction and add fused operators,
+decoder attention selection, and completed-tile progress in the UI and tqdm.
+Use the official `VAELoader`; no separate Turing Utils VAE loader is required
+or provided. These optimizations activate only while the dedicated H3 node is
+executing. Other nodes using the same VAE object retain normal dispatch.
 
 ## Decode
 
-`MiniMax H3 Video VAE Decode` uses one fixed spatial policy:
+`MiniMax H3 Video VAE Decode` evaluates each spatial window independently:
 
-- 256px windows with 64px overlap, matching the geometry expected by H3;
-- full cosine partition-of-unity queries throughout every overlap by default,
-  with a deterministic FP32 epilogue instead of atomic overlap reductions;
-- one globally reconciled image-token state for decoder transformer blocks;
-- independent 256px windows only for the final pixel projection;
-- normalized multiband stitching whose frequency split is evaluated on two
-  complete canvases rather than independently at every tile edge.
+- native H3 window geometry (normally 256px with at least 64px overlap);
+- independent image/register tokens and local RoPE for all decoder blocks;
+- native pixel projection and ordered vertical/horizontal linear blending;
+- native temporal padding, overlap, trimming, and pixel normalization.
 
-Two optional controls provide a shared-state speed/quality experiment:
+Shared hidden states, query pruning, custom overlap accumulation, and multiband
+pixel stitching are no longer used. The `overlap_query_threshold` and
+`final_full_overlap_blocks` inputs have been removed. Existing graphs keep the
+same node type and `samples`, `vae`, and `attention` inputs; recreate the node
+if an older frontend retains the deleted widgets.
 
-- `overlap_query_threshold=0` retains every cosine membership and is the
-  quality-preserving default. A positive value drops only very small window
-  memberships, always retains at least one owner, and renormalizes survivors.
-- `final_full_overlap_blocks=36` keeps the complete overlap in every decoder
-  Transformer block. Lower values allow the threshold only in earlier blocks
-  and restore complete overlap for the requested final block count. Hidden
-  states remain globally reconciled after every block.
+The attention selector applies to every decoder Transformer block:
 
-For the common 864x480 decode geometry, threshold `0.03` retains about 80% of
-overlap queries in early blocks and forms only three query-size groups. Treat
-it as an experimental starting point, not a universal recommendation.
-
-The multiband implementation first constructs a low-frequency-priority canvas
-and a high-frequency-priority canvas, then separates their bands globally. It
-therefore exactly reconstructs identical overlapping content (within FP32
-rounding) and avoids the paired seam lines caused by tile-local low-pass
-boundary conditions.
-
-The attention selector applies to every shared decoder Transformer block:
-
-- `sdpa`: PyTorch SDPA, with FP16 computation for Turing BF16 inputs to avoid
-  its slow math fallback;
+- `sdpa`: PyTorch SDPA; Turing BF16 inputs compute in FP16 to avoid its slow
+  math fallback;
 - `sage`: bundled Turing Sage attention;
 - `w8a8`: quantized QK attention when the installed kernel supports it.
 
+This selector does not change VAE weight quantization. Eligible INT8 decoder
+FFNs use ComfyUI's fused SwiGLU/input-quantization path. Fusion and lower-precision
+attention can still introduce numerical differences; neither changes the
+independent-window reconstruction policy.
+
+Kernel 0.42 adds an FP16-input/FP16-output INT8 ConvRot path (SM75+). It consumes
+the existing `[N,K]` INT8 weight storage directly as the column-major GEMM
+operand, without a transposed weight copy, and fuses row quantization and the
+scale/bias epilogue. Activation and Hadamard rotation retain Kitchen's native
+implementation: replacing rotation with a butterfly reduction changed a few
+rounding-threshold values and amplified differences through 36 decoder blocks.
+FP32 calls and unsupported shapes retain Kitchen's normal
+dispatch. The existing BF16 kernels are not used to lower VAE compute precision.
+
+Input latent storage may be FP16, BF16, or FP32. Compute follows `vae.vae_dtype`:
+the [ComfyUI H3 implementation](https://github.com/Comfy-Org/ComfyUI/blob/master/comfy/sd.py)
+advertises FP16/FP32 and defaults its quantized decoder to FP16; the
+[Diffusers VAE example](https://huggingface.co/docs/diffusers/main/en/api/models/autoencoderkl_minimax_h3)
+uses FP32. Do not infer VAE compute precision from the DiT checkpoint's BF16 label.
+
 ## Encode
 
-`MiniMax H3 Video VAE Encode` retains the official 256px/64px tiled encoder
-geometry. It chooses up to sixteen simultaneous spatial tiles from the current
-memory budget. Encoder stages use ComfyUI's dynamic-VBAR prefetch queue, which
-returns each stage before moving to the next instead of pinning one complete
-encoder weight cycle. Pixel preparation, moments, and latent normalization keep
-their numerically sensitive FP32 steps; the published latent is converted only
-at the boundary to `vae.vae_output_dtype()`, matching the official VAE wrapper.
+`MiniMax H3 Video VAE Encode` retains the native 256px/64px tiled CNN encoder,
+linear blending, temporal layout, and latent normalization. It has no attention
+selector because the encoder is convolutional. The same execution-local
+operator scope is enabled, but only compatible quantized operations use it;
+ordinary convolutions retain their native implementation and dtype.
 
-## Automatic execution
+## Execution and validation
 
-Both nodes choose the number of simultaneously evaluated windows internally.
-The choice is bounded by current free/reclaimable device memory and conservative
-activation estimates (up to sixteen windows for both decode and encode).
-This control is intentionally not exposed in the node UI.
+Independent windows can be batched within the current memory budget (up to
+sixteen). Only the one-tile requirement is passed to ComfyUI model loading.
+After loading, larger batches are selected from idle/reusable allocator memory
+minus the configured reserve and not-yet-resident VAE weights. Evictable
+DiT/CLIP weights are not counted as optional batching capacity. One tile can
+still require unavoidable offloading on a small card; this is not a guarantee
+that every model remains resident or that concurrent GPU allocations cannot OOM.
+ComfyUI owns model loading and short-lived weight prefetch queues;
+pixel transfers retain asynchronous buffering. Output tensors use
+`vae.vae_output_dtype()`, and progress advances as tile work completes.
 
-With kernel ABI 0.27 or newer, the decoder streams each attention subbatch into
-the global FP32 canvas through a deterministic SM75 accumulator. Compact
-inverse maps live only for the current decode, and kernel launches retain the
-same group/window order as the validated Python reduction. Older kernels and
-unsupported dtypes automatically use that ordered Python fallback.
+Regression tests compare the decoder directly with native `ViT3DDecoder` and
+`MiniMaxH3VideoVAE.tiled_decode`, including multiple windows, input batches,
+tile-batch sizes, FP16 CUDA execution, and differing pixels in overlap regions.
+Temporal and encoder reference comparisons remain covered separately.
 
-Both paths use ComfyUI's official short-lived prefetch queues. Decoder weights
-are leased one Transformer block at a time and encoder weights one execution
-stage at a time; unpinned VBAR pages may remain resident when memory allows,
-but the plugin does not retain or evict them itself. After FP32 pixel
-finalization, decode uses asynchronous output-dtype double buffering; encode
-uses asynchronous input buffering when pinned host memory is available. The
-nodes publish completed-tile progress to both ComfyUI and the terminal, while
-model residency and cleanup remain owned by ComfyUI's dynamic-memory manager.
-
-The decoder's fixed tiling policy is deliberate: discarded arbitrary-size and
-alternate stitching strategies were removed after producing visible grids,
-blur, or unnecessary duplicated token work. Positive
-`overlap_query_threshold` values remain an optional experimental speed/quality
-control; zero is the stable decoder default.
+On A40/cu128, a synthetic full-width 36-block INT8/FP16/SDPA decoder window
+dropped from 386.96 ms to 110.09 ms. A synthetic 864×480, 22-frame decode at
+tile batch 1 dropped from 5855.08 ms to 1675.47 ms, with bitwise-equal output
+in both comparisons. These are random-weight, resident-model measurements,
+not real-checkpoint quality or end-to-end generation results. Batch 4 saved
+another 103 ms but used 417 MiB more peak memory and was not bitwise equal to
+single-tile execution (maximum pixel difference 0.000895). Larger batches and
+different attention backends must not be described as universally lossless.
+Actual SM75/Windows and trained-checkpoint validation are still required.

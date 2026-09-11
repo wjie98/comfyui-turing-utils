@@ -375,6 +375,14 @@ def _quantize_turing_int8_activation(
     if input_act == "swiglu" and x2d.shape[1] % 2:
         raise ValueError("SwiGLU input width must be even")
     hidden_size = x2d.shape[1] // 2 if input_act == "swiglu" else x2d.shape[1]
+    if x2d.dtype == torch.float16 and input_act in (None, "none", "swiglu"):
+        from comfy_kitchen.backends._activations import apply_input_act
+        from comfy_kitchen.tensor.int8_utils import _build_hadamard, _rotate_activation
+
+        activated = apply_input_act(x2d, input_act)
+        hadamard = _build_hadamard(group_size, device=x2d.device, dtype=x2d.dtype)
+        rotated = _rotate_activation(activated, hadamard, group_size)
+        return _kernel_op("turing_fp16_int8_quantize")(rotated)
     if input_act == "gelu_tanh":
         if (
             x2d.dtype == torch.bfloat16
@@ -689,6 +697,23 @@ def _turing_int8_gemm(
             f"got {weight_scale.numel()}"
         )
 
+    if output_dtype == torch.float16 and _kernel_available("turing_fp16_int8_linear"):
+        if output is not None and (
+            output.shape != (m, n) or output.dtype != output_dtype
+            or output.device != qactivation.device
+        ):
+            raise ValueError("W8A8 direct output shape, dtype, or device is incompatible")
+        expanded_weight_scale = weight_scale
+        if expanded_weight_scale.numel() == 1:
+            expanded_weight_scale = expanded_weight_scale.expand(n).contiguous()
+        result = _kernel_op("turing_fp16_int8_linear")(
+            qactivation, weight, activation_scale, expanded_weight_scale, bias
+        )
+        if output is not None:
+            output.copy_(result)
+            return output
+        return result
+
     if output is not None:
         if (
             output_dtype != torch.bfloat16
@@ -829,7 +854,7 @@ def int8_linear(
     from comfy_kitchen.backends._activations import apply_input_act
 
     if (
-        x.dtype != torch.bfloat16
+        x.dtype not in (torch.bfloat16, torch.float16)
         or not is_supported_tensor_core_device(x.device)
         or not convrot
         or convrot_groupsize != 256
@@ -1065,12 +1090,23 @@ def register_backend() -> bool:
         input_act = kwargs.get("input_act")
         if not isinstance(x, torch.Tensor) or not isinstance(weight, torch.Tensor):
             return ValidationResult.fail("x", "Turing W8A8 requires tensor inputs")
+        if kwargs.get("out_dtype") != x.dtype:
+            return ValidationResult.fail("out_dtype", "local W8A8 preserves the activation dtype")
         hidden = x.shape[-1] // 2 if input_act == "swiglu" else x.shape[-1]
         if hidden % 16 or weight.shape[0] % 8 or weight.shape[1] != hidden:
             return ValidationResult.fail(
                 "weight", "Turing W8A8 requires matching K%16=0 and N%8=0"
             )
         rowbuffer = _convrot_int8_bf16_rowbuffer_fits(hidden, x.device)
+        if x.dtype == torch.float16:
+            if (
+                hidden % 256
+                or input_act not in (None, "none", "swiglu")
+                or not _kernel_available("turing_fp16_int8_quantize")
+                or not _kernel_available("turing_fp16_int8_linear")
+            ):
+                return ValidationResult.fail("x", "no compatible FP16 ConvRot kernel is available")
+            return ValidationResult.ok()
         if input_act in (None, "none"):
             local_quantizer = rowbuffer and _kernel_available(
                 "turing_bf16_int8_convrot_quantize"
@@ -1157,7 +1193,7 @@ def register_backend() -> bool:
         operations["int8_linear"] = FunctionConstraints(
             params={
                 "x": ParamConstraint(
-                    dtypes=frozenset({torch.bfloat16}),
+                    dtypes=frozenset({torch.bfloat16, torch.float16}),
                     shape_rules=(MinDims(2), SupportedTensorCoreTensor()),
                 ),
                 "weight": ParamConstraint(
@@ -1165,7 +1201,7 @@ def register_backend() -> bool:
                 ),
                 "weight_scale": ParamConstraint(dtypes=frozenset({torch.float32})),
                 "bias": ParamConstraint(dtypes=standard_floats),
-                "out_dtype": ParamConstraint(dtypes=frozenset({torch.bfloat16})),
+                "out_dtype": ParamConstraint(dtypes=frozenset({torch.bfloat16, torch.float16})),
                 "convrot": ParamConstraint(dtypes=frozenset({bool})),
                 "convrot_groupsize": ParamConstraint(dtypes=frozenset({int})),
                 "input_act": ParamConstraint(dtypes=frozenset({str, type(None)})),

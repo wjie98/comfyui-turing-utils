@@ -363,16 +363,20 @@ at::Tensor turing_codebook_w4a8_linear(at::Tensor activation,
     return output;
 }
 
-at::Tensor turing_int8_linear(at::Tensor activation,
+at::Tensor int8_linear_impl(at::Tensor activation,
                               at::Tensor weight,
                               at::Tensor activation_scale,
                               at::Tensor weight_scale,
-                              std::optional<at::Tensor> bias) {
+                              std::optional<at::Tensor> bias,
+                              at::ScalarType output_dtype) {
     activation = activation.contiguous();
     weight = weight.contiguous();
     activation_scale = activation_scale.reshape({-1}).to(at::kFloat).contiguous();
     weight_scale = weight_scale.reshape({-1}).to(at::kFloat).contiguous();
     if (bias.has_value()) {
+        if (output_dtype == at::kHalf) {
+            bias = bias.value().to(at::kHalf);
+        }
         bias = bias.value().reshape({-1}).to(at::kFloat).contiguous();
     }
     check_cuda_2d(activation, "activation");
@@ -401,7 +405,7 @@ at::Tensor turing_int8_linear(at::Tensor activation,
                     (properties->major == 7 && properties->minor >= 5),
                 "turing_int8_linear requires sm75 or newer");
     at::Tensor output = at::empty(
-        {activation.size(0), weight.size(0)}, activation.options().dtype(at::kBFloat16));
+        {activation.size(0), weight.size(0)}, activation.options().dtype(output_dtype));
     TorchOpContext ctx;
     comfyui_turing_utils::kernels::turing_int8_linear(
         from_torch(activation),
@@ -411,6 +415,18 @@ at::Tensor turing_int8_linear(at::Tensor activation,
         maybe_tensor(bias),
         from_torch(output));
     return output;
+}
+
+at::Tensor turing_int8_linear(at::Tensor activation, at::Tensor weight,
+                              at::Tensor activation_scale, at::Tensor weight_scale,
+                              std::optional<at::Tensor> bias) {
+    return int8_linear_impl(activation, weight, activation_scale, weight_scale, bias, at::kBFloat16);
+}
+
+at::Tensor turing_fp16_int8_linear(at::Tensor activation, at::Tensor weight,
+                                   at::Tensor activation_scale, at::Tensor weight_scale,
+                                   std::optional<at::Tensor> bias) {
+    return int8_linear_impl(activation, weight, activation_scale, weight_scale, bias, at::kHalf);
 }
 
 at::Tensor turing_int8_linear_out(at::Tensor activation,
@@ -850,6 +866,26 @@ std::tuple<at::Tensor, at::Tensor> turing_bf16_int8_convrot_quantize(
     return {output, scales};
 }
 
+std::tuple<at::Tensor, at::Tensor> turing_fp16_int8_quantize(at::Tensor input) {
+    input = input.contiguous();
+    check_cuda_2d(input, "input");
+    TORCH_CHECK(input.scalar_type() == at::kHalf, "FP16 quantization input must be float16");
+    const int64_t rows = input.size(0);
+    const int64_t hidden = input.size(1);
+    TORCH_CHECK(rows > 0 && hidden > 0 &&
+                rows <= INT_MAX && hidden <= INT_MAX, "Invalid FP16 quantization shape");
+    const at::cuda::CUDAGuard device_guard(input.device());
+    const cudaDeviceProp *properties = getCurrentDeviceProperties();
+    TORCH_CHECK(properties->major > 7 || (properties->major == 7 && properties->minor >= 5),
+                "FP16 quantization requires sm75 or newer");
+    auto output = at::empty({rows, hidden}, input.options().dtype(at::kChar));
+    auto scales = at::empty({rows, 1}, input.options().dtype(at::kFloat));
+    TorchOpContext ctx;
+    comfyui_turing_utils::kernels::turing_fp16_int8_quantize(
+        from_torch(input), from_torch(output), from_torch(scales));
+    return {output, scales};
+}
+
 std::tuple<at::Tensor, at::Tensor> turing_bf16_int4_convrot_quantize(
     at::Tensor input, int64_t group_size, bool swiglu) {
     input = input.contiguous();
@@ -1170,6 +1206,11 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
           pybind11::arg("weight_scale"),
           pybind11::arg("bias"),
           pybind11::arg("output"));
+    m.def("turing_fp16_int8_linear", &turing_fp16_int8_linear,
+          pybind11::arg("activation"), pybind11::arg("weight"),
+          pybind11::arg("activation_scale"), pybind11::arg("weight_scale"),
+          pybind11::arg("bias") = std::nullopt);
+    m.def("turing_fp16_int8_quantize", &turing_fp16_int8_quantize, pybind11::arg("input"));
     m.def("turing_dequantize_int8_bf16",
           &turing_dequantize_int8_bf16,
           pybind11::arg("accumulator"),

@@ -1,4 +1,6 @@
 from .ops import (
+    turing_fp16_int8_linear,
+    turing_fp16_int8_quantize,
     turing_bf16_int8_convrot_quantize,
     turing_bf16_int4_convrot_quantize,
     turing_bf16_gelu_int8_convrot_quantize,
@@ -23,9 +25,11 @@ from .ops import (
 )
 from . import turing_sage
 
-__version__ = "0.41.0"
+__version__ = "0.42.0"
 
 __all__ = [
+    "turing_fp16_int8_linear",
+    "turing_fp16_int8_quantize",
     "turing_bf16_int8_convrot_quantize",
     "turing_bf16_int4_convrot_quantize",
     "turing_bf16_gelu_int8_convrot_quantize",

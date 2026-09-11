@@ -110,7 +110,7 @@ class KernelSetupTest(unittest.TestCase):
         self.assertIn(
             "csrc/turing/sage/overlap_blend.cu", extensions[2].kwargs["sources"]
         )
-        self.assertEqual(setup.call_args.kwargs["version"], "0.41.0")
+        self.assertEqual(setup.call_args.kwargs["version"], "0.42.0")
         self.assertEqual(set(setup.call_args.kwargs["packages"]), {
             "comfyui_turing_utils_kernel",
             "comfyui_turing_utils_kernel.turing_sage",
@@ -300,7 +300,7 @@ class KernelSetupTest(unittest.TestCase):
         metadata = tomllib.loads(
             (PLUGIN_ROOT / "kernel" / "pyproject.toml").read_text(encoding="utf-8")
         )
-        self.assertEqual(metadata["project"]["version"], "0.41.0")
+        self.assertEqual(metadata["project"]["version"], "0.42.0")
 
     def test_overlap_epilogue_is_self_contained_and_deterministic_by_design(self):
         source = (

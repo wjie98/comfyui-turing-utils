@@ -44,7 +44,62 @@ def blend(a, b, extent, dim):
     return torch.cat((merged, b[tuple(b_slice)]), dim=dim)
 
 
+def make_decoder(patch_size_t=1):
+    from comfy.ldm.minimax.vae import ViT3DDecoder
+
+    torch.manual_seed(26)
+    decoder = ViT3DDecoder(
+        patch_size=2, patch_size_t=patch_size_t, in_channels=4, out_channels=3,
+        num_layers=3, heads=1, dim_head=64, operations=torch.nn,
+    ).eval()
+    for name, parameter in decoder.named_parameters():
+        if "norm" in name and name.endswith("weight"):
+            torch.nn.init.ones_(parameter)
+        elif "scale" in name:
+            torch.nn.init.constant_(parameter, 0.5)
+        else:
+            torch.nn.init.uniform_(parameter, -0.1, 0.1)
+    return decoder
+
+
 class MiniMaxVideoVAETest(unittest.TestCase):
+    def test_tile_budget_does_not_borrow_resident_models(self):
+        patcher = mock.Mock()
+        patcher.model_size.return_value = 100
+        patcher.loaded_size.return_value = 60
+        patcher.get_free_memory.side_effect = AssertionError("includes evictable weights")
+        vae = SimpleNamespace(patcher=patcher, device=torch.device("cuda"))
+        with (
+            mock.patch.object(video_vae.comfy.model_management, "get_free_memory", return_value=200),
+            mock.patch.object(video_vae.comfy.model_management, "extra_reserved_memory", return_value=50),
+        ):
+            self.assertEqual(video_vae._tile_memory_budget(vae), 110)
+            patcher.loaded_size.return_value = 0
+            patcher.model_size.return_value = 500
+            self.assertEqual(video_vae._tile_memory_budget(vae), 0)
+
+    def test_only_one_tile_requests_loading_and_budget_is_measured_afterwards(self):
+        vae = SimpleNamespace(patcher=object(), disable_offload=False)
+        events = []
+        with (
+            mock.patch.object(video_vae.comfy.model_management, "load_models_gpu", side_effect=lambda *a, **kw: events.append(kw)) as loader,
+            mock.patch.object(video_vae, "_tile_memory_budget", side_effect=lambda v: events.append("budget") or 35),
+        ):
+            self.assertEqual(video_vae._load_vae_for_tiles(vae, 8, lambda n: 10 * n, 16), (3, 30))
+        loader.assert_called_once_with([vae.patcher], memory_required=10, force_full_load=False)
+        self.assertEqual(events, [{"memory_required": 10, "force_full_load": False}, "budget"])
+
+    def test_vae_operator_scope_is_optional_and_restored_on_error(self):
+        with mock.patch.object(video_vae, "register_backend", return_value=False), mock.patch.object(video_vae, "use_turing_operator_backend") as backend:
+            with video_vae._vae_operator_scope():
+                pass
+            backend.assert_not_called()
+        with mock.patch.object(video_vae, "register_backend", return_value=True), mock.patch.object(video_vae, "use_turing_operator_backend") as backend:
+            with self.assertRaisesRegex(RuntimeError, "decode failed"):
+                with video_vae._vae_operator_scope():
+                    raise RuntimeError("decode failed")
+            backend.return_value.__exit__.assert_called_once()
+
     def test_custom_encoder_reference_math_is_bitwise_equal(self):
         from comfy.ldm.minimax.vae import EncoderFCN3D
 
@@ -159,245 +214,6 @@ class MiniMaxVideoVAETest(unittest.TestCase):
             expected_tiles,
         )
 
-    def test_shared_core_overlap_weights_cover_every_window_extent(self):
-        model = SimpleNamespace(vae_ratio=2)
-        with (
-            mock.patch.object(video_vae, "TILE_SIZE", 12),
-            mock.patch.object(video_vae, "TILE_OVERLAP", 4),
-        ):
-            layout = video_vae._SharedWindowLayout(
-                model,
-                2,
-                10,
-                15,
-                torch.device("cpu"),
-            )
-            groups = layout.query_groups()
-        weight_sum = torch.zeros(layout.image_tokens)
-        query_count = 0
-        for windows, global_indices, local_indices, weights in groups.values():
-            self.assertEqual(windows.numel(), global_indices.shape[0])
-            self.assertEqual(global_indices.shape, local_indices.shape)
-            self.assertEqual(global_indices.shape, weights.shape)
-            for row in range(global_indices.shape[0]):
-                weight_sum.index_add_(0, global_indices[row], weights[row])
-                query_count += global_indices.shape[1]
-        torch.testing.assert_close(weight_sum, torch.ones_like(weight_sum))
-        self.assertEqual(query_count, layout.window_count * layout.window_tokens)
-
-        y_weights = layout._axis_overlap_weights(
-            layout.latent_h,
-            layout.y_idx,
-            layout.y_len,
-            torch.device("cpu"),
-        )
-        x_weights = layout._axis_overlap_weights(
-            layout.latent_w,
-            layout.x_idx,
-            layout.x_len,
-            torch.device("cpu"),
-        )
-        torch.testing.assert_close(y_weights.sum(dim=0), torch.ones(layout.latent_h))
-        torch.testing.assert_close(x_weights.sum(dim=0), torch.ones(layout.latent_w))
-        for index, (start, extent) in enumerate(zip(layout.y_idx, layout.y_len)):
-            self.assertTrue(torch.all(y_weights[index, start : start + extent] > 0))
-        for index, (start, extent) in enumerate(zip(layout.x_idx, layout.x_len)):
-            self.assertTrue(torch.all(x_weights[index, start : start + extent] > 0))
-
-    def test_pruned_overlap_preserves_partition_and_reduces_queries(self):
-        model = SimpleNamespace(vae_ratio=2)
-        with (
-            mock.patch.object(video_vae, "TILE_SIZE", 12),
-            mock.patch.object(video_vae, "TILE_OVERLAP", 4),
-        ):
-            layout = video_vae._SharedWindowLayout(
-                model,
-                2,
-                10,
-                15,
-                torch.device("cpu"),
-            )
-            full = layout.query_groups(0.0)
-            pruned = layout.query_groups(0.08)
-
-        def summarize(groups):
-            weight_sum = torch.zeros(layout.image_tokens)
-            query_count = 0
-            for _windows, global_indices, _local_indices, weights in groups.values():
-                for row in range(global_indices.shape[0]):
-                    weight_sum.index_add_(0, global_indices[row], weights[row])
-                    query_count += global_indices.shape[1]
-            return weight_sum, query_count
-
-        full_sum, full_queries = summarize(full)
-        pruned_sum, pruned_queries = summarize(pruned)
-        torch.testing.assert_close(full_sum, torch.ones_like(full_sum))
-        torch.testing.assert_close(pruned_sum, torch.ones_like(pruned_sum))
-        self.assertLess(pruned_queries, full_queries)
-        self.assertGreaterEqual(pruned_queries, layout.image_tokens)
-
-    def test_aggressive_overlap_pruning_creates_single_window_suffix_groups(self):
-        model = SimpleNamespace(vae_ratio=16)
-        layout = video_vae._SharedWindowLayout(
-            model,
-            7,
-            48,
-            84,
-            torch.device("cpu"),
-        )
-        groups = layout.query_groups(0.5)
-        window_counts = [int(group[0].numel()) for group in groups.values()]
-        self.assertEqual(layout.window_count, 28)
-        self.assertIn(1, window_counts)
-
-    def test_streaming_overlap_maps_preserve_compact_window_order(self):
-        model = SimpleNamespace(vae_ratio=2)
-        with (
-            mock.patch.object(video_vae, "TILE_SIZE", 12),
-            mock.patch.object(video_vae, "TILE_OVERLAP", 4),
-        ):
-            layout = video_vae._SharedWindowLayout(
-                model,
-                2,
-                10,
-                15,
-                torch.device("cpu"),
-            )
-            plan = object.__new__(video_vae._SharedSpatialPlan)
-            plan.layout = layout
-            plan._query_groups = {}
-            plan._overlap_batch_maps = {}
-            groups = plan.query_groups(0.08)
-            maps = plan.overlap_batch_maps(0.08, 2)
-
-        for core_tokens in sorted(groups):
-            windows, global_indices, _local_indices, weights = groups[core_tokens]
-            for group_start in range(0, windows.numel(), 2):
-                window_count = min(2, windows.numel() - group_start)
-                group_slice = slice(group_start, group_start + window_count)
-                output_indices, local_map, weight_map = maps[
-                    (core_tokens, group_start)
-                ]
-                expected_global = global_indices[group_slice]
-                expected_weights = weights[group_slice]
-                rows = torch.searchsorted(
-                    output_indices.to(torch.long),
-                    expected_global,
-                )
-                columns = torch.arange(window_count)[:, None].expand_as(rows)
-                expected_local = torch.arange(
-                    core_tokens,
-                    dtype=torch.int32,
-                )[None, :].expand_as(expected_global)
-                self.assertTrue(
-                    torch.equal(local_map[rows, columns], expected_local)
-                )
-                torch.testing.assert_close(
-                    weight_map[rows, columns],
-                    expected_weights,
-                )
-                self.assertEqual(
-                    output_indices.numel(),
-                    torch.unique(expected_global).numel(),
-                )
-
-    def test_streaming_overlap_adapter_matches_ordered_fallback(self):
-        from comfy.ldm.minimax.vae import ViT3DDecoder
-
-        torch.manual_seed(59)
-        decoder = ViT3DDecoder(
-            patch_size=2,
-            patch_size_t=1,
-            in_channels=4,
-            out_channels=3,
-            num_layers=1,
-            heads=1,
-            dim_head=64,
-            rope_dim_ratio=0.75,
-            operations=torch.nn,
-        ).half().eval()
-        for parameter in decoder.parameters():
-            torch.nn.init.uniform_(parameter, -0.01, 0.01)
-        model = SimpleNamespace(decoder=decoder, vae_ratio=2)
-        value = torch.randn(1, 4, 1, 6, 6, dtype=torch.float16)
-        calls = []
-
-        def accumulate(values, local_indices, weights, output_indices, output):
-            calls.append((values.shape, local_indices.shape))
-            for row, output_index in enumerate(output_indices):
-                for window in range(values.shape[1]):
-                    local_index = int(local_indices[row, window])
-                    if local_index >= 0:
-                        output[:, int(output_index)].add_(
-                            values[:, window, local_index].float()
-                            * weights[row, window]
-                        )
-            return output
-
-        unavailable = SimpleNamespace(
-            overlap_accumulate_available=lambda: False,
-        )
-        available = SimpleNamespace(
-            overlap_accumulate_available=lambda: True,
-            overlap_accumulate_compiled=accumulate,
-        )
-        options = video_vae._attention_options("sdpa", value.device)
-        with (
-            mock.patch.object(video_vae, "TILE_SIZE", 4),
-            mock.patch.object(video_vae, "TILE_OVERLAP", 2),
-            mock.patch.object(video_vae, "is_supported_tensor_core_device", return_value=True),
-            mock.patch.object(video_vae, "load_turing_sage", return_value=unavailable),
-            torch.inference_mode(),
-        ):
-            expected = video_vae._shared_core_multiband_decoder_forward(
-                model,
-                value.clone(),
-                options,
-                3,
-                None,
-                overlap_query_threshold=0.5,
-                final_full_overlap_blocks=0,
-            )
-        with (
-            mock.patch.object(video_vae, "TILE_SIZE", 4),
-            mock.patch.object(video_vae, "TILE_OVERLAP", 2),
-            mock.patch.object(video_vae, "is_supported_tensor_core_device", return_value=True),
-            mock.patch.object(video_vae, "load_turing_sage", return_value=available),
-            torch.inference_mode(),
-        ):
-            actual = video_vae._shared_core_multiband_decoder_forward(
-                model,
-                value.clone(),
-                options,
-                3,
-                None,
-                overlap_query_threshold=0.5,
-                final_full_overlap_blocks=0,
-            )
-        self.assertGreater(len(calls), 0)
-        torch.testing.assert_close(actual, expected, rtol=0.0, atol=0.0)
-
-    def test_streaming_overlap_kernel_is_not_selected_off_turing(self):
-        model = SimpleNamespace(
-            decoder=SimpleNamespace(num_register_tokens=0, pos_embed=lambda rotary: rotary),
-            vae_ratio=2,
-        )
-        with (
-            mock.patch.object(video_vae, "is_supported_tensor_core_device", return_value=False),
-            mock.patch.object(video_vae, "load_turing_sage") as load_kernel,
-            mock.patch.object(video_vae, "_SharedWindowLayout") as layout_type,
-            mock.patch.object(video_vae.h3_vae, "create_token_ids", return_value=torch.zeros(1, 1, 3)),
-        ):
-            layout_type.return_value.window_h = 1
-            layout_type.return_value.window_w = 1
-            layout_type.return_value.window_tokens = 1
-            plan = video_vae._SharedSpatialPlan(
-                model, 1, 1, 1, torch.device("cpu"), torch.float16
-            )
-
-        self.assertIsNone(plan.overlap_accumulate)
-        load_kernel.assert_not_called()
-
     def test_small_feed_forward_batches_keep_fused_swiglu(self):
         module = mock.Mock()
         projected = torch.zeros(1, 5, 16)
@@ -458,351 +274,195 @@ class MiniMaxVideoVAETest(unittest.TestCase):
         self.assertEqual(first, second)
         self.assertNotEqual(first, video_vae._latent_fingerprint(changed))
 
-    def test_spatial_plan_cache_is_scoped_to_one_decode(self):
-        model = object()
-        value = torch.zeros(1, 4, 2, 3, 5)
-        plans = [object(), object()]
-        cache = {}
-        with mock.patch.object(
-            video_vae, "_SharedSpatialPlan", side_effect=plans
-        ) as constructor:
-            first = video_vae._shared_spatial_plan(model, value, cache)
-            second = video_vae._shared_spatial_plan(model, value, cache)
-            uncached = video_vae._shared_spatial_plan(model, value)
-        self.assertIs(first, plans[0])
-        self.assertIs(second, plans[0])
-        self.assertIs(uncached, plans[1])
-        self.assertEqual(constructor.call_count, 2)
-        constructor.assert_has_calls(
-            [
-                mock.call(model, 2, 3, 5, value.device, value.dtype),
-                mock.call(model, 2, 3, 5, value.device, value.dtype),
-            ]
-        )
+    def test_decoder_matches_native_single_window(self):
+        decoder = make_decoder()
+        value = torch.randn(2, 4, 2, 3, 4)
+        original = value.clone()
+        with torch.inference_mode():
+            expected = decoder(value)
+            actual = video_vae._decoder_forward(
+                decoder, value, video_vae._attention_options("sdpa", value.device)
+            )
+        torch.testing.assert_close(actual, expected, rtol=1e-5, atol=1e-6)
+        torch.testing.assert_close(value, original, rtol=0, atol=0)
+
+    def test_independent_windows_match_native_decoder(self):
+        from comfy.ldm.minimax.vae import MiniMaxH3VideoVAE
+
+        model = object.__new__(MiniMaxH3VideoVAE)
+        torch.nn.Module.__init__(model)
+        model.vae_ratio = 2
+        model.tile_size = 8
+        model.tile_overlap_min = 4
+        model.post_quant_conv = torch.nn.Conv3d(4, 4, 1)
+        model.decoder = make_decoder()
+        for height, width in ((3, 4), (3, 8), (6, 3), (6, 8), (10, 12)):
+            value = torch.randn(2, 4, 2, height, width)
+            with torch.inference_mode():
+                expected = model.tiled_decode(value)
+                for tile_batch in (1, 2, 5):
+                    with self.subTest(shape=(height, width), tile_batch=tile_batch):
+                        progress = mock.Mock()
+                        actual = video_vae._decode_spatial(
+                            model, value, video_vae._attention_options("sdpa", value.device),
+                            tile_batch, progress,
+                        )
+                        torch.testing.assert_close(actual, expected, rtol=1e-5, atol=1e-6)
+                        self.assertEqual(actual.dtype, expected.dtype)
+                        tile_count = len(model.split_tiles(height * 2)[0]) * len(
+                            model.split_tiles(width * 2)[0]
+                        )
+                        self.assertEqual(
+                            sum(call.args[0] for call in progress.update.call_args_list),
+                            tile_count,
+                        )
+
+    def test_spatial_stitching_matches_native_with_different_overlap_pixels(self):
+        from comfy.ldm.minimax.vae import MiniMaxH3VideoVAE
+
+        model = object.__new__(MiniMaxH3VideoVAE)
+        torch.nn.Module.__init__(model)
+        model.vae_ratio = 2
+        model.tile_size = 8
+        model.tile_overlap_min = 4
+        model.post_quant_conv = torch.nn.Identity()
+        model.decoder = torch.nn.Identity()
+
+        def decode(_decoder, value, _options):
+            pixels = value.repeat_interleave(2, dim=-2).repeat_interleave(2, dim=-1)
+            return pixels + value[..., :1, :1] * 0.125
+
+        model._decode_pixels = lambda value: decode(model.decoder, value, {})
+        for dtype in (torch.float32, torch.float16):
+            value = torch.randn(2, 3, 2, 7, 9).to(dtype)
+            expected = model.tiled_decode(value)
+            with mock.patch.object(video_vae, "_decoder_forward", side_effect=decode):
+                for tile_batch in (1, 3, 16):
+                    actual = video_vae._decode_spatial(model, value, {}, tile_batch, None)
+                    torch.testing.assert_close(actual, expected, rtol=0, atol=0)
 
     @unittest.skipUnless(torch.cuda.is_available(), "CUDA is required")
-    def test_shared_core_multiband_window_batching_is_invariant(self):
-        from comfy.ldm.minimax.vae import ViT3DDecoder
+    def test_cuda_decoder_matches_native_fp16(self):
+        from comfy.ldm.minimax.vae import MiniMaxH3VideoVAE
 
-        torch.manual_seed(26)
-        decoder = (
-            ViT3DDecoder(
-                patch_size=2,
-                patch_size_t=1,
-                in_channels=4,
-                out_channels=3,
-                num_layers=4,
-                heads=1,
-                dim_head=64,
-                rope_dim_ratio=0.75,
-                operations=torch.nn,
-            )
-            .cuda()
-            .half()
-            .eval()
+        model = object.__new__(MiniMaxH3VideoVAE)
+        torch.nn.Module.__init__(model)
+        model.vae_ratio = 2
+        model.tile_size = 8
+        model.tile_overlap_min = 4
+        model.post_quant_conv = torch.nn.Identity()
+        model.decoder = make_decoder().cuda().half()
+        value = torch.randn(2, 4, 2, 6, 8, device="cuda", dtype=torch.float16)
+        with torch.inference_mode():
+            expected = model.tiled_decode(value)
+            for tile_batch in (1, 3):
+                actual = video_vae._decode_spatial(
+                    model, value, video_vae._attention_options("sdpa", value.device),
+                    tile_batch, None,
+                )
+                torch.testing.assert_close(actual, expected, rtol=2e-3, atol=2e-3)
+
+    @unittest.skipUnless(torch.cuda.is_available(), "CUDA is required")
+    def test_cuda_decoder_attention_switching_preserves_state(self):
+        decoder = make_decoder().cuda().half()
+        value = torch.randn(1, 4, 2, 4, 4, device="cuda", dtype=torch.float16)
+        original = value.clone()
+        results = []
+        with torch.inference_mode():
+            for backend in ("sdpa", "sage", "w8a8", "sdpa"):
+                result = video_vae._decoder_forward(
+                    decoder, value, video_vae._attention_options(backend, value.device)
+                )
+                results.append(result)
+                self.assertEqual(result.shape, (1, 3, 2, 8, 8))
+                self.assertEqual(result.dtype, torch.float16)
+                self.assertTrue(torch.isfinite(result).all())
+        torch.testing.assert_close(results[0], results[-1], rtol=0, atol=0)
+        torch.testing.assert_close(value, original, rtol=0, atol=0)
+        video_vae._clear_attention_caches(decoder)
+
+    def test_complete_decode_matches_native_spatial_and_temporal_reconstruction(self):
+        from comfy.ldm.minimax.vae import MiniMaxH3VideoVAE
+
+        model = object.__new__(MiniMaxH3VideoVAE)
+        torch.nn.Module.__init__(model)
+        model.vae_ratio = 2
+        model.vae_ratio_t = 4
+        model.tile_size = 8
+        model.tile_overlap_min = 4
+        model.tiling = True
+        model.clip_length = 17
+        model.tokens_chunk_size = 5
+        model.token_overlap = 2
+        model.token_drop = 3
+        model.frame_pre_padding = 3
+        model.frame_overlap = 5
+        model.post_quant_conv = torch.nn.Conv3d(4, 4, 1)
+        model.decoder = make_decoder(patch_size_t=4)
+        model.latents_mean = torch.randn(4) * 0.1
+        model.latents_std = torch.rand(4) + 0.5
+        model.pixel_mean = torch.tensor([0.485, 0.456, 0.406]).view(1, 3, 1, 1, 1)
+        model.pixel_std = torch.tensor([0.229, 0.224, 0.225]).view(1, 3, 1, 1, 1)
+        vae = SimpleNamespace(
+            first_stage_model=model, throw_exception_if_invalid=lambda: None,
+            vae_dtype=torch.float32, output_device=torch.device("cpu"),
+            device=torch.device("cpu"), disable_offload=False,
+            patcher=SimpleNamespace(is_dynamic=lambda: False),
+            vae_output_dtype=lambda: torch.float32,
         )
-        for parameter in decoder.parameters():
-            torch.nn.init.uniform_(parameter, -0.01, 0.01)
-        model = SimpleNamespace(decoder=decoder, vae_ratio=2)
-        x = torch.randn(1, 4, 2, 4, 5, device="cuda", dtype=torch.float16)
-        options = video_vae._attention_options("sdpa", x.device)
         with (
-            mock.patch.object(video_vae, "TILE_SIZE", 4),
-            mock.patch.object(video_vae, "TILE_OVERLAP", 2),
+            mock.patch.object(video_vae, "_load_vae_for_tiles", return_value=(3, 0)),
+            mock.patch.object(video_vae, "_TileProgress"),
+            mock.patch.object(video_vae.comfy.model_management, "load_models_gpu"),
             torch.inference_mode(),
         ):
-            layout = video_vae._SharedWindowLayout(model, 2, 4, 5, x.device)
-            progress = mock.Mock()
-            expected = video_vae._shared_core_multiband_decoder_forward(
-                model,
-                x.clone(),
-                options,
-                1,
-                None,
-            )
-            actual = video_vae._shared_core_multiband_decoder_forward(
-                model,
-                x.clone(),
-                options,
-                3,
-                progress,
-            )
-            torch.testing.assert_close(actual, expected, rtol=2e-3, atol=2e-3)
-            self.assertEqual(actual.dtype, torch.float32)
-            self.assertEqual(
-                sum(call.args[0] for call in progress.update.call_args_list),
-                layout.window_count,
-            )
-
-    def test_pruned_suffix_linears_are_batched_across_all_windows(self):
-        from comfy.ldm.minimax.vae import ViT3DDecoder
-
-        torch.manual_seed(31)
-        decoder = ViT3DDecoder(
-            patch_size=2,
-            patch_size_t=1,
-            in_channels=4,
-            out_channels=3,
-            num_layers=1,
-            heads=1,
-            dim_head=64,
-            rope_dim_ratio=0.75,
-            operations=torch.nn,
-        ).eval()
-        for parameter in decoder.parameters():
-            torch.nn.init.uniform_(parameter, -0.01, 0.01)
-        model = SimpleNamespace(decoder=decoder, vae_ratio=2)
-        value = torch.randn(1, 4, 1, 6, 6)
-        block = decoder.transformer_blocks[0]
-        calls = {"qkv": [], "out": [], "w1": [], "w2": []}
-
-        def recording_forward(name, forward):
-            def run(input_value, *args, **kwargs):
-                calls[name].append(tuple(input_value.shape))
-                return forward(input_value, *args, **kwargs)
-
-            return run
-
-        with (
-            mock.patch.object(video_vae, "TILE_SIZE", 4),
-            mock.patch.object(video_vae, "TILE_OVERLAP", 2),
-            mock.patch.object(
-                block.attn.to_qkv,
-                "forward",
-                side_effect=recording_forward("qkv", block.attn.to_qkv.forward),
-            ),
-            mock.patch.object(
-                block.attn.to_out,
-                "forward",
-                side_effect=recording_forward("out", block.attn.to_out.forward),
-            ),
-            mock.patch.object(
-                block.ff.w1,
-                "forward",
-                side_effect=recording_forward("w1", block.ff.w1.forward),
-            ),
-            mock.patch.object(
-                block.ff.w2,
-                "forward",
-                side_effect=recording_forward("w2", block.ff.w2.forward),
-            ),
-            torch.inference_mode(),
-        ):
-            layout = video_vae._SharedWindowLayout(model, 1, 6, 6, value.device)
-            result = video_vae._shared_core_multiband_decoder_forward(
-                model,
-                value,
-                video_vae._attention_options("sdpa", value.device),
-                3,
-                None,
-                overlap_query_threshold=0.5,
-                final_full_overlap_blocks=0,
-            )
-
-        suffix_tokens = 1 + decoder.num_register_tokens
-        self.assertGreater(len(layout.query_groups(0.5)), 1)
-        for name in calls:
-            suffix_calls = [
-                shape for shape in calls[name] if shape[1] == suffix_tokens
-            ]
-            self.assertEqual(len(suffix_calls), 1, name)
-            self.assertEqual(
-                suffix_calls[0][:2],
-                (layout.window_count, suffix_tokens),
-                name,
-            )
-        self.assertEqual(result.shape[-2:], (12, 12))
+            for frames in (1, 2, 7, 12):
+                with self.subTest(latent_frames=frames):
+                    value = torch.randn(1, 4, frames, 6, 8)
+                    original = value.clone()
+                    expected = model.decode(value).movedim(1, -1)
+                    actual = video_vae.decode_video(vae, value, "sdpa")
+                    torch.testing.assert_close(actual, expected, rtol=1e-5, atol=1e-6)
+                    torch.testing.assert_close(value, original, rtol=0, atol=0)
 
     def test_decoder_consumes_official_prefetch_queue_per_block(self):
-        from comfy.ldm.minimax.vae import ViT3DDecoder
-
-        decoder = ViT3DDecoder(
-            patch_size=2,
-            patch_size_t=1,
-            in_channels=4,
-            out_channels=3,
-            num_layers=1,
-            heads=1,
-            dim_head=64,
-            rope_dim_ratio=0.75,
-            operations=torch.nn,
-        ).eval()
-        model = SimpleNamespace(decoder=decoder, vae_ratio=2)
+        decoder = make_decoder()
         value = torch.randn(1, 4, 1, 2, 2)
-        options = video_vae._attention_options(
-            "sdpa",
-            value.device,
-            prefetch_dynamic_vbars=True,
-        )
         queue = object()
+        options = video_vae._attention_options(
+            "sdpa", value.device, prefetch_dynamic_vbars=True
+        )
         with (
-            mock.patch.object(video_vae, "TILE_SIZE", 4),
-            mock.patch.object(video_vae, "TILE_OVERLAP", 2),
             mock.patch.object(
-                video_vae.comfy.model_prefetch,
-                "make_prefetch_queue",
-                return_value=queue,
+                video_vae.comfy.model_prefetch, "make_prefetch_queue", return_value=queue
             ) as make_queue,
             mock.patch.object(
-                video_vae.comfy.model_prefetch,
-                "prefetch_queue_pop",
-            ) as pop_queue,
+                video_vae.comfy.model_prefetch, "prefetch_queue_pop"
+            ) as pop,
             torch.inference_mode(),
         ):
-            video_vae._shared_core_multiband_decoder_forward(
-                model,
-                value,
-                options,
-                1,
-                None,
-            )
-
-        blocks = list(decoder.transformer_blocks)
-        make_queue.assert_called_once_with(blocks, value.device, options)
+            video_vae._decoder_forward(decoder, value, options)
+        make_queue.assert_called_once_with(
+            list(decoder.transformer_blocks), value.device, options
+        )
         self.assertEqual(
-            pop_queue.call_args_list,
-            [
-                *(mock.call(queue, value.device, block) for block in blocks),
-                mock.call(queue, value.device, None),
-            ],
+            pop.call_args_list,
+            [mock.call(queue, value.device, block) for block in decoder.transformer_blocks]
+            + [mock.call(queue, value.device, None)],
         )
 
-    @unittest.skipUnless(torch.cuda.is_available(), "CUDA is required")
-    def test_single_tensor_rope_fallback_matches_kitchen(self):
-        torch.manual_seed(19)
-        value = torch.randn(2, 7, 3, 64, device="cuda", dtype=torch.float16)
-        ids = video_vae.h3_vae.create_token_ids((1, 1, 7), value.device, value.dtype)
-        rotary = video_vae.h3_vae.RotaryEmbeddingND(48, n_dim=3).to(value.device)(ids)
-        expected = video_vae._apply_split_half_rope(value, rotary)
-        with mock.patch.object(
-            video_vae.comfy.quant_ops.ck,
-            "apply_rope_split_half1",
-            None,
-        ):
-            actual = video_vae._apply_split_half_rope(value, rotary)
-        torch.testing.assert_close(actual, expected, rtol=2e-3, atol=2e-3)
-
-    def test_multiband_weights_form_normalized_partition(self):
-        starts_y, lengths_y, _ = video_vae.split_tiles(10, 4, 2, 2)
-        starts_x, lengths_x, _ = video_vae.split_tiles(8, 4, 2, 2)
-        descriptors = [
-            (i, j, 0, 0, 0, 0)
-            for i in range(len(starts_y))
-            for j in range(len(starts_x))
-        ]
-        low_sum, high_sum = video_vae._multiband_denominators(
-            descriptors,
-            starts_y,
-            lengths_y,
-            starts_x,
-            lengths_x,
-            10,
-            8,
-            torch.float32,
-            torch.device("cpu"),
+    def test_decode_memory_budget_accounts_for_independent_window_batch(self):
+        model = SimpleNamespace(
+            vae_ratio=16, vae_ratio_t=4, tile_size=256, tokens_chunk_size=5,
+            token_overlap=2, decoder=SimpleNamespace(num_register_tokens=4, out_channels=3),
         )
-        normalized_low = torch.zeros_like(low_sum)
-        normalized_high = torch.zeros_like(high_sum)
-        for i, j, *_unused in descriptors:
-            low, high = video_vae._multiband_window_weights(
-                i,
-                j,
-                starts_y,
-                lengths_y,
-                starts_x,
-                lengths_x,
-                torch.float32,
-                torch.device("cpu"),
-            )
-            y, x = starts_y[i], starts_x[j]
-            normalized_low[y : y + lengths_y[i], x : x + lengths_x[j]].add_(
-                low / low_sum[y : y + lengths_y[i], x : x + lengths_x[j]]
-            )
-            normalized_high[y : y + lengths_y[i], x : x + lengths_x[j]].add_(
-                high / high_sum[y : y + lengths_y[i], x : x + lengths_x[j]]
-            )
-        torch.testing.assert_close(normalized_low, torch.ones_like(normalized_low))
-        torch.testing.assert_close(normalized_high, torch.ones_like(normalized_high))
-
-    def test_multiband_identical_overlaps_reconstruct_without_seam_pairs(self):
-        height = width = 48
-        starts_y, lengths_y, _ = video_vae.split_tiles(height, 24, 8, 2)
-        starts_x, lengths_x, _ = video_vae.split_tiles(width, 24, 8, 2)
-        assembler = video_vae._MultibandPixelAssembler(
-            starts_y,
-            lengths_y,
-            starts_x,
-            lengths_x,
-            height,
-            width,
-            torch.device("cpu"),
+        vae = SimpleNamespace(
+            first_stage_model=model, memory_used_decode=lambda shape, dtype: 0
         )
-        rows, columns = torch.meshgrid(
-            torch.linspace(-1, 1, height),
-            torch.linspace(-1, 1, width),
-            indexing="ij",
-        )
-        image = (
-            torch.sin(columns * 13) + torch.cos(rows * 9) + rows * columns
-        ).view(1, 1, 1, height, width)
-        for i, y in enumerate(starts_y):
-            for j, x in enumerate(starts_x):
-                assembler.add(
-                    i * len(starts_x) + j,
-                    image[..., y : y + lengths_y[i], x : x + lengths_x[j]],
-                )
-        torch.testing.assert_close(
-            assembler.finish(),
-            image,
-            rtol=1e-5,
-            atol=1e-6,
-        )
-
-    def test_decode_spatial_routes_fixed_boundary_policy(self):
-        expected = object()
-        model = SimpleNamespace(post_quant_conv=lambda value: value)
-        with mock.patch.object(
-            video_vae, "_shared_core_multiband_decoder_forward", return_value=expected
-        ) as run:
-            actual = video_vae._decode_spatial(
-                model,
-                "latent",
-                {},
-                4,
-                None,
-            )
-        self.assertIs(actual, expected)
-        run.assert_called_once_with(
-            model, "latent", {}, 4, None, None, 0.0, 36
-        )
-
-    def test_shared_state_uses_windowed_multiband_projection(self):
-        decoder = SimpleNamespace(
-            x_embedder=lambda value: value,
-            num_register_tokens=1,
-            register_tokens=torch.zeros(1, 1, 4),
-            pos_embed=lambda value: value,
-            transformer_blocks=[],
-        )
-        model = SimpleNamespace(decoder=decoder, vae_ratio=2)
-        x = torch.zeros(1, 4, 1, 2, 2)
-        expected = object()
-        with (
-            mock.patch.object(video_vae, "TILE_SIZE", 4),
-            mock.patch.object(video_vae, "TILE_OVERLAP", 2),
-            mock.patch.object(
-                video_vae, "_project_shared_state_windows", return_value=expected
-            ) as projection,
-        ):
-            actual = video_vae._shared_core_multiband_decoder_forward(
-                model,
-                x,
-                {},
-                1,
-                None,
-            )
-        self.assertIs(actual, expected)
-        self.assertEqual(projection.call_args.args[3], 1)
+        one = video_vae._decode_memory_requirement(vae, (1, 24, 7, 30, 54), 1, torch.float16)
+        two = video_vae._decode_memory_requirement(vae, (1, 24, 7, 30, 54), 2, torch.float16)
+        self.assertGreater(two, one)
+        self.assertGreater(one, 0)
 
     def test_decoder_node_uses_optimized_runtime(self):
         vae = mock.Mock()
@@ -827,8 +487,6 @@ class MiniMaxVideoVAETest(unittest.TestCase):
             vae,
             latent,
             "sdpa",
-            overlap_query_threshold=0.0,
-            final_full_overlap_blocks=36,
         )
         self.assertEqual(output.shape, (2, 4, 4, 3))
 
@@ -859,6 +517,7 @@ class MiniMaxVideoVAETest(unittest.TestCase):
             latents_mean=torch.zeros(24),
             latents_std=torch.ones(24),
             decoder=SimpleNamespace(transformer_blocks=blocks),
+            split_tiles=lambda extent: ([0], [extent], []),
             _finalize_pixels=lambda value: value.float(),
         )
         vae = SimpleNamespace(
@@ -873,17 +532,22 @@ class MiniMaxVideoVAETest(unittest.TestCase):
         with (
             mock.patch.object(video_vae, "require_h3_video_vae", return_value=model),
             mock.patch.object(
-                video_vae, "_select_tiles_per_batch", return_value=(1, 0)
+                video_vae, "_load_vae_for_tiles", return_value=(1, 0)
             ),
             mock.patch.object(video_vae, "_attention_options", return_value={}),
-            mock.patch.object(video_vae, "_decode_spatial", return_value=decoded),
+            mock.patch.object(video_vae, "_decode_spatial", return_value=decoded) as spatial,
             mock.patch.object(video_vae, "_TileProgress", return_value=progress),
             mock.patch.object(video_vae.comfy.model_management, "load_models_gpu"),
         ):
-            actual = video_vae.decode_video(vae, latent)
+            for compute_dtype in (torch.float16, torch.float32):
+                vae.vae_dtype = compute_dtype
+                for storage_dtype in (torch.float16, torch.bfloat16, torch.float32):
+                    with self.subTest(compute=compute_dtype, storage=storage_dtype):
+                        actual = video_vae.decode_video(vae, latent.to(storage_dtype))
+                        self.assertEqual(spatial.call_args.args[1].dtype, compute_dtype)
         self.assertEqual(actual.dtype, torch.float16)
         torch.testing.assert_close(actual, decoded.movedim(1, -1).half())
-        progress.finish.assert_called_once_with()
+        self.assertEqual(progress.finish.call_count, 6)
 
     def test_encode_video_publishes_comfy_vae_output_dtype(self):
         pixels = torch.zeros(1, 16, 16, 3)
@@ -913,7 +577,7 @@ class MiniMaxVideoVAETest(unittest.TestCase):
         with (
             mock.patch.object(video_vae_encode, "require_h3_video_vae", return_value=model),
             mock.patch.object(
-                video_vae_encode, "_select_tiles_per_batch", return_value=(1, 0)
+                video_vae_encode, "_load_vae_for_tiles", return_value=(1, 0)
             ),
             mock.patch.object(video_vae_encode, "_encode_clip", return_value=moments),
             mock.patch.object(video_vae_encode, "_TileProgress", return_value=progress),
@@ -1006,7 +670,7 @@ class MiniMaxVideoVAETest(unittest.TestCase):
         self.assertEqual(video_vae.TILE_SIZE, 256)
         self.assertEqual(video_vae.TILE_OVERLAP, 64)
         decoder = nodes.MiniMaxH3VideoVAEDecode.INPUT_TYPES()["required"]
-        decoder_optional = nodes.MiniMaxH3VideoVAEDecode.INPUT_TYPES()["optional"]
+        decoder_optional = nodes.MiniMaxH3VideoVAEDecode.INPUT_TYPES().get("optional", {})
         encoder = nodes.MiniMaxH3VideoVAEEncode.INPUT_TYPES()["required"]
         self.assertEqual(
             set(decoder),
@@ -1016,18 +680,8 @@ class MiniMaxVideoVAETest(unittest.TestCase):
                 "attention",
             },
         )
-        self.assertEqual(
-            set(decoder_optional),
-            {
-                "overlap_query_threshold",
-                "final_full_overlap_blocks",
-            },
-        )
+        self.assertEqual(decoder_optional, {})
         self.assertEqual(set(encoder), {"pixels", "vae"})
-        self.assertEqual(decoder_optional["overlap_query_threshold"][1]["default"], 0.0)
-        self.assertEqual(
-            decoder_optional["final_full_overlap_blocks"][1]["default"], 36
-        )
 
     def test_prepare_batched_pixels_crops_only_spatial_axes(self):
         vae = SimpleNamespace(
