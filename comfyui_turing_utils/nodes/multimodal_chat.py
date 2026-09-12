@@ -253,7 +253,8 @@ def build_user_content(
             content.append(_image_block(_image_data_url(picture, options.image_format, options.jpeg_quality), options.image_detail))
         video_timestamps.append(times)
 
-    content.append({"type": "text", "text": f"User request:\n{prompt}"})
+    if prompt.strip():
+        content.append({"type": "text", "text": f"User request:\n{prompt}"})
     return content, {
         "first_frame": first_frame is not None,
         "last_frame": last_frame is not None,
@@ -283,7 +284,8 @@ def build_chat_request(
     messages = []
     if system_prompt.strip():
         messages.append({"role": "system", "content": system_prompt})
-    messages.append({"role": "user", "content": user_content})
+    if user_content and (not isinstance(user_content, str) or user_content.strip()):
+        messages.append({"role": "user", "content": user_content})
     body.update(
         {
             "model": model,
@@ -491,7 +493,8 @@ class MultimodalPromptChat(io.ComfyNode):
                 "Send one system/user turn to an OpenAI-compatible multimodal Chat "
                 "Completions API. First/last frames receive explicit labels, images "
                 "become <Picture N>, and 24 FPS IMAGE sequences are sampled into "
-                "timestamped <Video N> frames."
+                "timestamped <Video N> frames. At least one of prompt or "
+                "system_prompt must be non-empty."
             ),
             search_aliases=["LLM", "chat", "prompt enhance", "vision", "multimodal"],
             inputs=[
@@ -579,8 +582,8 @@ class MultimodalPromptChat(io.ComfyNode):
         images=None,
         videos=None,
     ) -> io.NodeOutput:
-        if not prompt.strip():
-            raise ValueError("prompt must not be empty")
+        if not prompt.strip() and not system_prompt.strip():
+            raise ValueError("prompt or system_prompt must not be empty")
         model = model.strip()
         if not model:
             raise ValueError("model must not be empty")

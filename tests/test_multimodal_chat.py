@@ -226,5 +226,84 @@ class MultimodalPromptChatTest(unittest.TestCase):
         self.assertEqual(extract_chat_text(response)[0], "first second")
 
 
+class MultimodalPromptChatExecutionTest(unittest.IsolatedAsyncioTestCase):
+    async def test_accepts_either_prompt_without_empty_messages(self):
+        for prompt, system_prompt in (
+            ("", "system"),
+            (" \t\n", "system"),
+            ("user", ""),
+            ("user", " \t\n"),
+            ("user", "system"),
+        ):
+            with self.subTest(prompt=prompt, system_prompt=system_prompt), patch(
+                "comfyui_turing_utils.nodes.multimodal_chat.request_chat_completion",
+                return_value={"choices": [{"message": {"content": "response"}}]},
+            ) as request:
+                result = await MultimodalPromptChat.execute(
+                    prompt=prompt,
+                    system_prompt=system_prompt,
+                    base_url="http://localhost:9200",
+                    model="test-model",
+                    api_key="",
+                )
+
+                self.assertEqual(result.result[0], "response")
+                request.assert_called_once()
+                expected = []
+                if system_prompt.strip():
+                    expected.append({"role": "system", "content": system_prompt})
+                if prompt.strip():
+                    expected.append({"role": "user", "content": prompt})
+                self.assertEqual(request.call_args.args[2]["messages"], expected)
+
+    async def test_system_prompt_only_preserves_reference_media(self):
+        frame = torch.zeros((1, 8, 8, 3))
+        for prompt in ("", " \t\n"):
+            with self.subTest(prompt=prompt), patch(
+                "comfyui_turing_utils.nodes.multimodal_chat.request_chat_completion",
+                return_value={"choices": [{"message": {"content": "response"}}]},
+            ) as request:
+                await MultimodalPromptChat.execute(
+                    prompt=prompt,
+                    system_prompt="Describe the references.",
+                    base_url="http://localhost:9200",
+                    model="test-model",
+                    api_key="",
+                    first_frame=frame,
+                    last_frame=frame,
+                    images={"image_0": frame},
+                    videos={"video_0": frame},
+                )
+
+                messages = request.call_args.args[2]["messages"]
+                self.assertEqual(messages[0], {"role": "system", "content": "Describe the references."})
+                self.assertEqual(messages[1]["role"], "user")
+                content = messages[1]["content"]
+                labels = [item["text"] for item in content if item["type"] == "text"]
+                self.assertEqual(
+                    labels[1:],
+                    ["<First Frame>", "<Last Frame>", "<Picture 1>", "<Video 1>, frame at 0.000s"],
+                )
+                self.assertEqual(sum(item["type"] == "image_url" for item in content), 4)
+
+    async def test_rejects_both_blank_prompts_even_with_media(self):
+        for prompt in ("", " \t\n"):
+            for system_prompt in ("", " \t\n"):
+                for frame in (None, torch.zeros((1, 8, 8, 3))):
+                    with self.subTest(prompt=prompt, system_prompt=system_prompt, media=frame is not None), patch(
+                        "comfyui_turing_utils.nodes.multimodal_chat.request_chat_completion",
+                    ) as request:
+                        with self.assertRaisesRegex(ValueError, "prompt or system_prompt must not be empty"):
+                            await MultimodalPromptChat.execute(
+                                prompt=prompt,
+                                system_prompt=system_prompt,
+                                base_url="http://localhost:9200",
+                                model="test-model",
+                                api_key="",
+                                first_frame=frame,
+                            )
+                        request.assert_not_called()
+
+
 if __name__ == "__main__":
     unittest.main()

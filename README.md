@@ -166,7 +166,8 @@ only after its CUDA sources or required version change.
   Python-only and replaces an upstream Sol/SLA/virtual-KV strategy.
 - `Multimodal Prompt Chat` sends one non-streaming system/user turn to an
   OpenAI-compatible Chat Completions endpoint using only Python's standard HTTP
-  client. Optional first/last-frame images receive explicit `<First Frame>` and
+  client. Either `prompt` or `system_prompt` may be empty, but not both.
+  Optional first/last-frame images receive explicit `<First Frame>` and
   `<Last Frame>` labels; dynamic images are labeled `<Picture N>`. Dynamic
   `IMAGE` frame sequences follow H3's 24 FPS reference convention and are
   sampled into timestamped `<Video N>` frames. A root URL automatically gains
