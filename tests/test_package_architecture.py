@@ -214,6 +214,7 @@ class PackageArchitectureTest(unittest.TestCase):
                 "TuringUtilsH3SetAudioPrefixNoiseMask",
                 "TuringUtilsVideoMaskGuidedCrop",
                 "TuringUtilsVideoMaskGuidedStitch",
+                "TuringUtilsVideoPadForOutpaint",
                 "TuringUtilsMaskToVisualPrompts",
                 "TuringUtilsSeCModelLoader",
                 "TuringUtilsSeCTrackVisualConcept",

@@ -1,4 +1,4 @@
-"""Mask-guided video crop and inverse-composite nodes."""
+"""Video region-of-interest, outpaint, and inverse-composite nodes."""
 
 from __future__ import annotations
 
@@ -383,6 +383,186 @@ def stitch_video_crops(
     return (base * (1.0 - alpha) + warped_images * alpha).to(dtype=base_images.dtype)
 
 
+def _aligned_target_size(
+    canvas_width: float,
+    canvas_height: float,
+    megapixels: float,
+    multiple: int,
+) -> tuple[int, int]:
+    if not math.isfinite(canvas_width) or not math.isfinite(canvas_height):
+        raise ValueError("Outpaint canvas dimensions must be finite")
+    if canvas_width <= 0.0 or canvas_height <= 0.0:
+        raise ValueError("Outpaint canvas dimensions must be positive")
+    if not math.isfinite(megapixels) or megapixels <= 0.0:
+        raise ValueError("megapixels must be a positive finite number")
+    multiple = int(multiple)
+    if multiple < 1:
+        raise ValueError("multiple must be positive")
+
+    target_pixels = float(megapixels) * 1024.0 * 1024.0
+    ratio = canvas_width / canvas_height
+    ideal_width = math.sqrt(target_pixels * ratio)
+    ideal_height = math.sqrt(target_pixels / ratio)
+    width = max(multiple, int(round(ideal_width / multiple)) * multiple)
+    height = max(multiple, int(round(ideal_height / multiple)) * multiple)
+    return width, height
+
+
+def _outpaint_canvas_geometry(
+    source_width: int,
+    source_height: int,
+    layout: dict,
+) -> tuple[float, float, float, float]:
+    if not isinstance(layout, dict):
+        raise ValueError("layout must be a Video Pad For Outpaint mode value")
+    mode = layout.get("layout")
+    if mode == "pixels":
+        margins = {}
+        for name in ("left", "top", "right", "bottom"):
+            value = int(layout.get(name, 0))
+            if value < 0:
+                raise ValueError(f"{name} must be non-negative")
+            margins[name] = value
+        return (
+            float(source_width + margins["left"] + margins["right"]),
+            float(source_height + margins["top"] + margins["bottom"]),
+            float(margins["left"]),
+            float(margins["top"]),
+        )
+    if mode == "relative_frame":
+        expand_ratio = float(layout.get("expand_ratio", 0.0))
+        offset_x = float(layout.get("offset_x", 0.0))
+        offset_y = float(layout.get("offset_y", 0.0))
+        if not math.isfinite(expand_ratio) or expand_ratio < 0.0:
+            raise ValueError("expand_ratio must be a non-negative finite number")
+        if not math.isfinite(offset_x) or not math.isfinite(offset_y):
+            raise ValueError("offset_x and offset_y must be finite")
+
+        extra_width = float(source_width) * expand_ratio
+        extra_height = float(source_height) * expand_ratio
+        shift_x = offset_x * float(source_width)
+        shift_y = offset_y * float(source_height)
+        if not bool(layout.get("allow_image_outside_frame", False)):
+            shift_x = min(max(shift_x, -extra_width * 0.5), extra_width * 0.5)
+            shift_y = min(max(shift_y, -extra_height * 0.5), extra_height * 0.5)
+        return (
+            float(source_width) + extra_width,
+            float(source_height) + extra_height,
+            extra_width * 0.5 + shift_x,
+            extra_height * 0.5 + shift_y,
+        )
+    raise ValueError(f"Unsupported outpaint layout mode: {mode!r}")
+
+
+def _aligned_inner_bounds(start: float, end: float, limit: int, multiple: int) -> tuple[int, int]:
+    visible_start = min(float(limit), max(0.0, start))
+    visible_end = min(float(limit), max(0.0, end))
+    epsilon = 1e-6
+    aligned_start = int(math.ceil((visible_start - epsilon) / multiple) * multiple)
+    aligned_end = int(math.floor((visible_end + epsilon) / multiple) * multiple)
+    return max(0, min(limit, aligned_start)), max(0, min(limit, aligned_end))
+
+
+def pad_video_for_outpaint(
+    images: torch.Tensor,
+    layout: dict,
+    megapixels: float,
+    multiple: int,
+    padding_mode: str,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    frames, source_height, source_width, channels = _validate_images(images, "images")
+    multiple = int(multiple)
+    canvas_width, canvas_height, source_canvas_x, source_canvas_y = _outpaint_canvas_geometry(
+        source_width,
+        source_height,
+        layout,
+    )
+    output_width, output_height = _aligned_target_size(
+        canvas_width,
+        canvas_height,
+        float(megapixels),
+        multiple,
+    )
+
+    # Use one isotropic scale and centre the small remainder introduced by
+    # output-size alignment. This preserves the source and virtual-canvas aspect
+    # ratios instead of independently stretching width and height.
+    scale = min(output_width / canvas_width, output_height / canvas_height)
+    canvas_x = (output_width - canvas_width * scale) * 0.5
+    canvas_y = (output_height - canvas_height * scale) * 0.5
+    source_x0 = canvas_x + source_canvas_x * scale
+    source_y0 = canvas_y + source_canvas_y * scale
+    source_scaled_width = float(source_width) * scale
+    source_scaled_height = float(source_height) * scale
+    source_x1 = source_x0 + source_scaled_width
+    source_y1 = source_y0 + source_scaled_height
+
+    sample_dtype = _sampling_dtype(images)
+    x = torch.arange(output_width, device=images.device, dtype=sample_dtype) + 0.5
+    y = torch.arange(output_height, device=images.device, dtype=sample_dtype) + 0.5
+    grid_x = 2.0 * (x - source_x0) / source_scaled_width - 1.0
+    grid_y = 2.0 * (y - source_y0) / source_scaled_height - 1.0
+    grid_y, grid_x = torch.meshgrid(grid_y, grid_x, indexing="ij")
+    grid = torch.stack((grid_x, grid_y), dim=-1).unsqueeze(0)
+    frame_grid = grid.expand(frames, -1, -1, -1)
+    source = images.movedim(-1, 1).to(dtype=sample_dtype)
+
+    if padding_mode == "edge":
+        padded = F.grid_sample(
+            source,
+            frame_grid,
+            mode="bilinear",
+            padding_mode="border",
+            align_corners=False,
+        )
+    elif padding_mode in ("neutral_gray", "black"):
+        padded = F.grid_sample(
+            source,
+            frame_grid,
+            mode="bilinear",
+            padding_mode="zeros",
+            align_corners=False,
+        )
+        if padding_mode == "neutral_gray":
+            validity = F.grid_sample(
+                torch.ones(
+                    (1, 1, source_height, source_width),
+                    device=images.device,
+                    dtype=sample_dtype,
+                ),
+                grid,
+                mode="bilinear",
+                padding_mode="zeros",
+                align_corners=False,
+            )
+            padded = padded + (1.0 - validity) * 0.5
+    else:
+        raise ValueError(f"Unsupported padding_mode: {padding_mode!r}")
+
+    output_images = padded.movedim(1, -1).to(dtype=images.dtype)
+    mask = torch.ones(
+        (output_height, output_width),
+        device=images.device,
+        dtype=torch.float32,
+    )
+    protect_left, protect_right = _aligned_inner_bounds(
+        source_x0,
+        source_x1,
+        output_width,
+        multiple,
+    )
+    protect_top, protect_bottom = _aligned_inner_bounds(
+        source_y0,
+        source_y1,
+        output_height,
+        multiple,
+    )
+    if protect_right > protect_left and protect_bottom > protect_top:
+        mask[protect_top:protect_bottom, protect_left:protect_right] = 0.0
+    output_masks = mask.unsqueeze(0).expand(frames, -1, -1).clone()
+    return output_images, output_masks
+
+
 class VideoMaskGuidedCrop(io.ComfyNode):
     @classmethod
     def define_schema(cls):
@@ -464,4 +644,110 @@ class VideoMaskGuidedStitch(io.ComfyNode):
             cropped_masks,
             crop_info,
             feather,
+        ))
+
+
+class VideoPadForOutpaint(io.ComfyNode):
+    @classmethod
+    def define_schema(cls):
+        return io.Schema(
+            node_id="TuringUtilsVideoPadForOutpaint",
+            display_name="Video Pad For Outpaint",
+            category="Turing Utils/video",
+            description=(
+                "Place a video in a larger target-resolution canvas and create a hard outpaint mask. "
+                "Pixel margins and aspect-preserving relative placement use separate dynamic controls."
+            ),
+            inputs=[
+                io.Image.Input("images"),
+                io.DynamicCombo.Input(
+                    "layout",
+                    options=[
+                        io.DynamicCombo.Option("pixels", [
+                            io.Int.Input("left", default=0, min=0, max=16384, step=1),
+                            io.Int.Input("top", default=0, min=0, max=16384, step=1),
+                            io.Int.Input("right", default=0, min=0, max=16384, step=1),
+                            io.Int.Input("bottom", default=0, min=0, max=16384, step=1),
+                        ]),
+                        io.DynamicCombo.Option("relative_frame", [
+                            io.Float.Input(
+                                "expand_ratio",
+                                default=0.25,
+                                min=0.0,
+                                max=8.0,
+                                step=0.01,
+                                tooltip=(
+                                    "Increase both canvas dimensions by this fraction of the original. "
+                                    "0.25 creates a 1.25x canvas while preserving its aspect ratio."
+                                ),
+                            ),
+                            io.Float.Input(
+                                "offset_x",
+                                default=0.0,
+                                min=-8.0,
+                                max=8.0,
+                                step=0.01,
+                                tooltip="Horizontal source offset as a fraction of the original width; positive moves right.",
+                            ),
+                            io.Float.Input(
+                                "offset_y",
+                                default=0.0,
+                                min=-8.0,
+                                max=8.0,
+                                step=0.01,
+                                tooltip="Vertical source offset as a fraction of the original height; positive moves down.",
+                            ),
+                            io.Boolean.Input(
+                                "allow_image_outside_frame",
+                                default=False,
+                                tooltip=(
+                                    "Allow placement to crop the original at the output boundary. "
+                                    "When disabled, offsets are clamped so the whole original remains visible."
+                                ),
+                            ),
+                        ]),
+                    ],
+                    tooltip="Use explicit source-pixel margins or expand the current aspect ratio and reposition the source.",
+                ),
+                io.Float.Input(
+                    "megapixels",
+                    default=1.0,
+                    min=0.01,
+                    max=64.0,
+                    step=0.01,
+                    tooltip="Approximate pixel count of the final canvas in 1024x1024 megapixels.",
+                ),
+                io.Int.Input(
+                    "multiple",
+                    default=32,
+                    min=1,
+                    max=1024,
+                    step=1,
+                    tooltip=(
+                        "Align final width, height, and the protected source rectangle inward to this pixel multiple. "
+                        "32 matches MiniMax H3's effective spatial token grid."
+                    ),
+                ),
+                io.Combo.Input(
+                    "padding_mode",
+                    options=["edge", "neutral_gray", "black"],
+                    default="edge",
+                    tooltip="Pixels outside the original are edge-extended, neutral gray, or black before repainting.",
+                    advanced=True,
+                ),
+            ],
+            outputs=[
+                io.Image.Output("images"),
+                io.Mask.Output("masks"),
+            ],
+        )
+
+    @classmethod
+    def execute(cls, images, layout, megapixels, multiple, padding_mode) -> io.NodeOutput:
+        return io.NodeOutput(*pad_video_for_outpaint(
+            images,
+            layout,
+            megapixels,
+            multiple,
+            padding_mode,
         ))

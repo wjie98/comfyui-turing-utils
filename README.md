@@ -160,6 +160,15 @@ only after its CUDA sources or required version change.
   video. Its optional feathering is measured in source-video pixels. Extra
   regenerated tail frames are ignored, while missing frames or mismatched source
   geometry are rejected.
+- `Video Pad For Outpaint` creates final-resolution video frames and hard repaint
+  masks without requiring a paired stitch node. Its dynamic layout control shows
+  either explicit source-pixel margins or a current-aspect expansion ratio plus
+  normalized X/Y placement. Relative placement can clamp the complete source
+  inside the canvas or deliberately let it cross the frame boundary. The canvas
+  is scaled isotropically toward a target megapixel count; its final dimensions
+  and the inward-protected source rectangle align to a configurable multiple
+  (32 by default for MiniMax H3). Padding can extend edge pixels, use neutral
+  gray, or use black; every output mask remains binary.
 - `Mask to Visual Prompts` uses the first frame from its IMAGE and MASK inputs
   and returns reusable visual prompts plus a rendered preview. Positive points
   combine perceptually distinct colour-region representatives, mask-medial

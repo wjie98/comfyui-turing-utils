@@ -15,7 +15,9 @@ sys.path.insert(0, str(PLUGIN_ROOT))
 from comfyui_turing_utils.nodes.video_roi import (  # noqa: E402
     VideoMaskGuidedCrop,
     VideoMaskGuidedStitch,
+    VideoPadForOutpaint,
     crop_video_by_mask,
+    pad_video_for_outpaint,
     stitch_video_crops,
 )
 
@@ -167,6 +169,137 @@ class VideoMaskRoiTest(unittest.TestCase):
             feather=0,
         )
         self.assertEqual(tuple(stitched.result[0].shape), tuple(images.shape))
+
+
+class VideoOutpaintTest(unittest.TestCase):
+    def test_schema_uses_mutually_exclusive_dynamic_layout_controls(self):
+        schema = VideoPadForOutpaint.define_schema()
+        self.assertEqual(schema.node_id, "TuringUtilsVideoPadForOutpaint")
+        self.assertEqual([item.id for item in schema.outputs], ["images", "masks"])
+
+        layout = schema.inputs[1]
+        self.assertEqual(layout.id, "layout")
+        self.assertEqual([option.key for option in layout.options], ["pixels", "relative_frame"])
+        self.assertEqual(
+            [item.id for item in layout.options[0].inputs],
+            ["left", "top", "right", "bottom"],
+        )
+        self.assertEqual(
+            [item.id for item in layout.options[1].inputs],
+            ["expand_ratio", "offset_x", "offset_y", "allow_image_outside_frame"],
+        )
+
+    def test_pixel_margins_create_final_resolution_frames_and_hard_masks(self):
+        images = torch.ones(2, 64, 64, 3)
+        megapixels = (128 * 96) / (1024 * 1024)
+        output, masks = pad_video_for_outpaint(
+            images,
+            {
+                "layout": "pixels",
+                "left": 32,
+                "top": 16,
+                "right": 32,
+                "bottom": 16,
+            },
+            megapixels=megapixels,
+            multiple=16,
+            padding_mode="edge",
+        )
+
+        self.assertEqual(tuple(output.shape), (2, 96, 128, 3))
+        self.assertEqual(tuple(masks.shape), (2, 96, 128))
+        self.assertTrue(torch.equal(output, torch.ones_like(output)))
+        self.assertEqual(set(torch.unique(masks).tolist()), {0.0, 1.0})
+        self.assertEqual(float(masks[:, 16:80, 32:96].max()), 0.0)
+        self.assertEqual(float(masks[:, :16].min()), 1.0)
+        self.assertEqual(float(masks[:, 80:].min()), 1.0)
+        self.assertEqual(float(masks[:, :, :32].min()), 1.0)
+        self.assertEqual(float(masks[:, :, 96:].min()), 1.0)
+
+    def test_relative_offsets_clamp_source_inside_frame(self):
+        images = torch.ones(1, 32, 64, 3)
+        megapixels = (96 * 48) / (1024 * 1024)
+        _output, masks = pad_video_for_outpaint(
+            images,
+            {
+                "layout": "relative_frame",
+                "expand_ratio": 0.5,
+                "offset_x": 0.9,
+                "offset_y": -0.9,
+                "allow_image_outside_frame": False,
+            },
+            megapixels=megapixels,
+            multiple=16,
+            padding_mode="edge",
+        )
+
+        self.assertEqual(tuple(masks.shape), (1, 48, 96))
+        self.assertEqual(float(masks[:, 0:32, 32:96].max()), 0.0)
+        self.assertEqual(float(masks[:, :, :32].min()), 1.0)
+        self.assertEqual(float(masks[:, 32:, :].min()), 1.0)
+
+    def test_relative_offsets_can_crop_source_at_frame_boundary(self):
+        images = torch.ones(1, 32, 64, 3)
+        megapixels = (96 * 48) / (1024 * 1024)
+        _output, masks = pad_video_for_outpaint(
+            images,
+            {
+                "layout": "relative_frame",
+                "expand_ratio": 0.5,
+                "offset_x": 0.5,
+                "offset_y": -0.25,
+                "allow_image_outside_frame": True,
+            },
+            megapixels=megapixels,
+            multiple=16,
+            padding_mode="edge",
+        )
+
+        self.assertEqual(float(masks[:, 0:32, 48:96].max()), 0.0)
+        self.assertEqual(float(masks[:, :, :48].min()), 1.0)
+        self.assertEqual(float(masks[:, 32:, :].min()), 1.0)
+
+    def test_neutral_gray_padding_blends_only_outside_source(self):
+        images = torch.zeros(1, 64, 64, 3)
+        megapixels = (96 * 64) / (1024 * 1024)
+        output, _masks = pad_video_for_outpaint(
+            images,
+            {
+                "layout": "pixels",
+                "left": 16,
+                "top": 0,
+                "right": 16,
+                "bottom": 0,
+            },
+            megapixels=megapixels,
+            multiple=16,
+            padding_mode="neutral_gray",
+        )
+
+        self.assertTrue(torch.allclose(output[:, :, :15], torch.full_like(output[:, :, :15], 0.5)))
+        self.assertEqual(float(output[:, :, 16:80].abs().max()), 0.0)
+        self.assertTrue(torch.allclose(output[:, :, 81:], torch.full_like(output[:, :, 81:], 0.5)))
+
+    def test_node_execution_and_invalid_layout_fail_clearly(self):
+        images = torch.zeros(1, 32, 32, 3)
+        result = VideoPadForOutpaint.execute(
+            images=images,
+            layout={"layout": "pixels", "left": 0, "top": 0, "right": 0, "bottom": 0},
+            megapixels=(32 * 32) / (1024 * 1024),
+            multiple=16,
+            padding_mode="black",
+        )
+        self.assertEqual(tuple(result.result[0].shape), tuple(images.shape))
+        self.assertEqual(float(result.result[1].max()), 0.0)
+
+        with self.assertRaisesRegex(ValueError, "Unsupported outpaint layout mode"):
+            pad_video_for_outpaint(
+                images,
+                {"layout": "unknown"},
+                megapixels=1.0,
+                multiple=32,
+                padding_mode="edge",
+            )
 
 
 if __name__ == "__main__":
