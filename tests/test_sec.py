@@ -167,6 +167,9 @@ class SeCNodeTest(unittest.TestCase):
         self.assertIn("negative_coords", tracker_inputs)
         self.assertIn("bounding_box", tracker_inputs)
         self.assertIn("mask", tracker_inputs)
+        tracker_by_id = {item.id: item for item in tracker.inputs}
+        self.assertFalse(tracker_by_id["positive_coords"].multiline)
+        self.assertFalse(tracker_by_id["negative_coords"].multiline)
         self.assertEqual([item.id for item in tracker.outputs], ["masks"])
 
     def test_attention_auto_selects_only_compatible_flash_implementations(self):

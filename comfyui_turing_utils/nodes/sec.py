@@ -65,14 +65,12 @@ class SeCTrackVisualConcept(io.ComfyNode):
                 io.String.Input(
                     "positive_coords",
                     default="",
-                    multiline=True,
                     optional=True,
                     tooltip='JSON point list such as [{"x": 120, "y": 240}].',
                 ),
                 io.String.Input(
                     "negative_coords",
                     default="",
-                    multiline=True,
                     optional=True,
                     tooltip='JSON exclusion-point list such as [{"x": 80, "y": 200}].',
                 ),
