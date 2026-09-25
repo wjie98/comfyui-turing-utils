@@ -177,21 +177,27 @@ only after its CUDA sources or required version change.
   ring. The preview overlays a subtle thresholded-mask tint and contour, an
   amber bounding box, green positive markers, and red negative markers. Point
   outputs use the JSON coordinate format shared by KJNodes, SeC, and built-in
-  SAM3. The legacy `BBOX` output targets SeC/KJNodes, while `BOUNDING_BOX`
-  targets current ComfyUI nodes such as SAM3. Input batch lengths may differ,
-  but their first frames must have matching spatial dimensions.
+  SAM3. The legacy `BBOX` output targets older KJNodes consumers, while
+  `BOUNDING_BOX` targets SeC and current ComfyUI nodes such as SAM3. Input batch
+  lengths may differ, but their first frames must have matching spatial dimensions.
 - `Load SeC Model` loads single-file or Hugging Face directory-format SeC
   checkpoints from `ComfyUI/models/sams`. The checkpoint starts on ComfyUI's
   offload device and is registered through a model patcher; there is no manual
-  device selector or private unload lifecycle.
-- `SeC Track Visual Concept` accepts the JSON points and legacy `BBOX` emitted
-  by `Mask to Visual Prompts`, plus an optional direct mask. Frames are consumed
+  device selector or private unload lifecycle. Its `auto` attention mode selects
+  a compatible Flash Attention implementation independently for InternViT and
+  the language model, with SDPA as the guaranteed fallback; `sdpa` forces the
+  portable backend throughout SeC.
+- `SeC Track Visual Concept` accepts the JSON coordinates and canonical
+  `BOUNDING_BOX` emitted by `Mask to Visual Prompts`, plus an optional direct
+  mask. Frames are consumed
   from the IMAGE tensor without temporary JPEG files. With a mask connected,
-  that mask is authoritative, the BBOX limits its region, and clicks are checked
-  for consistency. Without a mask, the box and all clicks are submitted in one
+  that mask is authoritative, the bounding box limits its region, and clicks are
+  checked for consistency. Without a mask, the box and all clicks are submitted in one
   SAM2 prompt so one prompt type cannot silently erase another. Video frames and
   per-run tracking state remain on CPU while ComfyUI owns model loading,
-  retention, and eviction; only the tracked mask batch is returned.
+  retention, and eviction; only the tracked mask batch is returned. The advanced
+  `semantic_keyframes` control limits the labelled scene-change memories supplied
+  to the MLLM recovery path.
 - `Is Input Present` accepts an optional value of any type and reports whether
   it is connected and non-empty; scalar `0` and `false` still count as present.
   Its second output forwards that value or lazily evaluates an optional fallback.

@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import importlib.metadata
+import importlib.util
 import json
 from pathlib import Path
 from typing import Any
@@ -24,6 +26,7 @@ from ..log import get_logger
 LOG = get_logger("sec")
 _MISSING_MODEL = "(No SeC models found in models/sams)"
 _SINGLE_FILE_SUFFIXES = {".safetensors"}
+_ATTENTION_MODES = {"auto", "sdpa"}
 
 
 def register_sec_model_folder() -> None:
@@ -60,6 +63,7 @@ class SeCModelHandle:
     patcher: comfy.model_patcher.ModelPatcher
     dtype: torch.dtype
     source: str
+    attention: "SeCAttentionPlan | None" = None
 
     @property
     def model(self):
@@ -72,6 +76,96 @@ class SeCVisualPrompt:
     points: np.ndarray | None
     labels: np.ndarray | None
     box: np.ndarray | None
+
+
+@dataclass(frozen=True)
+class SeCAttentionPlan:
+    requested: str
+    vision: str
+    llm: str
+    tracker: str = "sdpa"
+
+
+def _installed_package_version(distribution: str) -> str | None:
+    try:
+        return importlib.metadata.version(distribution)
+    except importlib.metadata.PackageNotFoundError:
+        return None
+
+
+def _module_available(module: str) -> bool:
+    try:
+        return importlib.util.find_spec(module) is not None
+    except (ImportError, AttributeError, ValueError):
+        return False
+
+
+def _device_capability(device: torch.device) -> tuple[int, int] | None:
+    if device.type != "cuda" or not torch.cuda.is_available():
+        return None
+    try:
+        return tuple(int(item) for item in torch.cuda.get_device_capability(device))
+    except (AssertionError, RuntimeError, ValueError):
+        return None
+
+
+def _version_major(value: str | None) -> int | None:
+    if not value:
+        return None
+    try:
+        return int(value.split(".", 1)[0])
+    except (TypeError, ValueError):
+        return None
+
+
+def resolve_sec_attention(
+    attention: str | bool,
+    device: torch.device,
+    dtype: torch.dtype,
+) -> SeCAttentionPlan:
+    """Resolve the best supported attention independently for each SeC subsystem."""
+
+    if isinstance(attention, bool):
+        requested = "auto" if attention else "sdpa"
+    else:
+        requested = str(attention).strip().lower()
+    if requested not in _ATTENTION_MODES:
+        raise ValueError(
+            f"Unsupported SeC attention mode {attention!r}; expected auto or sdpa"
+        )
+    fallback = SeCAttentionPlan(requested=requested, vision="sdpa", llm="sdpa")
+    if requested == "sdpa" or dtype not in (torch.float16, torch.bfloat16):
+        return fallback
+
+    capability = _device_capability(device)
+    if capability is None:
+        return fallback
+    major, _minor = capability
+
+    flash_version = _installed_package_version("flash_attn")
+    flash_major = _version_major(flash_version)
+    vision = "sdpa"
+    llm = "sdpa"
+
+    # On the supported PyTorch 2.9 baseline, SDPA is faster than the external
+    # FA2 varlen path for InternViT's fixed-length image-token batches, so keep
+    # vision on SDPA for Ampere and newer. Qwen still benefits from FA2. FA1
+    # remains useful for InternViT on Turing when a compatible v1 wheel exists.
+    if flash_major is not None and flash_major >= 2 and major >= 8:
+        llm = "flash_attention_2"
+    elif flash_major == 1 and capability >= (7, 5) and dtype == torch.float16:
+        vision = "flash_attention_1"
+
+    # Transformers exposes FA3 independently; Qwen can select it on Hopper or
+    # newer while InternViT continues to use SDPA.
+    if major >= 9 and _module_available("flash_attn_3"):
+        llm = "flash_attention_3"
+
+    return SeCAttentionPlan(
+        requested=requested,
+        vision=vision,
+        llm=llm,
+    )
 
 
 def _bundled_config_path() -> Path:
@@ -227,8 +321,7 @@ def _register_parameter_dtype_input_hooks(model: nn.Module) -> int:
 
 def load_sec_model(
     model_name: str,
-    use_flash_attention: bool,
-    allow_mask_overlap: bool,
+    attention: str | bool = "auto",
 ) -> SeCModelHandle:
     """Load SeC on the offload device and register it with ComfyUI."""
 
@@ -246,9 +339,6 @@ def load_sec_model(
 
     spec = _resolve_model(model_name)
     config = SeCConfig.from_pretrained(str(spec.config_path))
-    config.hydra_overrides_extra = [
-        f"++model.non_overlap_masks={'false' if allow_mask_overlap else 'true'}"
-    ]
     load_device = comfy.model_management.get_torch_device()
     offload_device = comfy.model_management.unet_offload_device()
     cpu_inference = comfy.model_management.is_device_cpu(load_device)
@@ -274,9 +364,13 @@ def load_sec_model(
                 spec.name,
             )
             dtype = torch.float32
-        enable_flash = bool(use_flash_attention and not cpu_inference and dtype != torch.float32)
+        attention_plan = resolve_sec_attention(attention, load_device, dtype)
         with init_empty_weights(include_buffers=False):
-            model = SeCModel(config, use_flash_attn=enable_flash)
+            model = SeCModel(
+                config,
+                vision_attention_backend=attention_plan.vision,
+                llm_attention_backend=attention_plan.llm,
+            )
         incompatible = model.load_state_dict(state_dict, strict=False, assign=True)
         missing = [key for key in incompatible.missing_keys if not key.endswith("num_batches_tracked")]
         if missing or incompatible.unexpected_keys:
@@ -288,13 +382,14 @@ def load_sec_model(
         del state_dict
     else:
         dtype = _config_dtype(config)
-        enable_flash = bool(use_flash_attention and not cpu_inference and dtype != torch.float32)
+        attention_plan = resolve_sec_attention(attention, load_device, dtype)
         model = SeCModel.from_pretrained(
             str(spec.path),
             config=config,
             torch_dtype="auto",
             low_cpu_mem_usage=True,
-            use_flash_attn=enable_flash,
+            vision_attention_backend=attention_plan.vision,
+            llm_attention_backend=attention_plan.llm,
         )
         dtype = next(
             (parameter.dtype for parameter in model.parameters() if parameter.is_floating_point()),
@@ -307,6 +402,13 @@ def load_sec_model(
             )
             dtype = torch.float32
 
+    resolved_backends = getattr(model, "sec_attention_backends", {})
+    attention_plan = SeCAttentionPlan(
+        requested=attention_plan.requested,
+        vision=str(resolved_backends.get("vision", attention_plan.vision)),
+        llm=str(resolved_backends.get("llm", attention_plan.llm)),
+        tracker=str(resolved_backends.get("tracker", attention_plan.tracker)),
+    )
     tokenizer = Qwen2Tokenizer.from_pretrained(
         str(spec.config_path),
         local_files_only=True,
@@ -333,16 +435,24 @@ def load_sec_model(
         fast_disk=fast_disk,
     )
     LOG.info(
-        "Loaded SeC model %s on the ComfyUI offload device: dtype=%s flash_attention=%s "
-        "allow_mask_overlap=%s dtype_hooks=%d size=%.2f GiB",
+        "Loaded SeC model %s on the ComfyUI offload device: dtype=%s "
+        "attention(requested/vision/llm/tracker)=%s/%s/%s/%s "
+        "dtype_hooks=%d size=%.2f GiB",
         spec.name,
         dtype,
-        enable_flash,
-        allow_mask_overlap,
+        attention_plan.requested,
+        attention_plan.vision,
+        attention_plan.llm,
+        attention_plan.tracker,
         dtype_hook_count,
         patcher.model_size() / (1024**3),
     )
-    return SeCModelHandle(patcher=patcher, dtype=dtype, source=spec.name)
+    return SeCModelHandle(
+        patcher=patcher,
+        dtype=dtype,
+        source=spec.name,
+        attention=attention_plan,
+    )
 
 
 def parse_points(value: str | None, *, width: int, height: int, label: int) -> tuple[np.ndarray, np.ndarray]:
@@ -410,21 +520,21 @@ def parse_bbox(value, *, width: int, height: int) -> np.ndarray | None:
     return np.asarray([x1, y1, x2, y2], dtype=np.float32)
 
 
-def _select_mask(input_mask: torch.Tensor, frames: torch.Tensor, annotation_frame_idx: int) -> np.ndarray:
-    if input_mask.ndim == 2:
-        selected = input_mask
-    elif input_mask.ndim == 3:
-        if input_mask.shape[0] == 1:
-            selected = input_mask[0]
-        elif input_mask.shape[0] == frames.shape[0]:
-            selected = input_mask[annotation_frame_idx]
+def _select_mask(mask: torch.Tensor, frames: torch.Tensor, annotation_frame_idx: int) -> np.ndarray:
+    if mask.ndim == 2:
+        selected = mask
+    elif mask.ndim == 3:
+        if mask.shape[0] == 1:
+            selected = mask[0]
+        elif mask.shape[0] == frames.shape[0]:
+            selected = mask[annotation_frame_idx]
         else:
             raise ValueError(
-                "input_mask must contain one mask or one mask per video frame; "
-                f"got {input_mask.shape[0]} masks for {frames.shape[0]} frames"
+                "mask must contain one mask or one mask per video frame; "
+                f"got {mask.shape[0]} masks for {frames.shape[0]} frames"
             )
     else:
-        raise ValueError(f"input_mask must be [H,W] or [N,H,W], got {tuple(input_mask.shape)}")
+        raise ValueError(f"mask must be [H,W] or [N,H,W], got {tuple(mask.shape)}")
     height, width = int(frames.shape[1]), int(frames.shape[2])
     selected = selected.detach().to(device="cpu", dtype=torch.float32)
     if tuple(selected.shape) != (height, width):
@@ -436,7 +546,7 @@ def _select_mask(input_mask: torch.Tensor, frames: torch.Tensor, annotation_fram
         )[0, 0]
     mask = selected.numpy() >= 0.5
     if not mask.any():
-        raise ValueError("input_mask contains no foreground on the annotation frame")
+        raise ValueError("mask contains no foreground on the annotation frame")
     return mask
 
 
@@ -444,45 +554,45 @@ def prepare_visual_prompt(
     frames: torch.Tensor,
     *,
     annotation_frame_idx: int,
-    positive_points: str | None,
-    negative_points: str | None,
-    bbox,
-    input_mask: torch.Tensor | None,
+    positive_coords: str | None,
+    negative_coords: str | None,
+    bounding_box,
+    mask: torch.Tensor | None,
 ) -> SeCVisualPrompt:
     height, width = int(frames.shape[1]), int(frames.shape[2])
     positive, positive_labels = parse_points(
-        positive_points, width=width, height=height, label=1
+        positive_coords, width=width, height=height, label=1
     )
     negative, negative_labels = parse_points(
-        negative_points, width=width, height=height, label=0
+        negative_coords, width=width, height=height, label=0
     )
-    box = parse_bbox(bbox, width=width, height=height)
+    box = parse_bbox(bounding_box, width=width, height=height)
 
-    if input_mask is not None:
-        mask = _select_mask(input_mask, frames, annotation_frame_idx)
+    if mask is not None:
+        selected_mask = _select_mask(mask, frames, annotation_frame_idx)
         if box is not None:
             x1, y1, x2, y2 = box
-            roi = np.zeros_like(mask)
+            roi = np.zeros_like(selected_mask)
             roi[int(np.floor(y1)) : int(np.ceil(y2)), int(np.floor(x1)) : int(np.ceil(x2))] = True
-            mask &= roi
-            if not mask.any():
-                raise ValueError("BBOX does not overlap the input_mask foreground")
+            selected_mask &= roi
+            if not selected_mask.any():
+                raise ValueError("bounding_box does not overlap the mask foreground")
         for point in positive:
             x, y = int(point[0]), int(point[1])
-            if not mask[y, x]:
-                raise ValueError(f"Positive point ({x}, {y}) is outside the authoritative input_mask")
+            if not selected_mask[y, x]:
+                raise ValueError(f"Positive point ({x}, {y}) is outside the authoritative mask")
         for point in negative:
             x, y = int(point[0]), int(point[1])
-            if mask[y, x]:
-                raise ValueError(f"Negative point ({x}, {y}) falls inside the authoritative input_mask")
+            if selected_mask[y, x]:
+                raise ValueError(f"Negative point ({x}, {y}) falls inside the authoritative mask")
         # SAM2 stores mask and point inputs as mutually exclusive prompt states.
         # Keeping one authoritative mask avoids the silent last-prompt-wins behavior.
-        return SeCVisualPrompt(mask=mask, points=None, labels=None, box=None)
+        return SeCVisualPrompt(mask=selected_mask, points=None, labels=None, box=None)
 
     if len(positive) == 0 and box is None:
         if len(negative):
             raise ValueError("Negative points require at least one positive point or a BBOX")
-        raise ValueError("Provide input_mask, positive_points, or bbox")
+        raise ValueError("Provide mask, positive_coords, or bounding_box")
     points = np.concatenate((positive, negative), axis=0)
     labels = np.concatenate((positive_labels, negative_labels), axis=0)
     if len(points) == 0:
@@ -490,28 +600,28 @@ def prepare_visual_prompt(
     return SeCVisualPrompt(mask=None, points=points, labels=labels, box=box)
 
 
-def estimate_sec_activation_memory(frames: torch.Tensor, mllm_memory_size: int) -> int:
+def estimate_sec_activation_memory(frames: torch.Tensor, semantic_keyframes: int) -> int:
     """Conservative reservation for SAM state plus scene-change MLLM activations."""
 
     frame_bytes = int(frames.shape[0] * frames.shape[1] * frames.shape[2] * 12)
     base = 1024**3
-    semantic = int(max(1, mllm_memory_size) * 128 * 1024**2)
+    semantic = int(max(1, semantic_keyframes) * 128 * 1024**2)
     return base + semantic + frame_bytes
 
 
-def _seed_predictor(predictor, state, prompt: SeCVisualPrompt, frame_idx: int, object_id: int):
+def _seed_predictor(predictor, state, prompt: SeCVisualPrompt, frame_idx: int):
     if prompt.mask is not None:
         _, _, logits = predictor.add_new_mask(
             inference_state=state,
             frame_idx=frame_idx,
-            obj_id=object_id,
+            obj_id=1,
             mask=prompt.mask,
         )
         return prompt.mask
     _, _, logits = predictor.add_new_points_or_box(
         inference_state=state,
         frame_idx=frame_idx,
-        obj_id=object_id,
+        obj_id=1,
         points=prompt.points,
         labels=prompt.labels,
         box=prompt.box,
@@ -523,15 +633,14 @@ def track_visual_concept(
     handle: SeCModelHandle,
     frames: torch.Tensor,
     *,
-    positive_points: str | None = "",
-    negative_points: str | None = "",
-    bbox=None,
-    input_mask: torch.Tensor | None = None,
+    positive_coords: str | None = "",
+    negative_coords: str | None = "",
+    bounding_box=None,
+    mask: torch.Tensor | None = None,
     tracking_direction: str = "forward",
     annotation_frame_idx: int = 0,
-    object_id: int = 1,
     max_frames_to_track: int = -1,
-    mllm_memory_size: int = 12,
+    semantic_keyframes: int = 7,
 ) -> torch.Tensor:
     if not isinstance(handle, SeCModelHandle):
         raise TypeError("model must come from Load SeC Model")
@@ -547,16 +656,18 @@ def track_visual_concept(
         )
     if tracking_direction not in {"forward", "backward", "bidirectional"}:
         raise ValueError(f"Unsupported tracking_direction: {tracking_direction}")
+    if int(semantic_keyframes) < 1:
+        raise ValueError("semantic_keyframes must be at least 1")
 
     prompt = prepare_visual_prompt(
         frames,
         annotation_frame_idx=int(annotation_frame_idx),
-        positive_points=positive_points,
-        negative_points=negative_points,
-        bbox=bbox,
-        input_mask=input_mask,
+        positive_coords=positive_coords,
+        negative_coords=negative_coords,
+        bounding_box=bounding_box,
+        mask=mask,
     )
-    memory_required = estimate_sec_activation_memory(frames, int(mllm_memory_size))
+    memory_required = estimate_sec_activation_memory(frames, int(semantic_keyframes))
     comfy.model_management.load_models_gpu(
         [handle.patcher],
         memory_required=memory_required,
@@ -583,7 +694,7 @@ def track_visual_concept(
             max_frame_num_to_track=limit,
             reverse=reverse,
             init_mask=init_mask,
-            mllm_memory_size=int(mllm_memory_size),
+            mllm_memory_size=int(semantic_keyframes),
         ):
             comfy.model_management.throw_exception_if_processing_interrupted()
             mask = (mask_logits[0].detach().float().cpu().squeeze() > 0.0).to(torch.float32)
@@ -606,7 +717,6 @@ def track_visual_concept(
             state,
             prompt,
             int(annotation_frame_idx),
-            int(object_id),
         )
         if tracking_direction == "bidirectional":
             propagate(False, init_mask)
@@ -616,7 +726,6 @@ def track_visual_concept(
                 state,
                 prompt,
                 int(annotation_frame_idx),
-                int(object_id),
             )
             propagate(True, init_mask)
         else:
@@ -631,6 +740,7 @@ def track_visual_concept(
 
 
 __all__ = [
+    "SeCAttentionPlan",
     "SeCModelHandle",
     "available_sec_models",
     "estimate_sec_activation_memory",
@@ -638,6 +748,7 @@ __all__ = [
     "parse_bbox",
     "parse_points",
     "prepare_visual_prompt",
+    "resolve_sec_attention",
     "sec_model_choices",
     "track_visual_concept",
 ]

@@ -118,9 +118,16 @@ class InternAttention(nn.Module):
         self.config = config
         self.embed_dim = config.hidden_size
         self.num_heads = config.num_attention_heads
-        self.use_flash_attn = config.use_flash_attn and has_flash_attn
-        if config.use_flash_attn and not has_flash_attn:
-            print('Warning: Flash Attention is not available, use_flash_attn is set to False.')
+        requested_backend = getattr(
+            config,
+            'attention_backend',
+            'flash_attention_2' if config.use_flash_attn else 'sdpa',
+        )
+        self.attention_backend = requested_backend
+        self.use_flash_attn = requested_backend.startswith('flash_attention') and has_flash_attn
+        if requested_backend.startswith('flash_attention') and not has_flash_attn:
+            logger.warning('Flash Attention is unavailable; InternViT is using SDPA.')
+            self.attention_backend = 'sdpa'
         self.head_dim = self.embed_dim // self.num_heads
         if self.head_dim * self.num_heads != self.embed_dim:
             raise ValueError(
@@ -162,6 +169,28 @@ class InternAttention(nn.Module):
         x = self.proj_drop(x)
         return x
 
+    def _sdpa_attn(self, x):
+        B, N, C = x.shape
+        qkv = self.qkv(x).reshape(B, N, 3, self.num_heads, C // self.num_heads).permute(2, 0, 3, 1, 4)
+        q, k, v = qkv.unbind(0)
+
+        if self.qk_normalization:
+            B_, H_, N_, D_ = q.shape
+            q = self.q_norm(q.transpose(1, 2).flatten(-2, -1)).view(B_, N_, H_, D_).transpose(1, 2)
+            k = self.k_norm(k.transpose(1, 2).flatten(-2, -1)).view(B_, N_, H_, D_).transpose(1, 2)
+
+        x = F.scaled_dot_product_attention(
+            q,
+            k,
+            v,
+            dropout_p=self.attn_drop.p if self.training else 0.0,
+            scale=self.scale,
+        )
+        x = x.transpose(1, 2).reshape(B, N, C)
+        x = self.proj(x)
+        x = self.proj_drop(x)
+        return x
+
     def _flash_attn(self, x, key_padding_mask=None, need_weights=False):
         qkv = self.qkv(x)
         qkv = rearrange(qkv, 'b s (three h d) -> b s three h d', three=3, h=self.num_heads)
@@ -180,8 +209,21 @@ class InternAttention(nn.Module):
         return outs
 
     def forward(self, hidden_states: torch.Tensor) -> torch.Tensor:
-        x = self._naive_attn(hidden_states) if not self.use_flash_attn else self._flash_attn(hidden_states)
-        return x
+        if not self.use_flash_attn:
+            return self._sdpa_attn(hidden_states)
+        try:
+            return self._flash_attn(hidden_states)
+        except (AssertionError, RuntimeError, TypeError, ValueError) as error:
+            if isinstance(error, RuntimeError) and 'out of memory' in str(error).lower():
+                raise
+            logger.warning_once(
+                'InternViT %s failed (%s); falling back to SDPA for this model instance.',
+                self.attention_backend,
+                error,
+            )
+            self.attention_backend = 'sdpa'
+            self.use_flash_attn = False
+            return self._sdpa_attn(hidden_states)
 
 
 class InternMLP(nn.Module):

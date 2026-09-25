@@ -55,6 +55,22 @@ logger = logging.get_logger(__name__)
 # Debug logging control - disabled by default, enable with SEC_DEBUG=true environment variable
 DEBUG_SEC = os.getenv("SEC_DEBUG", "false").lower() == "true"
 
+
+def _is_flash_attention_failure(error):
+    message = str(error).lower()
+    return any(
+        marker in message
+        for marker in (
+            'flash_attn',
+            'flash attention',
+            'cutlass',
+            'no kernel image',
+            'invalid device function',
+            'compute capability',
+            'is_sm',
+        )
+    )
+
 def version_cmp(v1, v2, op='eq'):
     import operator
 
@@ -115,7 +131,14 @@ class SeCModel(PreTrainedModel):
             return comfy_load_device
         return super().device
 
-    def __init__(self, config: SeCConfig, vision_model=None, language_model=None, use_flash_attn=True):
+    def __init__(
+        self,
+        config: SeCConfig,
+        vision_model=None,
+        language_model=None,
+        vision_attention_backend="sdpa",
+        llm_attention_backend="sdpa",
+    ):
         super().__init__(config)
 
         assert version_cmp(transformers.__version__, '4.37.0', 'ge')
@@ -130,9 +153,22 @@ class SeCModel(PreTrainedModel):
         self.ps_version = config.ps_version
         self.llm_arch_name = config.llm_config.architectures[0]
 
-        use_flash_attn = use_flash_attn if has_flash_attn else False
-        config.vision_config.use_flash_attn = True if use_flash_attn else False
-        config.llm_config._attn_implementation = 'flash_attention_2' if use_flash_attn else 'eager'
+        supported_vision_backends = {'sdpa', 'flash_attention_1', 'flash_attention_2'}
+        supported_llm_backends = {'sdpa', 'flash_attention_2', 'flash_attention_3'}
+        if vision_attention_backend not in supported_vision_backends:
+            raise ValueError(f'Unsupported SeC vision attention backend: {vision_attention_backend}')
+        if llm_attention_backend not in supported_llm_backends:
+            raise ValueError(f'Unsupported SeC language attention backend: {llm_attention_backend}')
+        if vision_attention_backend.startswith('flash_attention') and not has_flash_attn:
+            vision_attention_backend = 'sdpa'
+        config.vision_config.attention_backend = vision_attention_backend
+        config.vision_config.use_flash_attn = vision_attention_backend.startswith('flash_attention')
+        config.llm_config._attn_implementation = llm_attention_backend
+        self.sec_attention_backends = {
+            'vision': vision_attention_backend,
+            'llm': llm_attention_backend,
+            'tracker': 'sdpa',
+        }
 
         logger.debug(f'num_image_token: {self.num_image_token}')
         logger.debug(f'ps_version: {self.ps_version}')
@@ -143,16 +179,30 @@ class SeCModel(PreTrainedModel):
         if language_model is not None:
             self.language_model = language_model
         else:
-            if config.llm_config.architectures[0] == 'LlamaForCausalLM':
-                self.language_model = LlamaForCausalLM(config.llm_config)
-            elif config.llm_config.architectures[0] == 'InternLM2ForCausalLM':
-                self.language_model = InternLM2ForCausalLM(config.llm_config)
-            elif config.llm_config.architectures[0] == 'Phi3ForCausalLM':
-                self.language_model = Phi3ForCausalLM(config.llm_config)
-            elif config.llm_config.architectures[0] == 'Qwen2ForCausalLM':
-                self.language_model = Qwen2ForCausalLM(config.llm_config)
-            else:
+            def build_language_model():
+                if config.llm_config.architectures[0] == 'LlamaForCausalLM':
+                    return LlamaForCausalLM(config.llm_config)
+                if config.llm_config.architectures[0] == 'InternLM2ForCausalLM':
+                    return InternLM2ForCausalLM(config.llm_config)
+                if config.llm_config.architectures[0] == 'Phi3ForCausalLM':
+                    return Phi3ForCausalLM(config.llm_config)
+                if config.llm_config.architectures[0] == 'Qwen2ForCausalLM':
+                    return Qwen2ForCausalLM(config.llm_config)
                 raise NotImplementedError(f'{config.llm_config.architectures[0]} is not implemented.')
+
+            try:
+                self.language_model = build_language_model()
+            except (AssertionError, ImportError, RuntimeError, ValueError) as error:
+                if not llm_attention_backend.startswith('flash_attention'):
+                    raise
+                logger.warning(
+                    '%s initialization failed (%s); SeC language attention is falling back to SDPA.',
+                    llm_attention_backend,
+                    error,
+                )
+                config.llm_config._attn_implementation = 'sdpa'
+                self.sec_attention_backends['llm'] = 'sdpa'
+                self.language_model = build_language_model()
 
         vit_hidden_size = config.vision_config.hidden_size
         llm_hidden_size = config.llm_config.hidden_size
@@ -744,7 +794,23 @@ class SeCModel(PreTrainedModel):
         if DEBUG_SEC:
             print(f"[MLLM-PREDICT] Data pixel_values dtype={data['pixel_values'].dtype}, shape={data['pixel_values'].shape}")
 
-        output = self.forward(data)
+        try:
+            output = self.forward(data)
+        except (AssertionError, ImportError, RuntimeError, ValueError) as error:
+            llm_backend = self.sec_attention_backends.get('llm', 'sdpa')
+            if (
+                not llm_backend.startswith('flash_attention')
+                or not (isinstance(error, AssertionError) or _is_flash_attention_failure(error))
+            ):
+                raise
+            logger.warning(
+                '%s execution failed (%s); retrying this SeC model with SDPA.',
+                llm_backend,
+                error,
+            )
+            self.language_model.set_attn_implementation('sdpa')
+            self.sec_attention_backends['llm'] = 'sdpa'
+            output = self.forward(data)
         seg_token_mask = ids == self.seg_token_idx
         hidden_states = output.hidden_states
         if DEBUG_SEC:

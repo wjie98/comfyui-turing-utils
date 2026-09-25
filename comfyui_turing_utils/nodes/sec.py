@@ -24,20 +24,15 @@ class SeCModelLoader(io.ComfyNode):
             ),
             inputs=[
                 io.Combo.Input("model_name", options=choices, default=choices[0]),
-                io.Boolean.Input(
-                    "use_flash_attention",
-                    default=True,
-                    advanced=True,
+                io.Combo.Input(
+                    "attention",
+                    options=["auto", "sdpa"],
+                    default="auto",
                     tooltip=(
-                        "Use Flash Attention when the installed runtime and checkpoint dtype support it; "
-                        "otherwise SeC falls back to its standard attention implementation."
+                        "Auto selects a compatible Flash Attention implementation independently for "
+                        "the vision and language encoders, then falls back to SDPA. SDPA forces the "
+                        "portable PyTorch backend throughout SeC."
                     ),
-                ),
-                io.Boolean.Input(
-                    "allow_mask_overlap",
-                    default=True,
-                    advanced=True,
-                    tooltip="Allow masks from multiple tracked objects to overlap.",
                 ),
             ],
             outputs=[SeCModelType.Output("model")],
@@ -47,16 +42,9 @@ class SeCModelLoader(io.ComfyNode):
     def execute(
         cls,
         model_name: str,
-        use_flash_attention: bool = True,
-        allow_mask_overlap: bool = True,
+        attention: str = "auto",
     ) -> io.NodeOutput:
-        return io.NodeOutput(
-            load_sec_model(
-                model_name,
-                bool(use_flash_attention),
-                bool(allow_mask_overlap),
-            )
-        )
+        return io.NodeOutput(load_sec_model(model_name, attention))
 
 
 class SeCTrackVisualConcept(io.ComfyNode):
@@ -67,34 +55,35 @@ class SeCTrackVisualConcept(io.ComfyNode):
             display_name="SeC Track Visual Concept",
             category="Turing Utils/SeC",
             description=(
-                "Track one visual concept through a video. With input_mask connected, the mask is "
-                "authoritative and points must agree with it; the BBOX limits its region. Without a "
-                "mask, BBOX and positive/negative points are submitted together as one SAM2 prompt."
+                "Track one visual concept through a video. With mask connected, the mask is "
+                "authoritative and points must agree with it; the bounding box limits its region. "
+                "Without a mask, the box and positive/negative coordinates form one SAM2 prompt."
             ),
             inputs=[
                 SeCModelType.Input("model"),
                 io.Image.Input("frames"),
                 io.String.Input(
-                    "positive_points",
+                    "positive_coords",
                     default="",
                     multiline=True,
                     optional=True,
                     tooltip='JSON point list such as [{"x": 120, "y": 240}].',
                 ),
                 io.String.Input(
-                    "negative_points",
+                    "negative_coords",
                     default="",
                     multiline=True,
                     optional=True,
                     tooltip='JSON exclusion-point list such as [{"x": 80, "y": 200}].',
                 ),
-                io.BBOX.Input(
-                    "bbox",
+                io.BoundingBox.Input(
+                    "bounding_box",
                     optional=True,
-                    tooltip="Legacy BBOX prompt, including the output from Mask to Visual Prompts.",
+                    force_input=True,
+                    tooltip="Canonical ComfyUI BOUNDING_BOX prompt.",
                 ),
                 io.Mask.Input(
-                    "input_mask",
+                    "mask",
                     optional=True,
                     tooltip=(
                         "One mask or one mask per video frame. If batched, the annotation-frame mask "
@@ -108,7 +97,6 @@ class SeCTrackVisualConcept(io.ComfyNode):
                     default="forward",
                 ),
                 io.Int.Input("annotation_frame_idx", default=0, min=0, max=1_000_000, step=1),
-                io.Int.Input("object_id", default=1, min=1, max=1_000_000, step=1, advanced=True),
                 io.Int.Input(
                     "max_frames_to_track",
                     default=-1,
@@ -119,8 +107,8 @@ class SeCTrackVisualConcept(io.ComfyNode):
                     tooltip="-1 tracks every reachable frame in the selected direction.",
                 ),
                 io.Int.Input(
-                    "mllm_memory_size",
-                    default=12,
+                    "semantic_keyframes",
+                    default=7,
                     min=1,
                     max=20,
                     step=1,
@@ -139,28 +127,26 @@ class SeCTrackVisualConcept(io.ComfyNode):
         cls,
         model,
         frames,
-        positive_points="",
-        negative_points="",
-        bbox=None,
-        input_mask=None,
+        positive_coords="",
+        negative_coords="",
+        bounding_box=None,
+        mask=None,
         tracking_direction="forward",
         annotation_frame_idx=0,
-        object_id=1,
         max_frames_to_track=-1,
-        mllm_memory_size=12,
+        semantic_keyframes=7,
     ) -> io.NodeOutput:
         masks = track_visual_concept(
             model,
             frames,
-            positive_points=positive_points,
-            negative_points=negative_points,
-            bbox=bbox,
-            input_mask=input_mask,
+            positive_coords=positive_coords,
+            negative_coords=negative_coords,
+            bounding_box=bounding_box,
+            mask=mask,
             tracking_direction=tracking_direction,
             annotation_frame_idx=int(annotation_frame_idx),
-            object_id=int(object_id),
             max_frames_to_track=int(max_frames_to_track),
-            mllm_memory_size=int(mllm_memory_size),
+            semantic_keyframes=int(semantic_keyframes),
         )
         return io.NodeOutput(masks)
 

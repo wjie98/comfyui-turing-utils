@@ -156,19 +156,116 @@ class SeCNodeTest(unittest.TestCase):
         loader_inputs = [item.id for item in loader.inputs]
         tracker_inputs = [item.id for item in tracker.inputs]
         self.assertNotIn("device", loader_inputs)
+        self.assertEqual(loader_inputs, ["model_name", "attention"])
         self.assertNotIn("offload_video_to_cpu", tracker_inputs)
         self.assertNotIn("auto_unload_model", tracker_inputs)
+        self.assertNotIn("allow_mask_overlap", loader_inputs)
+        self.assertNotIn("object_id", tracker_inputs)
+        self.assertNotIn("mllm_memory_size", tracker_inputs)
+        self.assertIn("semantic_keyframes", tracker_inputs)
+        self.assertIn("positive_coords", tracker_inputs)
+        self.assertIn("negative_coords", tracker_inputs)
+        self.assertIn("bounding_box", tracker_inputs)
+        self.assertIn("mask", tracker_inputs)
         self.assertEqual([item.id for item in tracker.outputs], ["masks"])
+
+    def test_attention_auto_selects_only_compatible_flash_implementations(self):
+        cuda = torch.device("cuda")
+        with (
+            mock.patch.object(sec, "_device_capability", return_value=(8, 6)),
+            mock.patch.object(sec, "_installed_package_version", return_value="2.8.3"),
+            mock.patch.object(sec, "_module_available", return_value=False),
+        ):
+            ampere = sec.resolve_sec_attention("auto", cuda, torch.float16)
+        self.assertEqual((ampere.vision, ampere.llm), ("sdpa", "flash_attention_2"))
+
+        with (
+            mock.patch.object(sec, "_device_capability", return_value=(7, 5)),
+            mock.patch.object(sec, "_installed_package_version", return_value="2.8.3"),
+            mock.patch.object(sec, "_module_available", return_value=False),
+        ):
+            turing_with_fa2 = sec.resolve_sec_attention("auto", cuda, torch.float16)
+        self.assertEqual((turing_with_fa2.vision, turing_with_fa2.llm), ("sdpa", "sdpa"))
+
+        with (
+            mock.patch.object(sec, "_device_capability", return_value=(7, 5)),
+            mock.patch.object(sec, "_installed_package_version", return_value="1.0.9"),
+            mock.patch.object(sec, "_module_available", return_value=False),
+        ):
+            turing_with_fa1 = sec.resolve_sec_attention("auto", cuda, torch.float16)
+        self.assertEqual((turing_with_fa1.vision, turing_with_fa1.llm), ("flash_attention_1", "sdpa"))
+
+        with (
+            mock.patch.object(sec, "_device_capability", return_value=(9, 0)),
+            mock.patch.object(sec, "_installed_package_version", return_value="2.8.3"),
+            mock.patch.object(sec, "_module_available", return_value=True),
+        ):
+            hopper = sec.resolve_sec_attention("auto", cuda, torch.bfloat16)
+        self.assertEqual((hopper.vision, hopper.llm), ("sdpa", "flash_attention_3"))
+
+    def test_attention_sdpa_is_explicit_and_portable(self):
+        plan = sec.resolve_sec_attention("sdpa", torch.device("cpu"), torch.float32)
+        self.assertEqual((plan.vision, plan.llm, plan.tracker), ("sdpa", "sdpa", "sdpa"))
+        legacy = sec.resolve_sec_attention(False, torch.device("cpu"), torch.float16)
+        self.assertEqual(legacy.requested, "sdpa")
+        with self.assertRaisesRegex(ValueError, "expected auto or sdpa"):
+            sec.resolve_sec_attention("w8a8", torch.device("cpu"), torch.float16)
+
+    def test_intern_vit_sdpa_matches_reference_attention(self):
+        from comfyui_turing_utils.vendor.sec.configuration_intern_vit import InternVisionConfig
+        from comfyui_turing_utils.vendor.sec.modeling_intern_vit import InternAttention
+
+        torch.manual_seed(947)
+        config = InternVisionConfig(
+            hidden_size=32,
+            num_attention_heads=4,
+            intermediate_size=64,
+            qk_normalization=True,
+            attention_dropout=0.0,
+            dropout=0.0,
+            use_flash_attn=False,
+        )
+        config.attention_backend = "sdpa"
+        attention = InternAttention(config).eval()
+        hidden_states = torch.randn(2, 17, 32)
+
+        with torch.inference_mode():
+            expected = attention._naive_attn(hidden_states)
+            actual = attention(hidden_states)
+
+        torch.testing.assert_close(actual, expected, rtol=1e-5, atol=1e-6)
+
+    def test_intern_vit_flash_failure_is_cached_as_sdpa_fallback(self):
+        from comfyui_turing_utils.vendor.sec.configuration_intern_vit import InternVisionConfig
+        from comfyui_turing_utils.vendor.sec.modeling_intern_vit import InternAttention
+
+        config = InternVisionConfig(
+            hidden_size=32,
+            num_attention_heads=4,
+            intermediate_size=64,
+            qk_normalization=False,
+            use_flash_attn=True,
+        )
+        config.attention_backend = "flash_attention_2"
+        attention = InternAttention(config).eval()
+        hidden_states = torch.randn(1, 9, 32)
+
+        with mock.patch.object(attention, "_flash_attn", side_effect=RuntimeError("no kernel image")):
+            actual = attention(hidden_states)
+
+        self.assertEqual(attention.attention_backend, "sdpa")
+        self.assertFalse(attention.use_flash_attn)
+        torch.testing.assert_close(actual, attention._sdpa_attn(hidden_states))
 
     def test_bbox_and_points_form_one_combined_prompt(self):
         frames = torch.zeros(3, 12, 16, 3)
         prompt = sec.prepare_visual_prompt(
             frames,
             annotation_frame_idx=0,
-            positive_points='[{"x": 4, "y": 5}]',
-            negative_points='[{"x": 12, "y": 9}]',
-            bbox=[{"startX": 2, "startY": 3, "endX": 14, "endY": 11}],
-            input_mask=None,
+            positive_coords='[{"x": 4, "y": 5}]',
+            negative_coords='[{"x": 12, "y": 9}]',
+            bounding_box={"x": 2, "y": 3, "width": 12, "height": 8},
+            mask=None,
         )
 
         self.assertIsNone(prompt.mask)
@@ -183,10 +280,10 @@ class SeCNodeTest(unittest.TestCase):
         prompt = sec.prepare_visual_prompt(
             frames,
             annotation_frame_idx=1,
-            positive_points='[{"x": 6, "y": 5}]',
-            negative_points='[{"x": 1, "y": 1}]',
-            bbox=[{"startX": 3, "startY": 2, "endX": 14, "endY": 11}],
-            input_mask=masks,
+            positive_coords='[{"x": 6, "y": 5}]',
+            negative_coords='[{"x": 1, "y": 1}]',
+            bounding_box={"x": 3, "y": 2, "width": 11, "height": 9},
+            mask=masks,
         )
 
         self.assertIsNotNone(prompt.mask)
@@ -202,19 +299,19 @@ class SeCNodeTest(unittest.TestCase):
             sec.prepare_visual_prompt(
                 frames,
                 annotation_frame_idx=0,
-                positive_points='[{"x": 0, "y": 0}]',
-                negative_points="",
-                bbox=None,
-                input_mask=mask,
+                positive_coords='[{"x": 0, "y": 0}]',
+                negative_coords="",
+                bounding_box=None,
+                mask=mask,
             )
         with self.assertRaisesRegex(ValueError, "Negative point .* inside"):
             sec.prepare_visual_prompt(
                 frames,
                 annotation_frame_idx=0,
-                positive_points="",
-                negative_points='[{"x": 3, "y": 3}]',
-                bbox=None,
-                input_mask=mask,
+                positive_coords="",
+                negative_coords='[{"x": 3, "y": 3}]',
+                bounding_box=None,
+                mask=mask,
             )
 
     @mock.patch.object(sec.comfy.model_management, "throw_exception_if_processing_interrupted")
@@ -236,14 +333,13 @@ class SeCNodeTest(unittest.TestCase):
         masks = sec.track_visual_concept(
             handle,
             frames,
-            positive_points='[{"x": 4, "y": 4}]',
-            negative_points="",
-            bbox=None,
+            positive_coords='[{"x": 4, "y": 4}]',
+            negative_coords="",
+            bounding_box=None,
             tracking_direction="bidirectional",
             annotation_frame_idx=1,
-            object_id=7,
             max_frames_to_track=-1,
-            mllm_memory_size=6,
+            semantic_keyframes=6,
         )
 
         self.assertEqual(tuple(masks.shape), (4, 8, 10))
@@ -253,6 +349,7 @@ class SeCNodeTest(unittest.TestCase):
         self.assertGreater(kwargs["memory_required"], 0)
         self.assertEqual(predictor.init_args[1:], (True, True))
         self.assertEqual([seed[0] for seed in predictor.seeds], ["points", "points"])
+        self.assertEqual([seed[2] for seed in predictor.seeds], [1, 1])
         self.assertEqual([call[2] for call in model.calls], [False, True])
         self.assertGreaterEqual(predictor.reset_count, 3)
 

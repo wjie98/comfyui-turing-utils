@@ -325,7 +325,7 @@ def visual_prompts_from_mask(
             separators=(",", ":"),
         )
 
-    # SeC currently consumes the legacy KJNodes BBOX contract.
+    # Preserve the legacy KJNodes BBOX contract for older consumers.
     legacy_bbox = [{"startX": x0, "startY": y0, "endX": x1, "endY": y1}]
     # ComfyUI's built-in SAM3 uses the canonical BOUNDING_BOX contract, nested
     # once because this node always outputs exactly one selected frame.
@@ -453,7 +453,7 @@ class MaskToVisualPrompts(io.ComfyNode):
             category="Turing Utils/mask",
             description=(
                 "Use the first IMAGE/MASK frame to derive reusable positive/negative point "
-                "JSON, legacy SeC/KJ BBOX, and ComfyUI BOUNDING_BOX prompts. Positive points "
+                "JSON, legacy KJ BBOX, and canonical SeC/SAM3 BOUNDING_BOX prompts. Positive points "
                 "cover perceptually distinct colour regions and prioritise thin mask structures. "
                 "The preview renders the thresholded mask, prompts, and box over the source image."
             ),
