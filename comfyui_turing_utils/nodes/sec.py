@@ -94,7 +94,18 @@ class SeCTrackVisualConcept(io.ComfyNode):
                     options=["forward", "backward", "bidirectional"],
                     default="forward",
                 ),
-                io.Int.Input("annotation_frame_idx", default=0, min=0, max=1_000_000, step=1),
+                io.Int.Input(
+                    "annotation_frame_idx",
+                    default=0,
+                    min=-1_000_000,
+                    max=1_000_000,
+                    step=1,
+                    tooltip=(
+                        "Non-negative values are absolute frame indexes. Negative values use "
+                        "standard Python indexing: -1 selects the final frame, -2 the "
+                        "penultimate frame."
+                    ),
+                ),
                 io.Int.Input(
                     "max_frames_to_track",
                     default=-1,

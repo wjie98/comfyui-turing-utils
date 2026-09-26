@@ -629,6 +629,21 @@ def _seed_predictor(predictor, state, prompt: SeCVisualPrompt, frame_idx: int):
     return (logits[0].detach().float().cpu().numpy().squeeze() > 0.0)
 
 
+def _resolve_annotation_frame_idx(annotation_frame_idx: int, frame_count: int) -> int:
+    """Resolve absolute or standard Python-style negative frame indexes."""
+
+    index = int(annotation_frame_idx)
+    if index < 0:
+        index = int(frame_count) + index
+    if not 0 <= index < int(frame_count):
+        accepted = f"[{-frame_count},-1] or [0,{frame_count - 1}]"
+        raise ValueError(
+            f"annotation_frame_idx must be in {accepted}; negative values use Python "
+            f"indexing where -1 is the final frame, got {annotation_frame_idx}"
+        )
+    return index
+
+
 def track_visual_concept(
     handle: SeCModelHandle,
     frames: torch.Tensor,
@@ -650,10 +665,7 @@ def track_visual_concept(
     frame_count = int(frames.shape[0])
     if frame_count < 1:
         raise ValueError("frames must contain at least one image")
-    if not 0 <= int(annotation_frame_idx) < frame_count:
-        raise ValueError(
-            f"annotation_frame_idx must be in [0,{frame_count - 1}], got {annotation_frame_idx}"
-        )
+    annotation_frame_idx = _resolve_annotation_frame_idx(annotation_frame_idx, frame_count)
     if tracking_direction not in {"forward", "backward", "bidirectional"}:
         raise ValueError(f"Unsupported tracking_direction: {tracking_direction}")
     if int(semantic_keyframes) < 1:

@@ -170,6 +170,7 @@ class SeCNodeTest(unittest.TestCase):
         tracker_by_id = {item.id: item for item in tracker.inputs}
         self.assertFalse(tracker_by_id["positive_coords"].multiline)
         self.assertFalse(tracker_by_id["negative_coords"].multiline)
+        self.assertEqual(tracker_by_id["annotation_frame_idx"].min, -1_000_000)
         self.assertEqual([item.id for item in tracker.outputs], ["masks"])
 
     def test_attention_auto_selects_only_compatible_flash_implementations(self):
@@ -317,6 +318,14 @@ class SeCNodeTest(unittest.TestCase):
                 mask=mask,
             )
 
+    def test_annotation_frame_index_supports_end_relative_values(self):
+        self.assertEqual(sec._resolve_annotation_frame_idx(-1, 4), 3)
+        self.assertEqual(sec._resolve_annotation_frame_idx(-2, 4), 2)
+        self.assertEqual(sec._resolve_annotation_frame_idx(-4, 4), 0)
+        self.assertEqual(sec._resolve_annotation_frame_idx(3, 4), 3)
+        with self.assertRaisesRegex(ValueError, "final frame"):
+            sec._resolve_annotation_frame_idx(-5, 4)
+
     @mock.patch.object(sec.comfy.model_management, "throw_exception_if_processing_interrupted")
     @mock.patch.object(sec.comfy.model_management, "intermediate_device", return_value=torch.device("cpu"))
     @mock.patch.object(sec.comfy.model_management, "load_models_gpu")
@@ -340,7 +349,7 @@ class SeCNodeTest(unittest.TestCase):
             negative_coords="",
             bounding_box=None,
             tracking_direction="bidirectional",
-            annotation_frame_idx=1,
+            annotation_frame_idx=-3,
             max_frames_to_track=-1,
             semantic_keyframes=6,
         )
@@ -352,7 +361,9 @@ class SeCNodeTest(unittest.TestCase):
         self.assertGreater(kwargs["memory_required"], 0)
         self.assertEqual(predictor.init_args[1:], (True, True))
         self.assertEqual([seed[0] for seed in predictor.seeds], ["points", "points"])
+        self.assertEqual([seed[1] for seed in predictor.seeds], [1, 1])
         self.assertEqual([seed[2] for seed in predictor.seeds], [1, 1])
+        self.assertEqual([call[0] for call in model.calls], [1, 1])
         self.assertEqual([call[2] for call in model.calls], [False, True])
         self.assertGreaterEqual(predictor.reset_count, 3)
 

@@ -197,7 +197,9 @@ only after its CUDA sources or required version change.
   per-run tracking state remain on CPU while ComfyUI owns model loading,
   retention, and eviction; only the tracked mask batch is returned. The advanced
   `semantic_keyframes` control limits the labelled scene-change memories supplied
-  to the MLLM recovery path.
+  to the MLLM recovery path. `annotation_frame_idx` accepts absolute indexes or
+  standard Python-style negative indexes: `-1` selects the final frame and `-2`
+  selects the penultimate frame.
 - `Is Input Present` accepts an optional value of any type and reports whether
   it is connected and non-empty; scalar `0` and `false` still count as present.
   Its second output forwards that value or lazily evaluates an optional fallback.
