@@ -1,6 +1,6 @@
 # Turing Utils 节点清单
 
-当前开发工作树有 **44 个公开节点、11 个隐藏内部执行节点**。画布模块尚未推送或部署。
+当前开发工作树有 **44 个公开节点、10 个隐藏内部执行节点**。
 右键菜单只使用 `Turing Utils/分类` 一层子目录，搜索仍可按节点名定位。
 
 ## 完整公开清单
@@ -15,7 +15,7 @@
 | Bernini | 2 | Bernini Context Windows；Bernini Inpaint Condition |
 | Krea2 | 1 | Krea2 Identity Edit Conditioning |
 | Workflow | 3 | Is Input Present；Lazy If / Else；Stage Barrier |
-| Canvas | 6 | Canvas Settings；Canvas Image；Canvas Video；Canvas Audio；Canvas H3 Generate；Canvas Video Mask |
+| Canvas | 6 | Canvas Root；Canvas H3 Settings；Canvas Image；Canvas Video；Canvas Audio；Canvas H3 Generate |
 
 H3 音频保护节点放在 Video，与延续拼接、截断工具相邻。
 Configure Attention Strategy 放在 Models；Sol/SLA/Veda 通过 DynamicCombo 选择，

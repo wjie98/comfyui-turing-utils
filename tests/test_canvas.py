@@ -25,7 +25,7 @@ def graph():
             "dit": "dit.safetensors", "clip": "clip.safetensors", "video_vae": "vae.safetensors", "audio_vae": "audio.safetensors", "loras": "[]"}},
         {"id": "2", "type": "TuringCanvasImage", "values": {"asset_id": ""}},
         {"id": "3", "type": "TuringCanvasH3", "values": {"mode": "reference", "width": 64, "height": 64,
-            "frames": 5, "user_prompt": "user", "model_prompt": "", "seed": 0}, "inputs": {"reference_images": {"node": "2", "slot": 0}}},
+            "frames": 5, "user_prompt": "user", "model_prompt": "", "seed": 0}, "inputs": {"images.image_0": {"node": "2", "slot": 0}}},
         {"id": "4", "type": "TuringCanvasH3", "values": {"mode": "edit", "width": 64, "height": 64,
             "frames": 5, "user_prompt": "edit", "seed": 0}, "inputs": {"target": {"node": "3", "slot": 0}}},
     ]}
@@ -99,6 +99,8 @@ class CanvasTest(unittest.TestCase):
         self.assertIn("canvas_error", guard_prompt(mixed)["prompt"])
 
     def test_private_ports_and_public_cards_cannot_execute(self):
+        self.assertNotIn("TuringCanvasMask", PUBLIC_NODES)
+        self.assertNotIn("sec_model", [i.id for i in PUBLIC_NODES["TuringCanvasSettings"].GET_SCHEMA().inputs])
         for cls in PUBLIC_NODES.values():
             schema = cls.GET_SCHEMA()
             self.assertEqual(schema.category, "Turing Utils/Canvas")
@@ -132,7 +134,7 @@ class CanvasTest(unittest.TestCase):
         one = compile_task(self.graph, "3", self.project)
         two = compile_task(self.graph, "3", self.project)
         self.assertEqual(one["semantic"], two["semantic"])
-        self.assertEqual(one["read_reference_images"], two["read_reference_images"])
+        self.assertEqual(one["read_images.image_0"], two["read_images.image_0"])
         self.assertNotEqual(one["run_noise"], two["run_noise"])
         self.assertEqual(one["semantic"]["inputs"]["prompt"], "user")
         self.graph["nodes"][2]["values"]["model_prompt"] = "model"
@@ -148,6 +150,98 @@ class CanvasTest(unittest.TestCase):
         self.assertEqual(tuple(video.shape[:3]), (1, 24, 2))
         self.assertEqual(tuple(sound.shape[:3]), (1, 32, 2))
         self.assertEqual((count, prefix, audio), (5, 0, None))
+        latent, count, _, _ = PrepareH3().prepare(json.dumps({**values, "frames": 7}), None, None)
+        self.assertEqual(count, 7)
+        self.assertGreater(latent["samples"].unbind()[0].shape[2], 2)
+
+    def test_denoise_uses_basic_scheduler_and_zero_prunes_dit(self):
+        self.graph["nodes"][2]["values"]["denoise"] = 0.35
+        prompt = compile_task(self.graph, "3", self.project)
+        self.assertEqual(prompt["sigmas"]["inputs"]["denoise"], 0.35)
+        self.graph["nodes"][2]["values"]["denoise"] = 0
+        prompt = compile_task(self.graph, "3", self.project)
+        self.assertNotIn("sample", prompt)
+        self.assertNotIn("dit", prompt)
+        self.assertNotIn("clip", prompt)
+        self.assertEqual(prompt["separate"]["inputs"]["av_latent"], ["prepare", 0])
+
+    def test_sol_expanded_settings_reach_strategy(self):
+        self.graph["nodes"][0]["values"].update(sol="enabled", **{"sol.routing_threshold": 0.7, "sol.dense_prefix_steps": 2})
+        prompt = compile_task(self.graph, "3", self.project)
+        settings = json.loads(prompt["sol"]["inputs"]["settings"])
+        self.assertEqual(settings["routing_threshold"], 0.7)
+        self.assertEqual(settings["dense_prefix_steps"], 2)
+        self.graph["nodes"][0]["values"]["sol"] = "disabled"
+        self.assertNotIn("sol", compile_task(self.graph, "3", self.project))
+
+    def test_filename_history_and_collision_are_project_local(self):
+        source = self.root / "portrait.png"
+        Image.new("RGB", (8, 8)).save(source)
+        first = self.project.copy(source, "image")
+        second = self.project.copy(source, "image")
+        self.assertEqual(first["id"], "materials/images/portrait.png")
+        self.assertEqual(second["id"], "materials/images/portrait_000001.png")
+        self.assertEqual(len(self.project.history("image")), 3)
+        aid, path = self.project.reserve(".mp4", prefix="shot_a")
+        self.project.register(aid, path, "video", "shot")
+        self.assertEqual(aid, "generations/shot_a/shot_a_000001.mp4")
+        self.assertEqual(len(self.project.history("video", "shot_a")), 1)
+        self.assertEqual(self.project.history("video", "shot_b"), [])
+        with self.assertRaises(ValueError):
+            self.project.reserve(".mp4", prefix="../escape")
+
+    def test_dynamic_reference_order_and_public_controls(self):
+        node = self.graph["nodes"][2]
+        node["inputs"] = {"images.image_2": {"node": "2"}, "images.image_0": {"node": "2"}}
+        prompt = compile_task(self.graph, "3", self.project)
+        self.assertEqual(prompt["image_ref"]["inputs"]["images.image_0"], ["read_images.image_0", 0])
+        fields = [i.id for i in PUBLIC_NODES["TuringCanvasH3"].GET_SCHEMA().inputs]
+        self.assertEqual(fields[:7], ["first_frame", "last_frame", "images", "videos", "audios", "prefix", "target"])
+        for field in ("mode", "seed", "random_seed", "mask"):
+            self.assertNotIn(field, fields)
+
+    def test_image_maximum_megapixels(self):
+        images, _, _ = read_material(self.project, {"asset": self.image, "max_megapixels": 0.001}, 100, 100)
+        self.assertLessEqual(images.shape[1] * images.shape[2], 1000)
+        images, _, _ = read_material(self.project,
+            {"asset": self.image, "max_megapixels": 0.01, "spatial_multiple": 32}, 832, 480)
+        self.assertEqual(images.shape[1] % 32, 0)
+        self.assertEqual(images.shape[2] % 32, 0)
+        self.assertLessEqual(images.shape[1] * images.shape[2], 10000)
+
+    def test_target_and_prefix_audio_masks_and_padding(self):
+        from comfy_api.latest import io
+        from comfy_extras.nodes_minimax_h3 import EmptyMiniMaxH3LatentAV
+        def encode(pixels, vae):
+            latent = EmptyMiniMaxH3LatentAV.execute(64, 64, len(pixels)).result[0]
+            return ({"samples": latent["samples"].unbind()[0]},)
+        def encode_audio(vae, audio):
+            return io.NodeOutput({"samples": torch.zeros(1, 32, 2, 200)})
+        settings = json.dumps({"width": 64, "height": 64, "frames": 7})
+        sound = {"waveform": torch.ones(1, 2, 44100), "sample_rate": 44100}
+        with mock.patch("comfyui_turing_utils.canvas.execution.MiniMaxH3VideoVAEEncode.encode", side_effect=encode), mock.patch(
+                "comfyui_turing_utils.canvas.execution.VAEEncodeAudio.execute", side_effect=encode_audio):
+            latent, count, prefix, original = PrepareH3().prepare(settings, None, None,
+                prefix_images=torch.rand(5, 64, 64, 3), prefix_audio=sound, images=torch.rand(7, 64, 64, 3))
+            self.assertEqual((count, prefix), (12, 5))
+            self.assertIsNone(original)
+            vm, am = latent["noise_mask"].unbind()
+            self.assertTrue(torch.all(am[..., :45] == 0))
+            self.assertTrue(torch.all(am[..., 46:] == 1))
+            latent, _, _, original = PrepareH3().prepare(settings, None, None,
+                prefix_images=torch.rand(5, 64, 64, 3), prefix_audio=sound,
+                images=torch.rand(7, 64, 64, 3), audio=sound)
+            self.assertTrue(torch.all(latent["noise_mask"].unbind()[1] == 0))
+            self.assertEqual(original["waveform"].shape[-1], 22051)
+
+    def test_video_frame_selection_keeps_audio_timeline(self):
+        rate = 44100
+        result = Publish().publish("project", "3", "sig", json.dumps({"materials": {}}), "selection",
+            images=torch.rand(24, 32, 32, 3), audio={"waveform": torch.ones(1, 2, rate) * 0.1, "sample_rate": rate}, length=24)
+        images, audio, _ = read_material(self.project, {"asset": result["result"][0],
+            "skip_first_frames": 6, "frame_load_cap": 6, "select_every_nth": 2, "force_rate": 24})
+        self.assertEqual(len(images), 12)
+        self.assertEqual(audio["waveform"].shape[-1], rate // 2)
 
     def test_compiled_graph_passes_real_comfy_validation_without_loading_models(self):
         import execution
@@ -213,10 +307,11 @@ class CanvasTest(unittest.TestCase):
             latent = EmptyMiniMaxH3LatentAV.execute(64, 64, len(pixels)).result[0]
             return ({"samples": latent["samples"].unbind()[0]},)
         with mock.patch("comfyui_turing_utils.canvas.execution.MiniMaxH3VideoVAEEncode.encode", side_effect=encode):
-            for mode in ("edit", "extend", "outpaint"):
+            for mode in ("edit", "extend"):
                 values = {**self.graph["nodes"][2]["values"], "mode": mode, "mode.prefix_frames": 5}
                 latent, count, prefix, _ = PrepareH3().prepare(json.dumps(values), None, None,
-                    images=torch.rand(5, 64, 64, 3))
+                    images=torch.rand(5, 64, 64, 3),
+                    prefix_images=torch.rand(5, 64, 64, 3) if mode == "extend" else None)
                 masks = latent["noise_mask"].unbind()
                 self.assertEqual(count, 10 if mode == "extend" else 5)
                 self.assertEqual(prefix, 5 if mode == "extend" else 0)

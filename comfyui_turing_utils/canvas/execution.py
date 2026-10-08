@@ -13,8 +13,8 @@ from comfy_extras.nodes_lt import LTXVConcatAVLatent
 
 from ..nodes.latent import SetVideoLatentNoiseMask
 from ..nodes.minimax_vae import MiniMaxH3VideoVAEEncode
-from ..nodes.video_padding import VideoFramesPadding
-from ..nodes.video_roi import pad_video_for_outpaint
+from ..nodes.video_padding import VideoFramesPadding, padded_frame_count
+from ..nodes.video_sequence import VideoContinuationConcat, H3SetAudioPrefixNoiseMask
 from .media import read_material
 from .store import Project
 from ..nodes.attention import _ATTENTION_STRATEGIES
@@ -40,30 +40,26 @@ class PrepareH3:
     @classmethod
     def INPUT_TYPES(cls):
         return {"required": {"settings": ("STRING",), "vae": ("VAE",), "audio_vae": ("VAE",)},
-                "optional": {"images": ("IMAGE",), "mask": ("MASK",), "audio": ("AUDIO",)}}
+                "optional": {"images": ("IMAGE",), "mask": ("MASK",), "audio": ("AUDIO",),
+                             "prefix_images": ("IMAGE",), "prefix_audio": ("AUDIO",)}}
 
-    def prepare(self, settings, vae, audio_vae, images=None, mask=None, audio=None):
+    def prepare(self, settings, vae, audio_vae, images=None, mask=None, audio=None, prefix_images=None, prefix_audio=None):
         cfg = json.loads(settings)
         width, height, count = cfg["width"], cfg["height"], cfg["frames"]
-        mode, prefix = cfg["mode"], 0
-        if mode != "reference" and images is None:
-            raise ValueError(f"{mode} requires target video")
-        if mode == "outpaint":
-            images, mask = pad_video_for_outpaint(images, {
-                "layout": "relative_frame", "expand_ratio": cfg.get("mode.expand_ratio", 0.5),
-                "offset_x": cfg.get("mode.offset_x", 0), "offset_y": cfg.get("mode.offset_y", 0),
-                "allow_image_outside_frame": False}, width * height / 1e6, 32, "edge")
-        if mode == "extend":
-            original_count = len(images)
-            prefix = min(len(images), int(cfg.get("mode.prefix_frames", 22)))
-            context = images[-prefix:]
-            images = torch.cat([context, context[-1:].repeat(count, 1, 1, 1)])
-            mask = torch.ones(images.shape[:3], dtype=images.dtype, device=images.device)
-            mask[:prefix] = 0
-            if audio is not None:
-                rate = audio["sample_rate"]
-                start = round((original_count - prefix) * rate / 24)
-                audio = {**audio, "waveform": audio["waveform"][..., start:round(original_count * rate / 24)]}
+        mode, prefix = ("edit" if images is not None else "reference"), 0
+        empty_body = images is None
+        trim_info = None
+        body_audio_present = audio is not None and cfg.get("preserve_audio", True)
+        if prefix_images is not None:
+            if images is None:
+                images = prefix_images[-1:].repeat(count, 1, 1, 1)
+            composed = VideoContinuationConcat.execute(prefix_images=prefix_images, prefix_audio=prefix_audio,
+                body_images=images, body_audio=audio if body_audio_present else None, frame_rate=24, mode="concat").result
+            images, mask, audio, trim_info = composed
+            if prefix_audio is None and not body_audio_present:
+                audio = None
+            prefix = len(prefix_images)
+            mode = "edit"
         if mode != "reference":
             count, height, width = images.shape[:3]
             if mask is None:
@@ -77,24 +73,26 @@ class PrepareH3:
             padded = VideoFramesPadding.execute(type="minimax", image=images, mask=mask).result
             video = MiniMaxH3VideoVAEEncode().encode(padded[0], vae)[0]
             video = SetVideoLatentNoiseMask.execute(video, padded[1], "minimax").result[0]
+            if empty_body:
+                video["samples"] = video["samples"] * (1 - video["noise_mask"])
             length = padded[4]
         else:
-            length = count
+            length = padded_frame_count(count, "minimax")
         empty = EmptyMiniMaxH3LatentAV.execute(width, height, length).result[0]
         empty_video, empty_audio = empty["samples"].unbind()
         if mode == "reference":
             video = {"samples": empty_video}
-        preserved = audio if cfg.get("preserve_audio", True) else None
+        preserved = audio if cfg.get("preserve_audio", True) or prefix_audio is not None else None
         if preserved is not None:
             waveform = preserved["waveform"]
             samples = round((5 + 17 * max(0, (length - 5 + 16) // 17)) * preserved["sample_rate"] / 24)
             waveform = F.pad(waveform[..., :samples], (0, max(0, samples - waveform.shape[-1])))
             sound = VAEEncodeAudio.execute(audio_vae, {**preserved, "waveform": waveform}).result[0]
             sound["noise_mask"] = torch.zeros_like(sound["samples"])
-            if mode == "extend":
-                boundary = round(prefix / 24 * preserved["sample_rate"] * sound["samples"].shape[-1] / samples)
-                sound["noise_mask"][..., boundary:] = 1
-                preserved = None  # Decode the generated body, not the source prefix soundtrack.
+            if trim_info is not None and not body_audio_present:
+                trim_info = {**trim_info, "total_audio_samples": samples}
+                sound = H3SetAudioPrefixNoiseMask.execute(sound, trim_info, "protect_prefix_generate_body").result[0]
+                preserved = None
         else:
             sound = {"samples": empty_audio}
         latent = LTXVConcatAVLatent.execute(video, sound).result[0]
@@ -131,12 +129,12 @@ class Publish:
                 expected = round(len(images) * rate / 24)
                 waveform = F.pad(waveform, (0, max(0, expected - waveform.shape[-1])))
                 audio = {**audio, "waveform": waveform}
-            asset_id, path = project.reserve(".mp4")
+            asset_id, path = project.reserve(".mp4", prefix=cfg.get("values", {}).get("filename_prefix", "h3"))
             video = InputImpl.VideoFromComponents(Types.VideoComponents(images=images, audio=audio,
                 frame_rate=Fraction(24)), bit_depth=8, color_space="sRGB")
             video.save_to(str(path), format=Types.VideoContainer.MP4, codec=Types.VideoCodec.H264, crf=19)
             kind = "video"
-        project.register(asset_id, path, kind, f"{task}-{run_id}", {"inputs": cfg["materials"]})
+        project.register(asset_id, path, kind, path.name, {"inputs": cfg["materials"], "snapshot": cfg, "signature": signature})
         project.publish(task, asset_id, signature, cfg)
         return {"ui": {"canvas_result": [{"task": task, "asset": asset_id}]}, "result": (asset_id,)}
 
@@ -165,20 +163,7 @@ class Sol:
         return (_ATTENTION_STRATEGIES["sol"](model, **json.loads(settings)),)
 
 
-class RunFrames:
-    CATEGORY = ""
-    FUNCTION = "run"
-    RETURN_TYPES = ("IMAGE",)
-    @classmethod
-    def INPUT_TYPES(cls):
-        return {"required": {"frames": ("IMAGE",), "run_id": ("STRING",)}}
-
-    def run(self, frames, run_id):
-        return (frames,)
-
-
 INTERNAL_NODES = {"_TuringCanvasRead": ReadAsset, "_TuringCanvasPrepare": PrepareH3,
-                  "_TuringCanvasPublish": Publish, "_TuringCanvasRunNoise": RunNoise, "_TuringCanvasSol": Sol,
-                  "_TuringCanvasRunFrames": RunFrames}
+                  "_TuringCanvasPublish": Publish, "_TuringCanvasRunNoise": RunNoise, "_TuringCanvasSol": Sol}
 for _node in INTERNAL_NODES.values():
     _node.DEV_ONLY = True

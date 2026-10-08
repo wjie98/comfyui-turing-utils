@@ -13,6 +13,7 @@ let lastPlan = [];
 let configuring = false;
 let filteredState;
 let activeTask = null;
+let refreshPending = false;
 
 function snapshot() {
   return {nodes: app.graph._nodes.map(n => ({
@@ -38,17 +39,69 @@ async function request(path, body) {
 
 function report(error) { console.error("Turing Canvas", error); window.alert(error.message ?? String(error)); }
 
+function choose(title, items) {
+  return new Promise(resolve => {
+    const dialog = document.createElement("dialog");
+    dialog.style.cssText = "min-width:360px;max-width:80vw;background:var(--comfy-menu-bg);color:var(--input-text);border:1px solid #555;padding:20px";
+    const heading = document.createElement("h3"); heading.textContent = title;
+    const select = document.createElement("select"); select.size = 12; select.style.cssText = "width:100%;min-height:220px";
+    for (const item of items) { const option = document.createElement("option"); option.value = item.id; option.textContent = item.name; select.append(option); }
+    const ok = document.createElement("button"); ok.textContent = "选择";
+    const cancel = document.createElement("button"); cancel.textContent = "取消";
+    let answer = null;
+    ok.onclick = () => { answer = select.value || null; dialog.close(); };
+    select.ondblclick = ok.onclick;
+    cancel.onclick = () => dialog.close();
+    dialog.onclose = () => { dialog.remove(); resolve(answer); };
+    dialog.append(heading, select, ok, cancel); document.body.append(dialog); dialog.showModal();
+  });
+}
+
+async function history(node) {
+  const {items} = await request("history", {graph: snapshot(), task: String(node.id)});
+  const asset = await choose(node.type === "TuringCanvasH3" ? "历史生成结果" : "项目素材", items);
+  if (!asset) return;
+  if (node.type === "TuringCanvasH3") await request("select", {graph: snapshot(), task: String(node.id), asset});
+  else node.widgets.find(w => w.name === "asset_id").value = asset;
+  await refresh();
+}
+
+async function directoryPicker(node) {
+  let path = "";
+  for (;;) {
+    const data = await request("directories", {path});
+    const selected = await choose(`服务器 output/${path}`, [
+      ...(path ? [{id: "select", name: "使用当前目录"}, {id: "up", name: ".."}] : []),
+      {id: "new", name: "新建项目目录…"}, ...data.directories.map(name => ({id: "dir:" + name, name}))]);
+    if (!selected) return;
+    if (selected === "up") { path = path.split("/").slice(0, -1).join("/"); continue; }
+    if (selected.startsWith("dir:")) { path = [path, selected.slice(4)].filter(Boolean).join("/"); continue; }
+    if (selected === "new") {
+      const name = window.prompt("新项目目录名");
+      if (!name) return;
+      if (/[\\/]/.test(name) || [".", ".."].includes(name)) throw new Error("请输入目录名，不是路径");
+      path = [path, name].filter(Boolean).join("/");
+    }
+    node.widgets.find(w => w.name === "work_directory").value = path;
+    await refresh(); return;
+  }
+}
+
 function preview(node, asset) {
   if (!node.canvasMedia || !asset || !manager()) return;
   const directory = value(manager(), "work_directory");
-  const url = api.apiURL(`/turing/canvas/asset?directory=${encodeURIComponent(directory)}&id=${encodeURIComponent(asset)}${node.type === 'TuringCanvasMask' ? '&preview=1' : ''}`);
+  const url = api.apiURL(`/turing/canvas/asset?directory=${encodeURIComponent(directory)}&id=${encodeURIComponent(asset)}`);
   if (node.canvasMedia.dataset.assetUrl === url) return;
   node.canvasMedia.dataset.assetUrl = url;
-  node.canvasMedia.src = url;
+  node.canvasMedia.src = node.canvasMedia.tagName === "IMG" ? `${url}&preview=1` : url;
+  if (node.canvasMedia.tagName === "VIDEO") node.canvasMedia.poster = `${url}&preview=1`;
 }
 
 async function refresh() {
   if (!manager()) { armed = false; return; }
+  if (refreshPending) return;
+  refreshPending = true;
+  try {
   const data = await request("state", {graph: snapshot()});
   lastState = data.state;
   lastPlan = data.plan;
@@ -63,6 +116,12 @@ async function refresh() {
     node.canvasStatus = lastPlan.find(p => p.id === String(node.id))?.status ?? "material";
   }
   app.graph.setDirtyCanvas(true, true);
+  } finally { refreshPending = false; }
+}
+
+function scheduleRefresh() {
+  clearTimeout(refreshTimer);
+  refreshTimer = setTimeout(() => { filterTypes(); refresh().catch(() => {}); }, 350);
 }
 
 async function waitResult(id) {
@@ -135,11 +194,21 @@ async function importFile(node, file) {
 }
 
 function button(node, name, callback) {
-  node.addWidget("button", name, null, () => Promise.resolve().then(callback).catch(report), {serialize: false});
+  let pending = false;
+  const widget = node.addWidget("button", name, null, async () => {
+    if (pending) return;
+    pending = true;
+    widget.label = `${name} …`;
+    app.graph.setDirtyCanvas(true, false);
+    try { await callback(); } catch (error) { report(error); }
+    finally { pending = false; widget.label = name; app.graph.setDirtyCanvas(true, false); }
+  }, {serialize: false});
+  return widget;
 }
 
 function filterTypes() {
   const active = !!manager();
+  if (filteredState === active) return;
   for (const [type, constructor] of Object.entries(LiteGraph.registered_node_types)) {
     if (!Object.hasOwn(constructor, "canvasOriginalSkip")) constructor.canvasOriginalSkip = constructor.skip_list;
     constructor.skip_list = active ? !type.startsWith(PREFIX) : constructor.canvasOriginalSkip;
@@ -151,8 +220,8 @@ function filterTypes() {
   if (store?.registerNodeDefFilter && filteredState !== active) {
     store.unregisterNodeDefFilter("turing.canvas");
     if (active) store.registerNodeDefFilter({id: "turing.canvas", predicate: def => def.name.startsWith(PREFIX)});
-    filteredState = active;
   }
+  filteredState = active;
 }
 
 app.registerExtension({
@@ -176,8 +245,6 @@ app.registerExtension({
       }
       return create.call(this, type, ...args);
     };
-    setInterval(filterTypes, 1000);
-    setInterval(() => { if (manager() && !busy) refresh().catch(() => {}); }, 3000);
   },
   beforeRegisterNodeDef(nodeType, nodeData) {
     if (nodeData.name.startsWith("_TuringCanvas")) nodeType.skip_list = true;
@@ -186,6 +253,12 @@ app.registerExtension({
     if (!isCard(node)) return;
     const type = node.comfyClass ?? node.type;
     node.properties ??= {};
+    const changed = node.onWidgetChanged;
+    node.onWidgetChanged = function(...args) { changed?.apply(this, args); scheduleRefresh(); };
+    const connected = node.onConnectionsChange;
+    node.onConnectionsChange = function(...args) { connected?.apply(this, args); scheduleRefresh(); };
+    const removed = node.onRemoved;
+    node.onRemoved = function(...args) { removed?.apply(this, args); this.canvasMedia?.pause?.(); scheduleRefresh(); };
     node.size = [390, 350];
     const draw = node.onDrawForeground;
     node.onDrawForeground = function(ctx, ...args) {
@@ -197,8 +270,14 @@ app.registerExtension({
         if (status === "upstream") ctx.setLineDash([8, 5]);
         ctx.strokeRect(0, 0, this.size[0], this.size[1]); ctx.restore();
       }
-      ctx.save(); ctx.fillStyle = "#ccc"; ctx.font = "12px sans-serif";
-      ctx.fillText(`${status ?? "material"} ${this.canvasProgress ?? ""}${armed ? " · refresh armed" : ""}`, 8, -8); ctx.restore();
+      const labels = {running: "生成中", failed: "执行失败", blocked: "缺少素材", changed: "待生成", upstream: "上游待更新"};
+      if (labels[status] && !this.flags?.collapsed) {
+        ctx.save(); ctx.font = "12px sans-serif"; ctx.textAlign = "right";
+        const text = `${labels[status]} ${this.canvasProgress ?? ""}`.trim();
+        const width = ctx.measureText(text).width + 12;
+        ctx.fillStyle = "#202020"; ctx.fillRect(this.size[0] - width - 6, -25, width, 19);
+        ctx.fillStyle = colors[status] ?? "#ccc"; ctx.fillText(text, this.size[0] - 12, -11); ctx.restore();
+      }
     };
     if (type === "TuringCanvasSettings") {
       const name = `canvas/${crypto.randomUUID()}`;
@@ -206,18 +285,22 @@ app.registerExtension({
         const widget = node.widgets.find(w => w.name === key);
         if (widget) widget.value = name;
       }
-      button(node, "Prepare / Lock Global Refresh", async () => {
+      const directory = node.widgets.find(w => w.name === "work_directory");
+      directory.mouse = () => { directoryPicker(node).catch(report); return true; };
+      button(node, "选择工作目录", () => directoryPicker(node));
+      button(node, "允许 / 取消全局执行一次", async () => {
         if (busy) throw new Error("Wait for the current canvas run before preparing another refresh");
         await refresh(); armed = !armed; app.graph.setDirtyCanvas(true, true);
       });
-      button(node, "Refresh Changed Materials Once", globalRefresh);
+      button(node, "执行已变化的节点一次", globalRefresh);
       button(node, "Save Canvas Project", async () => request("save", {graph: snapshot(), workflow: app.graph.serialize()}));
       button(node, "Open Saved Project", async () => {
         if (!window.confirm("Replace the current canvas with the saved project?")) return;
         await app.loadGraphData(await request("load", {graph: snapshot()}));
       });
     } else if (["TuringCanvasImage", "TuringCanvasVideo", "TuringCanvasAudio"].includes(type)) {
-      button(node, "Load / Refresh", async () => {
+      button(node, "选择项目素材", () => history(node));
+      button(node, "导入素材", async () => {
         if (value(manager(), "import_mode") === "local_copy") {
           const asset = await request("import", {graph: snapshot(), task: String(node.id)});
           node.widgets.find(w => w.name === "asset_id").value = asset.id;
@@ -235,9 +318,8 @@ app.registerExtension({
         importFile(node, event.dataTransfer.files[0]).catch(report);
         return true;
       };
-    } else {
-      button(node, "Generate New Result", () => generate(node));
-      if (type === "TuringCanvasH3") button(node, "Enhance User Prompt", async () => {
+    } else if (type === "TuringCanvasH3") {
+      const promptButton = button(node, "生成模型提示词", async () => {
         const widget = node.widgets.find(w => w.name === "model_prompt");
         const before = widget.value;
         const result = await request("enhance", {graph: snapshot(), task: String(node.id)});
@@ -246,33 +328,28 @@ app.registerExtension({
         widget.value = result.model_prompt;
         app.graph.setDirtyCanvas(true, true);
       });
-      button(node, "Select Published Version", async () => {
-        await refresh();
-        const history = lastState.tasks[String(node.id)]?.history ?? [];
-        const answer = window.prompt(history.map((h, i) => `${i + 1}: ${h.asset}`).join("\n"), String(history.length));
-        if (answer === null) return;
-        const item = history[Number(answer) - 1];
-        if (!item) throw new Error("Select a valid version number");
-        await request("select", {graph: snapshot(), task: String(node.id), asset: item.asset});
-        await refresh();
-      });
+      node.widgets.splice(node.widgets.indexOf(promptButton), 1);
+      node.widgets.splice(node.widgets.findIndex(w => w.name === "model_prompt"), 0, promptButton);
+      button(node, "历史生成结果", () => history(node));
     }
-    if (type !== "TuringCanvasSettings") {
-      const tag = ["TuringCanvasImage", "TuringCanvasMask"].includes(type) ? "img" : type === "TuringCanvasAudio" ? "audio" : "video";
+    if (!["TuringCanvasSettings", "TuringCanvasH3Settings"].includes(type)) {
+      const tag = type === "TuringCanvasImage" ? "img" : type === "TuringCanvasAudio" ? "audio" : "video";
       const media = document.createElement(tag);
       media.style.cssText = "width:100%;height:100%;object-fit:contain;background:#161616";
-      if (tag !== "img") { media.controls = true; media.preload = "metadata"; }
+      if (tag !== "img") { media.controls = true; media.preload = "none"; }
+      else { media.loading = "lazy"; media.decoding = "async"; }
       media.addEventListener("dragover", event => event.preventDefault());
       media.addEventListener("drop", event => {
         if (!["TuringCanvasImage", "TuringCanvasVideo", "TuringCanvasAudio"].includes(type)) return;
         event.preventDefault(); event.stopPropagation();
         if (event.dataTransfer.files[0]) importFile(node, event.dataTransfer.files[0]).catch(report);
       });
-      const widget = node.addDOMWidget("material_preview", "canvas_preview", media, {serialize: false, hideOnZoom: false});
+      const widget = node.addDOMWidget("material_preview", "canvas_preview", media, {serialize: false, hideOnZoom: true});
       widget.canvasPreview = true;
       widget.computeSize = () => [350, tag === "audio" ? 65 : 220];
       node.canvasMedia = media;
     }
+    if (type === "TuringCanvasH3") button(node, "生成", () => generate(node));
     const oldMenu = node.getExtraMenuOptions;
     node.getExtraMenuOptions = function(_, options) {
       oldMenu?.apply(this, arguments);
@@ -293,8 +370,7 @@ app.registerExtension({
         }});
       }
     };
-    clearTimeout(refreshTimer);
-    refreshTimer = setTimeout(() => { filterTypes(); refresh().catch(() => {}); }, 500);
+    scheduleRefresh();
   },
   beforeConfigureGraph() { configuring = true; },
   afterConfigureGraph() { configuring = false; armed = false; filterTypes(); refresh().catch(() => {}); },

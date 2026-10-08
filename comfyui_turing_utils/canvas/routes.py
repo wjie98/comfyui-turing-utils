@@ -5,10 +5,12 @@ import json
 import os
 import time
 import uuid
+import hashlib
 from pathlib import Path
 import numpy as np
 import av
-from PIL import Image, UnidentifiedImageError
+import folder_paths
+from PIL import Image, ImageOps, UnidentifiedImageError
 
 from aiohttp import web
 import execution
@@ -16,7 +18,7 @@ from server import PromptServer
 
 from ..nodes.multimodal_chat import MultimodalPromptChat
 from .compiler import compile_task
-from .graph import ASSETS, H3, PUBLIC, material_inputs, plan, validate_canvas, image_ports
+from .graph import ASSETS, H3, PUBLIC, material_inputs, plan, validate_canvas, image_ports, reference_ports
 from .media import read_material
 from .store import Project, atomic_json, local_source, probe_import, contained
 
@@ -63,14 +65,40 @@ def install_canvas_routes():
     async def state(request):
         data = await request.json()
         _, _, project = context(data)
-        return web.json_response({"state": project.state(), "plan": plan(data["graph"], project)})
+        tasks = {k: {"asset": v["asset"], "signature": v["signature"]} for k, v in project.state()["tasks"].items()}
+        return web.json_response({"state": {"tasks": tasks}, "plan": plan(data["graph"], project)})
 
     @endpoint("post", "select")
     async def select(request):
         data = await request.json()
-        _, _, project = context(data)
-        project.select(data["task"], data["asset"])
+        nodes, _, project = context(data)
+        node = nodes[str(data["task"])]
+        if node["type"] != H3:
+            raise ValueError("Select generation history on an H3 node")
+        prefix = node["values"].get("filename_prefix", "h3")
+        if data["asset"] not in {a["id"] for a in project.history("video", prefix)}:
+            raise ValueError("Result is not in this filename prefix")
+        metadata = project.asset(data["asset"])["metadata"]
+        project.publish(data["task"], data["asset"], metadata["signature"], metadata["snapshot"])
         return web.json_response({"ok": True})
+
+    @endpoint("post", "history")
+    async def history(request):
+        data = await request.json()
+        nodes, _, project = context(data)
+        node = nodes[str(data["task"])]
+        kind = ASSETS.get(node["type"], "video")
+        prefix = node["values"].get("filename_prefix", "h3") if node["type"] == H3 else None
+        return web.json_response({"items": project.history(kind, prefix)})
+
+    @endpoint("post", "directories")
+    async def directories(request):
+        data = await request.json()
+        root = Path(folder_paths.get_output_directory()).resolve()
+        relative = data.get("path", "")
+        directory = contained(root, relative) if relative else root
+        children = sorted(p.name for p in directory.iterdir() if p.is_dir() and not p.is_symlink() and not p.name.startswith("."))
+        return web.json_response({"path": directory.relative_to(root).as_posix(), "directories": children})
 
     @endpoint("post", "save")
     async def save(request):
@@ -117,7 +145,7 @@ def install_canvas_routes():
         field = await reader.next()
         if field is None or not field.filename:
             raise ValueError("Missing uploaded file")
-        asset_id, path = project.reserve(Path(field.filename).suffix)
+        asset_id, path = project.reserve(Path(field.filename).suffix, kind=ASSETS[node["type"]], name=Path(field.filename).name)
         temporary = path.with_suffix(path.suffix + ".partial")
         try:
             with temporary.open("xb") as file:
@@ -138,12 +166,30 @@ def install_canvas_routes():
     async def asset(request):
         project = Project(request.query["directory"])
         path = project.path(request.query["id"])
-        if project.asset(request.query["id"])["kind"] == "mask" and request.query.get("preview") == "1":
-            preview_path = project.cache() / (request.query["id"] + ".png")
+        kind = project.asset(request.query["id"])["kind"]
+        if request.query.get("preview") == "1" and kind in {"mask", "image", "video"}:
+            preview_path = project.cache() / (hashlib.sha256(request.query["id"].encode()).hexdigest() + "-preview.jpg")
             if not preview_path.exists():
                 def thumbnail():
-                    mask = np.load(path, mmap_mode="r", allow_pickle=False)[0]
-                    Image.fromarray((np.clip(mask, 0, 1) * 255).astype(np.uint8)).save(preview_path)
+                    if kind == "mask":
+                        mask = np.load(path, mmap_mode="r", allow_pickle=False)[0]
+                        image = Image.fromarray((np.clip(mask, 0, 1) * 255).astype(np.uint8)).convert("RGB")
+                    elif kind == "video":
+                        with av.open(str(path)) as container:
+                            frame = next(container.decode(video=0), None)
+                            if frame is None:
+                                raise ValueError("Video has no decodable frames")
+                            image = frame.to_image().convert("RGB")
+                    else:
+                        with Image.open(path) as source:
+                            image = ImageOps.exif_transpose(source).convert("RGB")
+                    image.thumbnail((512, 512))
+                    temporary = preview_path.with_name(uuid.uuid4().hex + ".partial")
+                    try:
+                        image.save(temporary, format="JPEG", quality=75)
+                        os.replace(temporary, preview_path)
+                    finally:
+                        temporary.unlink(missing_ok=True)
                 await asyncio.to_thread(thumbnail)
             path = preview_path
         return web.FileResponse(path, headers={"X-Content-Type-Options": "nosniff"})
@@ -175,7 +221,7 @@ def install_canvas_routes():
             raise ValueError("Only H3 cards support prompt enhancement")
         materials = material_inputs(node, nodes, project.state(), project)
         images, videos, keyframes = {}, {}, {}
-        for port in (*image_ports(materials), "reference_video", "target", "first_frame", "last_frame"):
+        for port in (*image_ports(materials), *reference_ports(materials, "video"), "prefix", "target", "first_frame", "last_frame"):
             if port not in materials:
                 continue
             pixels, _, _ = await asyncio.to_thread(read_material, project, materials[port], 384, 384, 240)
