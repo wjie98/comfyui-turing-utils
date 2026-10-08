@@ -216,6 +216,7 @@ class PackageArchitectureTest(unittest.TestCase):
                 "TuringCanvasAudio", "TuringCanvasH3", "TuringCanvasH3Settings",
                 "_TuringCanvasRead", "_TuringCanvasPrepare", "_TuringCanvasPublish",
                 "_TuringCanvasRunNoise",
+                "_TuringCanvasSigmaRefiner",
             ),
         )
 

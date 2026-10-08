@@ -8,7 +8,8 @@ filenames, not ordinary IMAGE/AUDIO tensors. Mixed workflows are rejected.
 - **Canvas Root**: one per project; work/cache directories, browser upload or
   server input-directory copy, maximum decoded material megapixels (default 4). The directory
   picker browses this server instance's output, not the browser computer.
-- **Canvas H3 Settings**: global models, LoRAs, sampler steps, shifts, attention,
+- **Canvas H3 Settings**: global models, editable LoRA stack, sampler/scheduler/base steps,
+  default-on low-noise Refiner, shifts, attention,
   and Chat configuration (system prompt, URL, model and API-key environment name).
   Attention strategy directly reuses Configure Attention Strategy: disabled,
   Sol, SLA or Veda, with the same dynamic advanced controls and model requirements.
@@ -31,8 +32,9 @@ filenames, not ordinary IMAGE/AUDIO tensors. Mixed workflows are rejected.
 `denoise` uses native BasicScheduler/KSampler semantics, not sigma scaling.
 1 fully redraws; partial denoise takes the tail of a longer schedule; 0 skips
 sampling and DiT/CLIP execution. Target still passes through VAE encoding/decoding,
-so zero is not pixel-lossless file copying. Clear custom sigmas before using
-partial denoise; an explicit trajectory cannot be extended by a scheduler.
+so zero is not pixel-lossless file copying. Refiner adds one step by cosine
+redistribution of the existing <=0.7 sigma tail, if such a nonterminal tail exists.
+Base 4/8 steps normally become 5/9; there are no manual sigma presets.
 
 Target supplies the encoded body and its selected frame count. Without target,
 the body uses empty latent content and the requested count. Prefix is additional
@@ -44,7 +46,9 @@ is generated.
 Video selection preserves the source time axis instead of speeding up audio.
 Pictures are normalized to H3's 24 FPS timeline at decoding. Maximum material pixels are applied
 during reads without changing stored originals. H3 reference encoders may resize
-further. Preview shows the original material, not a rendered edit of its selection.
+further. The integrated preview timeline plays only the selected time range.
+Generate also exposes output trim: downstream decoding uses the selected range,
+while the complete generated historical file stays unchanged.
 
 ## Files and history
 
@@ -92,10 +96,12 @@ still check completion. State responses omit historical snapshots. Images use
 cached 512px JPEG thumbnails. Video first loads its thumbnail and fetches the full
 stream only on playback. Full playback still uses source-video bandwidth.
 Uploads stream to disk; proxy limits still apply and uploads are not resumable.
+Failed uploads attempt a server input-directory copy (local_path, or basename),
+checking size. Remote browser files cannot be copied without a server-side source.
 
 Image/video/audio socket colors differ. Display numbering starts at 1 while
 internal zero-based port IDs remain stable. Video-reference connections carry
-pictures only; connect the audio output separately for soundtrack conditioning.
+pictures only; connect the same video output to an audio input for soundtrack conditioning.
 Prefix/target consume both enabled modalities. Audio-only connections reject
 missing or disabled soundtracks.
 

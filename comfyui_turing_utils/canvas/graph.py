@@ -91,19 +91,19 @@ def material_inputs(node, nodes, state, project, allow_missing=False):
             result[port] = {"missing": source_id, "error": str(error)}
             continue
         result[port] = {"asset": asset, "slot": int(link.get("slot", 0)),
-                        "start": float(values.get("start_seconds", 0)) if source["type"] in ASSETS else 0,
+                        "start": float(values.get("start_seconds", 0)),
                         "duration": float(values.get("duration_seconds", 0)) if source["type"] in ASSETS else 0}
         if source["type"] in ASSETS:
             if source["type"] == PREFIX + "Video":
                 result[port]["force_rate"] = 24
             result[port].update({key: values[key] for key in ("force_rate", "custom_width", "custom_height",
                 "skip_first_frames", "frame_load_cap", "select_every_nth") if key in values})
-            if "end_seconds" in values:
-                end = float(values["end_seconds"])
-                if end and end <= result[port]["start"]:
-                    raise ValueError("End time must be after start time")
-                result[port]["duration"] = end - result[port]["start"] if end else 0
             result[port]["max_megapixels"] = values.get("max_megapixels", 0)
+        if "end_seconds" in values:
+            end = float(values["end_seconds"])
+            if end and end <= result[port]["start"]:
+                raise ValueError("End time must be after start time")
+            result[port]["duration"] = end - result[port]["start"] if end else 0
         modality = "audio" if port.startswith("audios.") else "av" if port in {"prefix", "target"} else "video" if port.startswith("videos.") else "image"
         result[port]["modality"] = modality
         result[port]["include_audio"] = bool(values.get("include_audio", True))

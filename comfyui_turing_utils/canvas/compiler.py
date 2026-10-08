@@ -5,7 +5,7 @@ import secrets
 import uuid
 
 from .graph import H3, material_inputs, signature, validate_canvas, image_ports, reference_ports
-from .schema import generation_values, strategy_inputs
+from .schema import VERSION, generation_values, strategy_inputs
 
 
 def compile_task(graph, task, project):
@@ -19,8 +19,6 @@ def compile_task(graph, task, project):
     denoise = float(values.get("denoise", 1.0))
     if not 0 <= denoise <= 1:
         raise ValueError("denoise must be between 0 and 1")
-    if settings.get("sigmas", "").strip() and denoise not in (0, 1):
-        raise ValueError("Clear custom sigmas to use KSampler denoise; an explicit trajectory has no scheduler to extend")
     values["seed"] = secrets.randbits(63)
     prompt = {}
 
@@ -46,6 +44,8 @@ def compile_task(graph, task, project):
     if not isinstance(loras, list):
         raise ValueError("LoRAs must be a JSON list")
     for index, lora in enumerate(loras):
+        if not lora.get("on", True) or not float(lora.get("strength", 1)):
+            continue
         model = add(f"lora_{index}", "LoraLoaderModelOnly", model=model,
             lora_name=lora["name"], strength_model=float(lora.get("strength", 1)))
     model = add("shift", "MiniMaxH3SigmaShift", model=model,
@@ -85,12 +85,11 @@ def compile_task(graph, task, project):
     semantic = add("semantic", "TuringUtilsH3SemanticReference", clip=clip, prompt=text, **refs)
     conditioning = add("conditioning", "TuringUtilsH3BuildConditioning", semantic_reference=semantic, latent=latent, **refs)
     guider = add("guider", "BasicGuider", model=model, conditioning=conditioning)
-    if settings.get("sigmas", "").strip():
-        sigmas = add("sigmas", "ManualSigmas", sigmas=settings["sigmas"])
-    else:
-        sigmas = add("sigmas", "BasicScheduler", model=model, scheduler="simple", steps=settings.get("steps", 8), denoise=denoise)
+    sigmas = add("sigmas", "BasicScheduler", model=model, scheduler=settings.get("scheduler", "simple"), steps=settings.get("steps", 8), denoise=denoise)
+    if settings.get("refiner", True):
+        sigmas = add("refiner", "_TuringCanvasSigmaRefiner", sigmas=sigmas)
     noise = add("noise", "RandomNoise", noise_seed=values.get("seed", 0))
-    sampler = add("sampler", "KSamplerSelect", sampler_name="euler")
+    sampler = add("sampler", "KSamplerSelect", sampler_name=settings.get("sampler_name", "euler"))
     # A run nonce forces inference, without invalidating material reads or encoders.
     noise = add("run_noise", "_TuringCanvasRunNoise", noise=noise, run_id=uuid.uuid4().hex)
     sampled = add("sample", "SamplerCustomAdvanced", noise=noise, guider=guider,
@@ -102,7 +101,7 @@ def compile_task(graph, task, project):
     audio = add("decode_audio", "VAEDecodeAudio", samples=[streams[0], 1], vae=audio_vae)
     output = {"images": images, "audio": audio, "length": ["prepare", 1], "prefix": ["prepare", 2], "original_audio": ["prepare", 3]}
     snapshot = {"materials": materials, "values": values,
-                "settings": {k: v for k, v in settings.items() if not k.startswith("chat_")}, "template": 2}
+                "settings": {k: v for k, v in settings.items() if not k.startswith("chat_")}, "template": VERSION}
     add("publish", "_TuringCanvasPublish", directory=project.directory, task=task,
         signature=signature(materials), snapshot=json.dumps(snapshot), run_id=uuid.uuid4().hex, **output)
     # Remove disconnected model/conditioning branches when denoise is zero.

@@ -1,7 +1,7 @@
 import { app } from "../../../scripts/app.js";
 
 const widget = (node, key) => node.widgets?.find(w => w.name === key);
-export const MATERIAL_COLORS = {TURING_CANVAS_IMAGE_ASSET: "#72b98b", TURING_CANVAS_VIDEO_ASSET: "#759be9", TURING_CANVAS_AUDIO_ASSET: "#d49bdf"};
+export const MATERIAL_COLORS = {TURING_CANVAS_IMAGE_ASSET: "#72b98b", TURING_CANVAS_VIDEO_ASSET: "#55b9c5", TURING_CANVAS_AUDIO_ASSET: "#d49bdf"};
 const roundEven = n => Math.abs(n % 1) === 0.5 ? 2 * Math.round(n / 2) : Math.round(n);
 const align = n => Math.max(32, roundEven(Number(n) / 32) * 32);
 
@@ -40,8 +40,8 @@ export function persistParameters(node) {
   node.onSerialize = function(info) {
     serialize?.call(this, info);
     info.properties ??= {};
-    if ((info.properties.canvasSchemaVersion ?? 1) > 2) return;
-    info.properties.canvasSchemaVersion = 2;
+    if ((info.properties.canvasSchemaVersion ?? 1) > 3) return;
+    info.properties.canvasSchemaVersion = 3;
     info.properties.canvasParameters = Object.fromEntries(this.widgets.filter(w =>
       w.type !== "button" && !w.canvasPreview && typeof w.value !== "function").map(w => [w.name, w.value]));
   };
@@ -49,7 +49,7 @@ export function persistParameters(node) {
   node.onConfigure = function(info) {
     configure?.call(this, info);
     const version = info.properties?.canvasSchemaVersion ?? 1;
-    if (version > 2) {
+    if (version > 3) {
       this.canvasError = true;
       throw new Error("Canvas schema is newer than this plugin; update before editing");
     }
@@ -73,6 +73,13 @@ export function persistParameters(node) {
     }
     if (values) {
       values = {...values};
+      // Native positional restore runs before this hook; never let removed fields
+      // populate newly added sampler or trim widgets in old workflows.
+      if (version < 3) {
+        for (const [key, fallback] of Object.entries({sampler_name: "euler", scheduler: "simple", refiner: true, start_seconds: 0, end_seconds: 0})) {
+          if (values[key] === undefined && !(key === "end_seconds" && values.duration_seconds !== undefined)) values[key] = fallback;
+        }
+      }
       if (values.frames !== undefined && values.duration === undefined) values.duration = values.frames / 24;
       if (values.duration_seconds !== undefined && values.end_seconds === undefined) {
         values.end_seconds = values.duration_seconds ? Number(values.start_seconds || 0) + Number(values.duration_seconds) : 0;
@@ -99,7 +106,10 @@ export function socketLabels(node) {
   for (const slot of [...(node.inputs ?? []), ...(node.outputs ?? [])]) {
     if (MATERIAL_COLORS[slot.type]) slot.color_on = slot.color_off = MATERIAL_COLORS[slot.type];
     const match = /^(image|video|audio)s\.\1_(\d+)$/.exec(slot.name);
-    if (match) slot.label = `${match[1]} ${Number(match[2]) + 1}`;
+    if (match) {
+      slot.label = `${match[1]} ${Number(match[2]) + 1}`;
+      slot.color_on = slot.color_off = MATERIAL_COLORS[`TURING_CANVAS_${match[1].toUpperCase()}_ASSET`];
+    }
   }
   const type = node.comfyClass ?? node.type;
   if (type === "TuringCanvasImage" && node.outputs?.[0]) node.outputs[0].label = "image";
@@ -107,7 +117,6 @@ export function socketLabels(node) {
   if (type === "TuringCanvasVideo") {
     const audio = widget(node, "include_audio")?.value !== false;
     if (node.outputs?.[0]) node.outputs[0].label = audio ? "video (AV)" : "video";
-    if (node.outputs?.[1]) node.outputs[1].label = audio ? "audio" : "audio (关闭)";
   }
 }
 
@@ -149,31 +158,84 @@ export function rangeControls(node, request, snapshot, changed) {
     }
   };
   const row = document.createElement("div");
-  row.style.cssText = "display:grid;grid-template-columns:40px 1fr;gap:4px;color:var(--input-text);font:12px sans-serif";
+  row.style.cssText = "flex:0 0 64px;padding:4px 10px;box-sizing:border-box;color:var(--input-text);font:12px sans-serif";
+  const media = node.canvasMedia;
+  media.controls = false;
+  const toolbar = document.createElement("div"); toolbar.style.cssText = "display:flex;align-items:center;gap:8px;height:26px";
+  const play = document.createElement("button"); play.textContent = "▶";
+  const label = document.createElement("span");
+  const bar = document.createElement("div"); bar.style.cssText = "position:relative;height:24px;touch-action:none;cursor:pointer";
+  const track = document.createElement("div"); track.style.cssText = "position:absolute;left:0;right:0;top:9px;height:6px;background:#444;border-radius:3px";
+  const selected = document.createElement("div"); selected.style.cssText = "position:absolute;top:9px;height:6px;background:#55b9c5";
+  const cursor = document.createElement("div"); cursor.style.cssText = "position:absolute;top:3px;width:2px;height:18px;background:white;pointer-events:none";
+  bar.append(track, selected, cursor);
+  toolbar.append(play, label); row.append(toolbar, bar);
+  let duration = 0;
+  let stopTimer;
+  const bounds = () => [Math.min(Number(widget(node, "start_seconds").value), duration), Math.min(Number(widget(node, "end_seconds").value) || duration, duration)];
+  const seek = value => { if (media.readyState) media.currentTime = value; };
+  const scheduleStop = () => {
+    clearTimeout(stopTimer);
+    if (!media.paused && duration) stopTimer = setTimeout(() => media.pause(), Math.max(0, (bounds()[1] - media.currentTime) / media.playbackRate * 1000));
+  };
+  play.onclick = async () => { if (!media.paused) media.pause(); else { try { await media.play(); } catch (error) { row.title = error.message; } } };
+  media.addEventListener("play", () => { const [a, b] = bounds(); if (media.currentTime < a || media.currentTime >= b) seek(a); play.textContent = "❚❚"; });
+  media.addEventListener("pause", () => { clearTimeout(stopTimer); play.textContent = "▶"; });
+  for (const event of ["playing", "seeked", "ratechange"]) media.addEventListener(event, scheduleStop);
+  media.addEventListener("waiting", () => clearTimeout(stopTimer));
+  const removed = node.onRemoved;
+  node.onRemoved = function(...args) { clearTimeout(stopTimer); removed?.apply(this, args); };
+  const clampPlayback = () => {
+    const [a, b] = bounds();
+    if (duration && media.currentTime < a) seek(a);
+    if (duration && media.currentTime >= b) { media.pause(); if (media.currentTime > b) seek(b); }
+    cursor.style.left = `${duration ? media.currentTime / duration * 100 : 0}%`;
+  };
+  media.addEventListener("loadedmetadata", () => { duration = media.duration; node.canvasSyncRange(); clampPlayback(); });
+  media.addEventListener("seeking", clampPlayback);
+  media.addEventListener("timeupdate", clampPlayback);
+  bar.onpointerdown = event => {
+    if (event.target !== bar && event.target !== track && event.target !== selected) return;
+    const rect = bar.getBoundingClientRect(), [a, b] = bounds();
+    seek(Math.max(a, Math.min(b, (event.clientX - rect.left) / rect.width * duration)));
+  };
   const inputs = [];
   for (const name of ["start_seconds", "end_seconds"]) {
-    const label = document.createElement("label"); label.textContent = name === "start_seconds" ? "起点" : "终点";
-    const input = document.createElement("input"); input.type = "range"; input.min = 0; input.max = 1; input.step = 0.01; input.disabled = true;
-    input.oninput = () => {
+    const input = document.createElement("button"); input.textContent = name === "start_seconds" ? "[" : "]";
+    input.style.cssText = "position:absolute;top:0;transform:translateX(-50%);width:16px;height:24px;padding:0;cursor:ew-resize;touch-action:none";
+    input.disabled = true;
+    input.setAttribute("aria-label", name === "start_seconds" ? "剪切起点" : "剪切终点");
+    const update = seconds => {
       clearLegacy();
       const start = widget(node, "start_seconds"), end = widget(node, "end_seconds");
-      widget(node, name).value = Number(input.value);
-      const last = Number(end.value) || Number(input.max);
+      widget(node, name).value = seconds;
+      const last = Number(end.value) || duration;
       if (start.value >= last) widget(node, name).value = name === "start_seconds" ? Math.max(0, last - .01) : Number(start.value) + .01;
       node.canvasSyncRange();
       // Seek only a media stream already opened by the user; dragging alone must not download it.
-      if (node.canvasMedia.readyState > 0) node.canvasMedia.currentTime = Number(widget(node, name).value);
+      if (media.readyState > 0) seek(Number(widget(node, name).value));
     };
-    input.onchange = changed;
-    row.append(label, input); inputs.push(input);
+    input.onpointerdown = event => { event.stopPropagation(); media.pause(); input.setPointerCapture(event.pointerId); };
+    input.onpointermove = event => {
+      if (!input.hasPointerCapture(event.pointerId)) return;
+      const rect = bar.getBoundingClientRect();
+      update(Math.round(Math.max(0, Math.min(duration, (event.clientX - rect.left) / rect.width * duration)) * 1000) / 1000);
+    };
+    input.onpointerup = event => { if (input.hasPointerCapture(event.pointerId)) input.releasePointerCapture(event.pointerId); changed(); };
+    input.onkeydown = event => {
+      if (!["ArrowLeft", "ArrowRight"].includes(event.key)) return;
+      event.preventDefault(); update(Math.max(0, Math.min(duration, Number(widget(node, name).value) + (event.key === "ArrowRight" ? .01 : -.01)))); changed();
+    };
+    bar.append(input); inputs.push(input);
   }
-  const range = node.addDOMWidget("time_range", "canvas_range", row, {serialize: false, hideOnZoom: true});
-  range.canvasPreview = true; range.computeSize = () => [350, 48];
-  node.canvasSyncRange = () => inputs.forEach((input, i) => {
-    const v = Number(widget(node, i ? "end_seconds" : "start_seconds").value);
-    input.value = i && !v ? input.max : v;
-    input.title = `${Number(input.value).toFixed(2)} s`;
-  });
+  node.canvasPreviewBox.append(row);
+  node.canvasSyncRange = () => {
+    const [a, b] = bounds();
+    inputs.forEach((input, i) => { input.style.left = `${duration ? (i ? b : a) / duration * 100 : 0}%`; input.title = `${i ? b : a}s`; });
+    selected.style.left = `${duration ? a / duration * 100 : 0}%`;
+    selected.style.width = `${duration ? (b - a) / duration * 100 : 100}%`;
+    label.textContent = `${a.toFixed(2)} – ${b.toFixed(2)} s · ${(b - a).toFixed(2)} s`;
+  };
   let revision = 0;
   node.canvasUpdateRange = async asset => {
     const current = ++revision;
@@ -181,9 +243,9 @@ export function rangeControls(node, request, snapshot, changed) {
     try {
       const metadata = await request("metadata", {graph: snapshot(), asset});
       if (current !== revision) return;
-      const duration = Number(metadata.duration);
+      duration = Number(metadata.duration);
       if (!(duration > 0)) return;
-      inputs.forEach(input => { input.max = duration; input.disabled = false; });
+      inputs.forEach(input => { input.disabled = false; });
       node.canvasSyncRange();
     } catch (error) { row.title = error.message; }
   };
@@ -191,10 +253,6 @@ export function rangeControls(node, request, snapshot, changed) {
     const item = widget(node, name), callback = item.callback;
     item.callback = function(...args) { callback?.apply(this, args); clearLegacy(); node.canvasSyncRange(); changed(); };
   }
-  node.canvasMedia.addEventListener("timeupdate", () => {
-    const end = Number(widget(node, "end_seconds").value);
-    if (end && node.canvasMedia.currentTime >= end) node.canvasMedia.pause();
-  });
 }
 
 export async function directoryPicker(node, request) {

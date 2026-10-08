@@ -3,7 +3,7 @@
 import math
 from ..nodes.attention import _ATTENTION_INPUTS
 
-VERSION = 2
+VERSION = 3
 
 
 def generation_values(values):

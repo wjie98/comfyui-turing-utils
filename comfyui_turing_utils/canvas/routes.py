@@ -6,6 +6,7 @@ import os
 import time
 import uuid
 import hashlib
+import math
 from pathlib import Path
 import numpy as np
 import av
@@ -113,7 +114,14 @@ def install_canvas_routes():
         data = await request.json()
         _, _, project = context(data, create=False)
         item = await asyncio.to_thread(project.asset, data["asset"])
-        return web.json_response(item["metadata"])
+        metadata = item["metadata"]
+        if item["kind"] in {"video", "audio"} and "duration" not in metadata:
+            metadata = {**metadata, **await asyncio.to_thread(probe_import, project.path(data["asset"]), item["kind"])}
+        return web.json_response(metadata)
+
+    @endpoint("post", "loras")
+    async def loras(request):
+        return web.json_response({"names": folder_paths.get_filename_list("loras")})
 
     @endpoint("post", "restore")
     async def restore(request):
@@ -159,11 +167,11 @@ def install_canvas_routes():
     async def import_local(request):
         data = await request.json()
         nodes, settings, project = context(data)
-        if settings["import_mode"] != "local_copy":
-            raise ValueError("Enable local_copy in Canvas Settings first")
         node = nodes[str(data["task"])]
         kind = ASSETS[node["type"]]
-        source = local_source(node["values"]["local_path"])
+        source = local_source(node["values"].get("local_path") or data.get("filename", ""))
+        if "size" in data and source.stat().st_size != int(data["size"]):
+            raise ValueError("Server file size differs from the selected browser file")
         asset = await asyncio.to_thread(project.copy, source, kind)
         return web.json_response(asset)
 
@@ -181,8 +189,6 @@ def install_canvas_routes():
                 raise ValueError("Canvas metadata is too large")
         data = json.loads(metadata)
         nodes, settings, project = context(data)
-        if settings["import_mode"] != "browser_upload":
-            raise ValueError("Local-copy mode cannot obtain the server path from a browser file drop; enter local_path and click Load")
         node = nodes[str(data["task"])]
         field = await reader.next()
         if field is None or not field.filename:
@@ -210,7 +216,10 @@ def install_canvas_routes():
         path = project.path(request.query["id"])
         kind = project.asset(request.query["id"])["kind"]
         if request.query.get("preview") == "1" and kind in {"mask", "image", "video"}:
-            preview_path = project.cache() / (hashlib.sha256(request.query["id"].encode()).hexdigest() + "-preview.jpg")
+            start = float(request.query.get("start", 0)) if kind == "video" else 0
+            if not math.isfinite(start) or start < 0:
+                raise ValueError("Invalid preview time")
+            preview_path = project.cache() / (hashlib.sha256(f'{request.query["id"]}:{start:.3f}'.encode()).hexdigest() + "-preview.jpg")
             if not preview_path.exists():
                 def thumbnail():
                     if kind == "mask":
@@ -218,7 +227,11 @@ def install_canvas_routes():
                         image = Image.fromarray((np.clip(mask, 0, 1) * 255).astype(np.uint8)).convert("RGB")
                     elif kind == "video":
                         with av.open(str(path)) as container:
-                            frame = next(container.decode(video=0), None)
+                            stream = container.streams.video[0]
+                            origin = float(stream.start_time * stream.time_base) if stream.start_time else 0
+                            if start:
+                                container.seek(int((start + origin) / stream.time_base), stream=stream)
+                            frame = next((f for f in container.decode(video=0) if float(f.time or 0) - origin >= start), None)
                             if frame is None:
                                 raise ValueError("Video has no decodable frames")
                             image = frame.to_image().convert("RGB")

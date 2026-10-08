@@ -1,6 +1,7 @@
 import { app } from "../../../scripts/app.js";
 import { api } from "../../../scripts/api.js";
 import { directoryPicker, resolutionControls, rangeControls, restoreValues, persistParameters, socketLabels, MATERIAL_COLORS } from "./controls.js";
+import { loraControls, namespaceLabels } from "./settings.js";
 
 const PREFIX = "TuringCanvas";
 const isCard = n => (n?.comfyClass ?? n?.type ?? "").startsWith(PREFIX);
@@ -17,10 +18,10 @@ let refreshPending = false;
 let refreshAgain = false;
 
 function snapshot() {
-  if (app.graph._nodes.some(n => (n.properties?.canvasSchemaVersion ?? 1) > 2)) {
+  if (app.graph._nodes.some(n => (n.properties?.canvasSchemaVersion ?? 1) > 3)) {
     throw new Error("Canvas schema is newer than this plugin; update before editing");
   }
-  return {schema_version: 2, nodes: app.graph._nodes.map(n => ({
+  return {schema_version: 3, nodes: app.graph._nodes.map(n => ({
     id: String(n.id), type: n.comfyClass ?? n.type, mode: n.mode,
     values: {...n.properties?.canvasLegacySelection, ...Object.fromEntries((n.widgets ?? []).filter(w => typeof w.value !== "function" && w.type !== "button" && !w.canvasPreview)
       .map(w => [w.name, w.value]))},
@@ -74,10 +75,13 @@ function preview(node, asset) {
   if (!node.canvasMedia || !asset || !manager()) return;
   const directory = value(manager(), "work_directory");
   const url = api.apiURL(`/turing/canvas/asset?directory=${encodeURIComponent(directory)}&id=${encodeURIComponent(asset)}`);
+  if (node.canvasMedia.tagName === "VIDEO") {
+    const poster = `${url}&preview=1&start=${Number(value(node, "start_seconds")) || 0}`;
+    if (node.canvasMedia.getAttribute("poster") !== poster) node.canvasMedia.poster = poster;
+  }
   if (node.canvasMedia.dataset.assetUrl === url) return;
   node.canvasMedia.dataset.assetUrl = url;
   node.canvasMedia.src = node.canvasMedia.tagName === "IMG" ? `${url}&preview=1` : url;
-  if (node.canvasMedia.tagName === "VIDEO") node.canvasMedia.poster = `${url}&preview=1`;
   node.canvasUpdateRange?.(asset);
 }
 
@@ -91,6 +95,8 @@ async function refresh() {
   lastPlan = data.plan;
   for (const node of app.graph._nodes.filter(isCard)) {
     socketLabels(node);
+    namespaceLabels(node);
+    if (node.canvasMedia?.tagName === "VIDEO") node.canvasMedia.muted = value(node, "include_audio") === false;
     const result = lastState.tasks[String(node.id)];
     if (result) {
       node.properties.canvasAsset = result.asset;
@@ -153,15 +159,21 @@ async function generate(node) {
 async function importFile(node, file) {
   const settings = manager();
   if (!settings) throw new Error("Create Canvas Settings first");
-  if (value(settings, "import_mode") !== "browser_upload") {
-    throw new Error("Local-copy mode: browsers cannot expose the server path of a dropped file. Put it in the server input directory, enter local_path, then click 导入素材. No upload was started.");
-  }
   const form = new FormData();
   form.append("canvas", JSON.stringify({graph: snapshot(), task: String(node.id)}));
   form.append("file", file);
-  const response = await api.fetchApi("/turing/canvas/upload", {method: "POST", body: form});
-  const asset = await response.json();
-  if (!response.ok) throw new Error(asset.error);
+  let asset;
+  try {
+    const response = await api.fetchApi("/turing/canvas/upload", {method: "POST", body: form});
+    asset = await response.json();
+    if (!response.ok) throw new Error(asset.error || `HTTP ${response.status}`);
+  } catch (uploadError) {
+    try {
+      asset = await request("import", {graph: snapshot(), task: String(node.id), filename: file.name, size: file.size});
+    } catch (copyError) {
+      throw new Error(`上传失败：${uploadError.message}\n服务器拷贝失败：${copyError.message}\n浏览器不能提供本机绝对路径；可将文件放到服务器 input 目录，并填写 local_path。`);
+    }
+  }
   node.widgets.find(w => w.name === "asset_id").value = asset.id;
   await refresh();
 }
@@ -229,6 +241,8 @@ app.registerExtension({
     const type = node.comfyClass ?? node.type;
     node.properties ??= {};
     persistParameters(node);
+    namespaceLabels(node);
+    if (type === "TuringCanvasH3Settings") loraControls(node, request, scheduleRefresh);
     if (type === "TuringCanvasH3") resolutionControls(node);
     socketLabels(node);
     const changed = node.onWidgetChanged;
@@ -275,7 +289,7 @@ app.registerExtension({
     } else if (["TuringCanvasImage", "TuringCanvasVideo", "TuringCanvasAudio"].includes(type)) {
       button(node, "选择项目素材", () => history(node));
       button(node, "导入素材", async () => {
-        if (value(manager(), "import_mode") === "local_copy") {
+        if (value(node, "local_path")) {
           const asset = await request("import", {graph: snapshot(), task: String(node.id)});
           node.widgets.find(w => w.name === "asset_id").value = asset.id;
           await refresh();
@@ -318,10 +332,25 @@ app.registerExtension({
         event.preventDefault(); event.stopPropagation();
         if (event.dataTransfer.files[0]) importFile(node, event.dataTransfer.files[0]).catch(report);
       });
-      const widget = node.addDOMWidget("material_preview", "canvas_preview", media, {serialize: false, hideOnZoom: true});
+      const box = document.createElement("div");
+      box.style.cssText = "display:flex;flex-direction:column;width:100%;height:100%;min-height:0;background:#161616";
+      media.style.minHeight = "0"; media.style.flex = "1 1 0";
+      box.append(media);
+      const widget = node.addDOMWidget("material_preview", "canvas_preview", box, {serialize: false, hideOnZoom: true});
       widget.canvasPreview = true;
-      widget.computeSize = () => [350, tag === "audio" ? 65 : 220];
+      widget.computeSize = () => [Math.max(200, node.size[0] - 20), node.properties.canvasPreviewHeight ?? (tag === "audio" ? 95 : 260)];
+      const resize = node.onResize;
+      let previousHeight;
+      node.onResize = function(size) {
+        resize?.call(this, size);
+        if (previousHeight !== undefined && !configuring) {
+          this.properties.canvasPreviewHeight = Math.max(tag === "audio" ? 95 : 180,
+            (this.properties.canvasPreviewHeight ?? (tag === "audio" ? 95 : 260)) + size[1] - previousHeight);
+        }
+        previousHeight = size[1];
+      };
       node.canvasMedia = media;
+      node.canvasPreviewBox = box;
     }
     button(node, "恢复上次参数", async () => {
       const result = await request("restore", {graph: snapshot(), task: String(node.id)});
@@ -329,7 +358,7 @@ app.registerExtension({
       scheduleRefresh();
     });
     if (type === "TuringCanvasH3") button(node, "生成", () => generate(node));
-    if (["TuringCanvasVideo", "TuringCanvasAudio"].includes(type)) rangeControls(node, request, snapshot, scheduleRefresh);
+    if (["TuringCanvasVideo", "TuringCanvasAudio", "TuringCanvasH3"].includes(type)) rangeControls(node, request, snapshot, scheduleRefresh);
     const oldMenu = node.getExtraMenuOptions;
     node.getExtraMenuOptions = function(_, options) {
       oldMenu?.apply(this, arguments);
@@ -354,5 +383,21 @@ app.registerExtension({
     scheduleRefresh();
   },
   beforeConfigureGraph() { configuring = true; },
-  afterConfigureGraph() { configuring = false; filterTypes(); refresh().catch(() => {}); },
+  afterConfigureGraph() {
+    // v1/v2 split audio output becomes the same video container, consumed by port role.
+    for (const node of app.graph._nodes ?? []) {
+      if (node.type === "TuringCanvasH3") for (const input of node.inputs ?? []) {
+        if (input.name.startsWith("audios.audio_")) input.type = "TURING_CANVAS_AUDIO_ASSET,TURING_CANVAS_VIDEO_ASSET";
+      }
+      if (!["TuringCanvasVideo", "TuringCanvasH3"].includes(node.type) || node.outputs?.length !== 2) continue;
+      for (const id of node.outputs[1].links ?? []) {
+        const link = app.graph.links[id];
+        if (link) { link.origin_slot = 0; link.type = "TURING_CANVAS_VIDEO_ASSET"; }
+        (node.outputs[0].links ??= []).push(id);
+      }
+      node.outputs[1].links = [];
+      node.removeOutput(1);
+    }
+    configuring = false; filterTypes(); refresh().catch(() => {});
+  },
 });

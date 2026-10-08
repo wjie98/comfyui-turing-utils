@@ -1,6 +1,7 @@
 """Public cards have canvas-only ports and cannot execute as ordinary nodes."""
 
 import folder_paths
+import comfy.samplers
 from comfy_api.latest import io
 from comfy_extras.nodes_resolution import AspectRatio
 from ..nodes.attention import AttentionStrategy
@@ -32,7 +33,6 @@ class CanvasSettings(CanvasCard):
                 io.String.Input("work_directory", default="canvas/project", tooltip="Relative to this ComfyUI instance's output directory."),
                 io.String.Input("cache_directory", default="canvas/project", advanced=True,
                     tooltip="Relative to this ComfyUI instance's .cache directory; only rebuildable previews, not weights."),
-                io.Combo.Input("import_mode", options=["browser_upload", "local_copy"]),
                 io.Float.Input("max_megapixels", default=4.0, min=0.01),
             ], outputs=[])
 
@@ -44,7 +44,7 @@ class CanvasH3Settings(CanvasCard):
             inputs=[
                 model_input("dit", "diffusion_models"), model_input("clip", "text_encoders"),
                 model_input("video_vae", "vae"), model_input("audio_vae", "vae"),
-                io.String.Input("loras", default="[]", multiline=True, advanced=True,
+                io.String.Input("loras", default="[]",
                     tooltip='JSON list: [{"name":"model.safetensors","strength":1.0}]'),
                 io.Boolean.Input("force_int8_gemm", default=False, advanced=True),
                 io.Combo.Input("attention", options=["w8a8", "sage", "sdpa"], advanced=True),
@@ -52,9 +52,11 @@ class CanvasH3Settings(CanvasCard):
                     io.DynamicCombo.Option("disabled", []),
                     *AttentionStrategy.define_schema().inputs[1].options,
                 ]),
-                io.Int.Input("steps", default=8, min=1, max=100, advanced=True),
-                io.String.Input("sigmas", default="", advanced=True,
-                    tooltip="Optional explicit sigma sequence, already shifted. Empty uses simple scheduler and steps."),
+                io.Combo.Input("sampler_name", options=comfy.samplers.KSampler.SAMPLERS, default="euler"),
+                io.Combo.Input("scheduler", options=comfy.samplers.KSampler.SCHEDULERS, default="simple"),
+                io.Int.Input("steps", default=8, min=1, max=100),
+                io.Boolean.Input("refiner", default=True,
+                    tooltip="H3 Sigma Refiner: add one step by cosine redistribution of the existing low-noise tail (sigma <= 0.7). No eligible tail: unchanged."),
                 io.Float.Input("shift_video", default=12, min=0.01, advanced=True),
                 io.Float.Input("shift_audio", default=6, min=0.01, advanced=True),
                 io.String.Input("chat_url", default="http://127.0.0.1:9200", advanced=True),
@@ -67,7 +69,7 @@ class CanvasH3Settings(CanvasCard):
 
 def asset_schema(node_id, title, output):
     inputs = [io.String.Input("asset_id", default="", advanced=True),
-              io.String.Input("local_path", default="", tooltip="Local-copy mode: path relative to this server instance's input directory.")]
+              io.String.Input("local_path", default="", advanced=True, tooltip="Upload fallback: path relative to this server instance's input directory.")]
     if output != ImageAsset:
         inputs += [io.Float.Input("start_seconds", default=0, min=0, step=0.01, round=0.001),
                    io.Float.Input("end_seconds", default=0, min=0, step=0.01, round=0.001, tooltip="End time in seconds; 0: to end")]
@@ -77,8 +79,6 @@ def asset_schema(node_id, title, output):
     if output == VideoAsset:
         inputs += [io.Boolean.Input("include_audio", default=True)]
     outputs = [output.Output("image" if output == ImageAsset else "video" if output == VideoAsset else "audio")]
-    if output == VideoAsset:
-        outputs.append(AudioAsset.Output("audio"))
     return io.Schema(node_id=node_id, display_name=title, category=CATEGORY, inputs=inputs, outputs=outputs)
 
 
@@ -107,7 +107,7 @@ class CanvasH3(CanvasCard):
             inputs=[
                 ImageAsset.Input("first_frame", optional=True), ImageAsset.Input("last_frame", optional=True),
                 *[io.Autogrow.Input(kind + "s", optional=True, template=io.Autogrow.TemplatePrefix(
-                    input=typ.Input(kind), prefix=kind + "_", min=0, max=64))
+                    input=io.MultiType.Input(kind, types=[AudioAsset, VideoAsset]) if kind == "audio" else typ.Input(kind), prefix=kind + "_", min=0, max=64))
                   for kind, typ in (("image", ImageAsset), ("video", VideoAsset), ("audio", AudioAsset))],
                 VideoAsset.Input("prefix", optional=True), VideoAsset.Input("target", optional=True),
                 io.String.Input("user_prompt", default="", multiline=True),
@@ -121,7 +121,9 @@ class CanvasH3(CanvasCard):
                     tooltip="KSampler denoise: 1 fully redraws, 0 skips sampling. Without target, lower values do not preserve an original image."),
                 io.String.Input("filename_prefix", default="h3"),
                 io.Boolean.Input("preserve_audio", default=True, advanced=True),
-            ], outputs=[VideoAsset.Output("video"), AudioAsset.Output("audio")])
+                io.Float.Input("start_seconds", default=0, min=0, step=0.01, round=0.001, advanced=True),
+                io.Float.Input("end_seconds", default=0, min=0, step=0.01, round=0.001, advanced=True),
+            ], outputs=[VideoAsset.Output("video")])
 
 
 PUBLIC_NODES = {SETTINGS: CanvasSettings, "TuringCanvasImage": CanvasImage,

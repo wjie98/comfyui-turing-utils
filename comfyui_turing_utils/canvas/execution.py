@@ -133,9 +133,35 @@ class Publish:
                 frame_rate=Fraction(24)), bit_depth=8, color_space="sRGB")
             video.save_to(str(path), format=Types.VideoContainer.MP4, codec=Types.VideoCodec.H264, crf=19)
             kind = "video"
-        project.register(asset_id, path, kind, path.name, {"inputs": cfg["materials"], "snapshot": cfg, "signature": signature})
+        metadata = {"inputs": cfg["materials"], "snapshot": cfg, "signature": signature}
+        if kind == "video":
+            metadata.update(duration=len(images) / 24, audio=audio is not None,
+                            width=images.shape[2], height=images.shape[1], fps=24)
+        project.register(asset_id, path, kind, path.name, metadata)
         project.publish(task, asset_id, signature, cfg)
         return {"ui": {"canvas_result": [{"task": task, "asset": asset_id}]}, "result": (asset_id,)}
+
+
+class SigmaRefiner:
+    CATEGORY = ""
+    FUNCTION = "refine"
+    RETURN_TYPES = ("SIGMAS",)
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {"required": {"sigmas": ("SIGMAS",)}}
+
+    def refine(self, sigmas):
+        # H3SigmaRefiner defaults: +1 step, <=0.7 tail, cosine, end at zero.
+        values = sigmas.tolist()
+        index = next((i for i, value in enumerate(values) if value <= 0.7), len(values))
+        if index >= len(values) - 1:
+            return (sigmas,)
+        t = torch.linspace(0, 1, len(values) - index + 1, device=sigmas.device, dtype=torch.float32)
+        tail = values[index] + (max(0, values[-1]) - values[index]) * (1 - torch.cos(t * torch.pi)) / 2
+        tail = tail.to(sigmas.dtype)
+        tail[0], tail[-1] = sigmas[index], sigmas[-1]
+        return (torch.cat((sigmas[:index], tail)),)
 
 
 class RunNoise:
@@ -151,6 +177,7 @@ class RunNoise:
 
 
 INTERNAL_NODES = {"_TuringCanvasRead": ReadAsset, "_TuringCanvasPrepare": PrepareH3,
-                  "_TuringCanvasPublish": Publish, "_TuringCanvasRunNoise": RunNoise}
+                  "_TuringCanvasPublish": Publish, "_TuringCanvasRunNoise": RunNoise,
+                  "_TuringCanvasSigmaRefiner": SigmaRefiner}
 for _node in INTERNAL_NODES.values():
     _node.DEV_ONLY = True

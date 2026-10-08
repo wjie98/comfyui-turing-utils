@@ -15,7 +15,7 @@ from comfyui_turing_utils.canvas.graph import validate_canvas, material_inputs, 
 from comfyui_turing_utils.canvas.compiler import compile_task
 from comfyui_turing_utils.canvas.routes import guard_prompt
 from comfyui_turing_utils.canvas.media import read_material
-from comfyui_turing_utils.canvas.execution import PrepareH3, Publish
+from comfyui_turing_utils.canvas.execution import PrepareH3, Publish, SigmaRefiner
 from comfyui_turing_utils.canvas.nodes import PUBLIC_NODES
 
 
@@ -32,6 +32,59 @@ def graph():
 
 
 class CanvasTest(unittest.TestCase):
+    def test_sigma_refiner_defaults_and_no_tail(self):
+        original = torch.tensor([1., .9, .6, .3, 0.], dtype=torch.float64)
+        refined, = SigmaRefiner().refine(original)
+        torch.testing.assert_close(refined, torch.tensor([1., .9, .6, .45, .15, 0.], dtype=torch.float64))
+        self.assertEqual(refined.dtype, original.dtype)
+        self.assertEqual(refined.device, original.device)
+        for values in ([1., .8, 0.], [0.], []):
+            sigmas = torch.tensor(values)
+            self.assertIs(SigmaRefiner().refine(sigmas)[0], sigmas)
+        low = SigmaRefiner().refine(torch.tensor([.2, .1, 0.]))[0]
+        self.assertEqual(len(low), 4)
+        self.assertTrue(torch.all(low[:-1] >= low[1:]))
+
+    def test_sampler_refiner_and_disabled_loras(self):
+        settings = self.graph["nodes"][0]["values"]
+        settings.update(sampler_name="heun", scheduler="karras", steps=4,
+                        loras=json.dumps([{"name": "disabled", "on": False}, {"name": "zero", "strength": 0}, {"name": "enabled", "strength": .5}]))
+        prompt = compile_task(self.graph, "3", self.project)
+        self.assertEqual(prompt["sampler"]["inputs"]["sampler_name"], "heun")
+        self.assertEqual(prompt["sigmas"]["inputs"]["scheduler"], "karras")
+        self.assertEqual(prompt["sigmas"]["inputs"]["steps"], 4)
+        self.assertEqual(prompt["sample"]["inputs"]["sigmas"], ["refiner", 0])
+        self.assertNotIn("lora_0", prompt)
+        self.assertNotIn("lora_1", prompt)
+        self.assertIn("lora_2", prompt)
+        settings["refiner"] = False
+        prompt = compile_task(self.graph, "3", self.project)
+        self.assertEqual(prompt["sample"]["inputs"]["sigmas"], ["sigmas", 0])
+        self.graph["nodes"][2]["values"]["denoise"] = 0
+        settings["refiner"] = True
+        self.assertNotIn("refiner", compile_task(self.graph, "3", self.project))
+
+    def test_generated_selection_is_consumed_without_sampling(self):
+        asset = self.asset("video")
+        self.project.publish("3", asset, "old", {})
+        self.graph["nodes"][2]["values"].update(start_seconds=1.0, end_seconds=2.5)
+        nodes, _ = validate_canvas(self.graph)
+        refs = material_inputs(nodes["4"], nodes, self.project.state(), self.project)
+        self.assertEqual(refs["target"]["start"], 1.)
+        self.assertEqual(refs["target"]["duration"], 1.5)
+        self.assertEqual(refs["target"]["modality"], "av")
+        nodes["4"]["inputs"] = {"audios.audio_0": {"node": "3", "slot": 0}}
+        refs = material_inputs(nodes["4"], nodes, self.project.state(), self.project)
+        self.assertEqual(refs["audios.audio_0"]["modality"], "audio")
+
+    def test_single_container_ports_and_sampling_controls(self):
+        for name in ("TuringCanvasH3", "TuringCanvasVideo"):
+            self.assertEqual(len(PUBLIC_NODES[name].define_schema().outputs), 1)
+        inputs = {i.id for i in PUBLIC_NODES["TuringCanvasH3Settings"].define_schema().inputs}
+        self.assertTrue({"sampler_name", "scheduler", "steps", "refiner"} <= inputs)
+        self.assertNotIn("sigmas", inputs)
+        self.assertNotIn("import_mode", {i.id for i in PUBLIC_NODES["TuringCanvasSettings"].define_schema().inputs})
+
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
@@ -367,6 +420,13 @@ class CanvasTest(unittest.TestCase):
         self.assertEqual(len(images), 12)
         self.assertEqual(audio["waveform"].shape[-1], rate // 2)
         self.assertGreater(float(audio["waveform"].abs().mean()), 0.05)
+        self.graph["nodes"][2]["values"].update(start_seconds=.25, end_seconds=.75)
+        nodes, _ = validate_canvas(self.graph)
+        selection = material_inputs(nodes["4"], nodes, self.project.state(), self.project)["target"]
+        selected_images, selected_audio, _ = read_material(self.project, selection)
+        self.assertEqual(len(selected_images), 12)
+        self.assertEqual(selected_audio["waveform"].shape[-1], rate // 2)
+        self.assertEqual(self.project.asset(result["result"][0])["metadata"]["duration"], 1.)
 
     def test_local_copy_and_failed_import_preserve_original(self):
         source = self.root / "source.png"
