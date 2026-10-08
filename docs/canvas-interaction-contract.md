@@ -84,6 +84,10 @@ node resize and restored dimensions are clamped, with a maximum preview height
 of 900 pixels and node width of 1600 pixels.
 
 LoRA rows are Canvas widgets beside ordinary controls, not floating DOM overlays.
+Their picker stays in screen space, independent of graph zoom, and is constrained
+to the viewport. Click strength to enter a finite float (negative and >1 are valid);
+the +/- controls are small increments, not a 0–1 slider. Video/audio sigma shifts
+are ordinary controls directly below the LoRA stack, with display-only ordering.
 Only the JSON storage widget is persisted; visual rows are rebuilt from it.
 Material/history selectors use native combo widgets and project-relative filenames.
 History listing must not create project directories. Selection errors retain the

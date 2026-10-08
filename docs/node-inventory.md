@@ -41,6 +41,9 @@ Configure Attention Strategy 放在 Models；Sol/SLA/Veda 通过 DynamicCombo �
 不因开启开发者模式重新显示。内部显示名明确标记 Internal，融合后的公开入口保留原名。
 普通节点统一将高级参数排在常用参数之后；动态子参数在布局时同步高级属性，
 显示排序不改变 widgets_values 的保存顺序。
+SeC 的 positive/negative coords 使用固定可见行：连接后只禁用文本编辑，
+保留插口和布局位置；断开后恢复本地值编辑。输入值仍取自上游连线，
+置灰框里的本地值不是上游运行结果的预览。此规则不重建输入插口。
 画布另外使用五个隐藏执行单元，用于素材读取、H3 准备、发布、强制单次采样和低噪 Sigma Refiner；Attention 直接调用通用 Configure Attention Strategy。
 画布独立标签不与普通节点兼容；详见[画布使用说明](material-canvas.md)。
 它们没有菜单分类，不是建议用户连接的节点；开启开发节点显示后可能可见。

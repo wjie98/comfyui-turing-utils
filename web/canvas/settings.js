@@ -54,7 +54,9 @@ export function loraControls(node, request, changed) {
         ctx.textAlign = "center";
         ctx.fillText("▾", width - 133, y + height / 2);
         ctx.fillText("−", width - 112, y + height / 2);
-        ctx.fillText(Number(entry.strength ?? 1).toFixed(2), width - 78, y + height / 2);
+        ctx.save(); ctx.beginPath(); ctx.rect(width - 98, y, 41, height); ctx.clip();
+        ctx.fillText(String(Number(entry.strength ?? 1)), width - 78, y + height / 2, 40);
+        ctx.restore();
         ctx.fillText("+", width - 45, y + height / 2);
         ctx.fillText("×", width - 20, y + height / 2); ctx.restore();
       },
@@ -65,8 +67,9 @@ export function loraControls(node, request, changed) {
         else if (x < width - 122) select(event, name => { if (rows.includes(entry)) { entry.name = name; commit(); } });
         else if (x > width - 32) { rows.splice(index, 1); commit(); rebuild(); }
         else if (x < width - 98 || x > width - 57) {
-          entry.strength = Math.round((Number(entry.strength ?? 1) + (x < width - 98 ? -.05 : .05)) * 100) / 100; commit();
-        } else app.canvas.prompt("LoRA strength", String(entry.strength ?? 1), input => {
+          const next = Number((Number(entry.strength ?? 1) + (x < width - 98 ? -.05 : .05)).toPrecision(15));
+          if (Number.isFinite(next)) { entry.strength = next; commit(); }
+        } else app.canvas.prompt("LoRA strength (finite float, negative / >1 allowed)", String(entry.strength ?? 1), input => {
           const strength = Number(input); if (rows.includes(entry) && input?.trim() && Number.isFinite(strength)) { entry.strength = strength; commit(); }
         }, event);
         return true;

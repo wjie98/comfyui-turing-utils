@@ -1,6 +1,7 @@
 import { app } from "../../scripts/app.js";
 import { migrateNoiseGrid } from "./lib/node_migrations.js";
-import { advancedLast, isInternalNode, hideInternalNode } from "./lib/widget_layout.js";
+import { advancedLast, h3SettingsLayout, isInternalNode, hideInternalNode } from "./lib/widget_layout.js";
+import { stableInputRows } from "./lib/stable_inputs.js";
 
 app.registerExtension({
   name: "TuringUtils.NodeConfiguration",
@@ -14,9 +15,12 @@ app.registerExtension({
   },
   nodeCreated(node) {
     if (!node.comfyClass?.startsWith("TuringUtils") && !node.comfyClass?.startsWith("TuringCanvas")) return;
+    const restoreInputs = node.comfyClass === "TuringUtilsSeCTrackVisualConcept"
+      ? stableInputRows(node, ["positive_coords", "negative_coords"]) : () => {};
     // The legacy canvas reads widget.advanced; Nodes 2.0 reads options.advanced.
     // Bridge the schema flag, keeping the frontend's own toggle and persistence.
     const sync = () => {
+      restoreInputs();
       for (const widget of node.widgets ?? []) {
         if (widget.options?.advanced !== undefined && widget.advanced !== widget.options.advanced) {
           widget.advanced = widget.options.advanced;
@@ -31,6 +35,7 @@ app.registerExtension({
         sync();
         const widgets = layoutWidgets.apply(this, args);
         const visible = globalThis.LiteGraph?.vueNodesMode ? widgets : widgets.filter(w => this.isWidgetVisible(w));
+        if (this.comfyClass === "TuringCanvasH3Settings") return h3SettingsLayout(visible);
         // Sort the display only: widgets_values must retain its serialized order.
         return this.comfyClass?.startsWith("TuringUtils")
           ? advancedLast(visible)
@@ -39,7 +44,7 @@ app.registerExtension({
     }
     // Size new nodes compactly; onConfigure still restores users' saved sizes.
     if (node.hasAdvancedWidgets?.()) node.setSize(node.computeSize());
-    for (const method of ["onConfigure", "onWidgetChanged"]) {
+    for (const method of ["onConfigure", "onWidgetChanged", "onConnectionsChange"]) {
       const original = node[method];
       node[method] = function (...args) {
         const result = original?.apply(this, args);

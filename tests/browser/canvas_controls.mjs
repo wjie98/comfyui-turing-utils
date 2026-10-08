@@ -69,6 +69,9 @@ try {
     const storage = settings.widgets.find(w => w.name === "loras");
     storage.value = JSON.stringify([{name: "alpha.safetensors", on: true, strength: 1}, {name: "folder/beta.safetensors", on: false, strength: .5}]);
     storage.callback();
+    const settingsLayout = settings.getLayoutWidgets();
+    const addIndex = settingsLayout.findLastIndex(w => w.canvasLoraRow);
+    check(settingsLayout[addIndex + 1]?.name === "shift_video" && settingsLayout[addIndex + 2]?.name === "shift_audio", "Shift controls not below LoRA");
     check(settings.widgets.filter(w => w.canvasLoraRow).length === 3, "LoRA row count");
     check(!settings.widgets.some(w => w.name === "lora_stack"), "HTML LoRA overlay remains");
     const sizes = [];
@@ -108,12 +111,18 @@ try {
   });
   // Exercise the widget contract directly; this fixture has no active workflow tab.
   await page.evaluate(({x, y}) => {
+    app.canvas.ds.scale = 2.5;
     const node = app.graph._nodes.find(n => n.type === "TuringCanvasH3Settings");
     const row = node.widgets.find(w => w.type === "custom" && w.canvasLoraRow);
     row.mouse(new PointerEvent("pointerdown", {clientX:x, clientY:y}), [55, row.last_y + 13], node);
   }, point);
   if (process.env.CANVAS_SCREENSHOT) await page.screenshot({path:process.env.CANVAS_SCREENSHOT});
   await page.waitForSelector(".litecontextmenu");
+  console.log(await page.evaluate(() => {
+    const menu = document.querySelector(".litecontextmenu"), rect = menu.getBoundingClientRect();
+    if (menu.style.transform !== "none" || rect.right > innerWidth || rect.bottom > innerHeight) throw Error("Unbounded menu");
+    return {menuBounds: "OK"};
+  }));
   await page.locator(".litecontextmenu .litemenu-entry").filter({hasText: "folder/beta.safetensors"}).dispatchEvent("click");
   await page.waitForTimeout(300);
   console.log(await page.evaluate(() => {
@@ -126,6 +135,14 @@ try {
     if (JSON.parse(storage.value)[0].on !== false) throw Error("LoRA toggle failed");
     row.mouse(event, [node.size[0] - 45, row.last_y + 10]);
     if (JSON.parse(storage.value)[0].strength !== 1.05) throw Error("LoRA strength failed");
+    const prompt = app.canvas.prompt;
+    try {
+      for (const value of ["-2.345678", "12.000123"]) {
+        app.canvas.prompt = (_title, _value, callback) => callback(value);
+        row.mouse(event, [node.size[0] - 78, row.last_y + 10]);
+        if (JSON.parse(storage.value)[0].strength !== Number(value)) throw Error("LoRA float precision/range lost");
+      }
+    } finally { app.canvas.prompt = prompt; }
     row.mouse(event, [node.size[0] - 20, row.last_y + 10]);
     if (JSON.parse(storage.value).length !== 1) throw Error("LoRA removal failed");
     return {loraSelection: "OK"};

@@ -4,8 +4,18 @@ export const clamp = (value, min, max) => Math.min(max, Math.max(min,
   Number.isFinite(Number(value)) ? Number(value) : min));
 
 export function choiceMenu(values, event, title, callback) {
-  return new LiteGraph.ContextMenu(values, {event, title, className: "dark",
-    scale: Math.max(1, app.canvas.ds.scale), callback});
+  const menu = new LiteGraph.ContextMenu(values, {event, title, className: "dark",
+    scale: 1, callback});
+  // Menus are screen-space UI, not part of the zoomed graph.
+  const root = menu.root;
+  root.style.transform = "none";
+  root.style.maxWidth = "calc(100vw - 20px)";
+  root.style.maxHeight = "calc(100vh - 20px)";
+  root.style.overflow = "auto";
+  const rect = root.getBoundingClientRect();
+  root.style.left = `${clamp(rect.left, 10, Math.max(10, window.innerWidth - rect.width - 10))}px`;
+  root.style.top = `${clamp(rect.top, 10, Math.max(10, window.innerHeight - rect.height - 10))}px`;
+  return menu;
 }
 
 // A response may arrive after a newer request, node removal, project switch or reload.
