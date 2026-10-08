@@ -168,7 +168,7 @@ class CanvasTest(unittest.TestCase):
     def test_sol_expanded_settings_reach_strategy(self):
         self.graph["nodes"][0]["values"].update(sol="enabled", **{"sol.routing_threshold": 0.7, "sol.dense_prefix_steps": 2})
         prompt = compile_task(self.graph, "3", self.project)
-        settings = json.loads(prompt["sol"]["inputs"]["settings"])
+        settings = {k.removeprefix("strategy."): v for k, v in prompt["strategy"]["inputs"].items()}
         self.assertEqual(settings["routing_threshold"], 0.7)
         self.assertEqual(settings["dense_prefix_steps"], 2)
         self.graph["nodes"][0]["values"]["sol"] = "disabled"
@@ -202,12 +202,93 @@ class CanvasTest(unittest.TestCase):
 
     def test_image_maximum_megapixels(self):
         images, _, _ = read_material(self.project, {"asset": self.image, "max_megapixels": 0.001}, 100, 100)
-        self.assertLessEqual(images.shape[1] * images.shape[2], 1000)
+        self.assertLessEqual(images.shape[1] * images.shape[2], 0.001 * 1024 * 1024)
         images, _, _ = read_material(self.project,
             {"asset": self.image, "max_megapixels": 0.01, "spatial_multiple": 32}, 832, 480)
         self.assertEqual(images.shape[1] % 32, 0)
         self.assertEqual(images.shape[2] % 32, 0)
-        self.assertLessEqual(images.shape[1] * images.shape[2], 10000)
+        self.assertLessEqual(images.shape[1] * images.shape[2], 0.01 * 1024 * 1024)
+
+    def test_empty_directory_cleanup_never_removes_files_or_links(self):
+        from comfyui_turing_utils.canvas.store import remove_empty_directory
+        (self.root / "empty/a/b").mkdir(parents=True)
+        remove_empty_directory("empty")
+        self.assertFalse((self.root / "empty").exists())
+        (self.root / "occupied/a").mkdir(parents=True)
+        (self.root / "occupied/file").write_text("keep")
+        with self.assertRaises(ValueError):
+            remove_empty_directory("occupied")
+        self.assertTrue((self.root / "occupied/a").exists())
+        (self.root / "alias").symlink_to(self.root / "occupied", target_is_directory=True)
+        with self.assertRaises(ValueError):
+            remove_empty_directory("alias")
+        with self.assertRaises(ValueError):
+            remove_empty_directory(".")
+
+    def test_read_only_project_does_not_create_directory(self):
+        project = Project("not-created", create=False)
+        self.assertEqual(project.state(), {"tasks": {}})
+        self.assertFalse(project.root.exists())
+
+    def test_duration_alignment_and_future_schema(self):
+        self.graph["nodes"][2]["values"].update(duration=2.5, width=835, height=479)
+        prompt = compile_task(self.graph, "3", self.project)
+        values = json.loads(prompt["prepare"]["inputs"]["settings"])
+        self.assertEqual((values["frames"], values["width"], values["height"]), (60, 832, 480))
+        with self.assertRaises(ValueError):
+            validate_canvas({**self.graph, "schema_version": 999})
+
+    def test_canvas_settings_reuse_attention_schema(self):
+        from comfyui_turing_utils.canvas.nodes import CanvasH3Settings, CanvasSettings, CanvasVideo
+        strategy = next(i for i in CanvasH3Settings.define_schema().inputs if i.id == "strategy")
+        self.assertEqual(len(strategy.options), 4)
+        inputs = {i.id: i for i in CanvasSettings.define_schema().inputs}
+        self.assertEqual(inputs["max_megapixels"].default, 4)
+        names = [i.id for i in CanvasVideo.define_schema().inputs]
+        self.assertIn("include_audio", names)
+        self.assertIn("end_seconds", names)
+        for removed in ("select_every_nth", "skip_first_frames", "frame_load_cap", "custom_width"):
+            self.assertNotIn(removed, names)
+
+    def test_video_reference_does_not_implicitly_connect_audio(self):
+        self.graph["nodes"][1].update(type="TuringCanvasVideo", values={"asset_id": self.asset("video"),
+            "include_audio": True, "start_seconds": 1, "end_seconds": 3, "max_megapixels": .5})
+        self.graph["nodes"][2]["inputs"] = {"videos.video_0": {"node": "2", "slot": 0}, "audios.audio_0": {"node": "2", "slot": 1}}
+        prompt = compile_task(self.graph, "3", self.project)
+        self.assertFalse(any(k.startswith("video_audios") for k in prompt["video_ref"]["inputs"]))
+        ref = json.loads(prompt["read_videos.video_0"]["inputs"]["reference"])
+        self.assertEqual((ref["modality"], ref["duration"], ref["max_megapixels"]), ("video", 2, .5))
+        audio = json.loads(prompt["read_audios.audio_0"]["inputs"]["reference"])
+        self.assertEqual(audio["modality"], "audio")
+        self.graph["nodes"][1]["values"]["include_audio"] = False
+        with self.assertRaisesRegex(ValueError, "disabled"):
+            compile_task(self.graph, "3", self.project)
+
+    def test_video_modality_decode_and_disabled_audio(self):
+        sound = {"waveform": torch.zeros(1, 2, 44100), "sample_rate": 44100}
+        result = Publish().publish("project", "3", "sig", json.dumps({"materials": {}}), "run",
+            images=torch.rand(24, 32, 32, 3), audio=sound, length=24)
+        ref = {"asset": result["result"][0], "start": .25, "duration": .5}
+        pictures, audio, _ = read_material(self.project, {**ref, "modality": "video"})
+        self.assertEqual(len(pictures), 12)
+        self.assertIsNone(audio)
+        pictures, audio, _ = read_material(self.project, {**ref, "modality": "audio"})
+        self.assertIsNone(pictures)
+        self.assertEqual(audio["waveform"].shape[-1], 22050)
+        pictures, audio, _ = read_material(self.project, {**ref, "modality": "av", "include_audio": False})
+        self.assertEqual(len(pictures), 12)
+        self.assertIsNone(audio)
+        with self.assertRaisesRegex(ValueError, "disabled"):
+            read_material(self.project, {**ref, "modality": "audio", "include_audio": False})
+
+    def test_selecting_history_does_not_replace_generation_checkpoint(self):
+        first, second = self.asset("video"), self.asset("video")
+        self.project.publish("3", first, "a", {})
+        self.project.publish("3", second, "b", {})
+        self.project.publish("3", first, "a", {}, generated=False)
+        state = self.project.state()["tasks"]["3"]
+        self.assertEqual(state["asset"], first)
+        self.assertEqual(state["last_generated"], second)
 
     def test_target_and_prefix_audio_masks_and_padding(self):
         from comfy_api.latest import io

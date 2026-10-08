@@ -60,10 +60,11 @@ def atomic_json(path, value):
 
 
 class Project:
-    def __init__(self, directory):
+    def __init__(self, directory, create=True):
         self.directory = directory
         self.root = contained(folder_paths.get_output_directory(), directory)
-        self.root.mkdir(parents=True, exist_ok=True)
+        if create:
+            self.root.mkdir(parents=True, exist_ok=True)
         self.assets = self.root
 
     def state(self):
@@ -148,7 +149,7 @@ class Project:
         finally:
             temporary.unlink(missing_ok=True)
 
-    def publish(self, task, asset, signature, snapshot):
+    def publish(self, task, asset, signature, snapshot, generated=True):
         with LOCK:
             state = self.state()
             item = state["tasks"].setdefault(str(task), {"history": []})
@@ -156,6 +157,8 @@ class Project:
             if not any(r["asset"] == asset for r in item["history"]):
                 item["history"].append(record)
             item.update(asset=asset, signature=signature)
+            if generated:
+                item["last_generated"] = asset
             atomic_json(self.root / "project.json", state)
         return record
 
@@ -198,3 +201,25 @@ def local_source(relative):
     if not path.is_file():
         raise ValueError("Local-copy source must be a file in this instance's input directory")
     return path
+
+
+def remove_empty_directory(relative):
+    root = Path(folder_paths.get_output_directory()).resolve()
+    target = contained(root, relative)
+    # Never follow a symlink, including one in the user-selected path.
+    cursor = root
+    for part in Path(relative).parts:
+        cursor = cursor / part
+        if cursor.is_symlink():
+            raise ValueError("Cannot delete a symlink directory")
+    directories = []
+    def inspect(path):
+        for entry in path.iterdir():
+            if entry.is_symlink() or not entry.is_dir():
+                raise ValueError("Directory contains files or links; nothing was removed")
+            inspect(entry)
+        directories.append(path)
+    inspect(target)
+    # rmdir also refuses files created after the preflight check.
+    for path in directories:
+        path.rmdir()

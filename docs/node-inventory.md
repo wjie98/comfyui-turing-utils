@@ -1,6 +1,6 @@
 # Turing Utils 节点清单
 
-当前开发工作树有 **44 个公开节点、10 个隐藏内部执行节点**。
+当前开发工作树有 **44 个公开节点、9 个隐藏内部执行节点**。
 右键菜单只使用 `Turing Utils/分类` 一层子目录，搜索仍可按节点名定位。
 
 ## 完整公开清单
@@ -37,7 +37,7 @@ Configure Attention Strategy 放在 Models；Sol/SLA/Veda 通过 DynamicCombo �
 ## 隐藏执行单元与共享模型
 
 普通工作流保留五个 dev-only 内部单元：Stage Path、SeC Loader/Apply、H3 Upscale Loader/Apply。
-画布另外使用六个隐藏执行单元，用于素材读取、H3 准备、发布、强制单次采样／分割和 Sol 配置。
+画布另外使用四个隐藏执行单元，用于素材读取、H3 准备、发布和强制单次采样；Attention 直接调用通用 Configure Attention Strategy。
 画布独立标签不与普通节点兼容；详见[画布使用说明](material-canvas.md)。
 它们没有菜单分类，不是建议用户连接的节点；开启开发节点显示后可能可见。
 加载/应用使用新的私有 ID，旧加载入口不再注册。

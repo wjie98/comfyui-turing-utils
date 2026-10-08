@@ -2,6 +2,8 @@
 
 import folder_paths
 from comfy_api.latest import io
+from comfy_extras.nodes_resolution import AspectRatio
+from ..nodes.attention import AttentionStrategy
 
 from .graph import H3, SETTINGS, H3_SETTINGS
 
@@ -31,7 +33,7 @@ class CanvasSettings(CanvasCard):
                 io.String.Input("cache_directory", default="canvas/project", advanced=True,
                     tooltip="Relative to this ComfyUI instance's .cache directory; only rebuildable previews, not weights."),
                 io.Combo.Input("import_mode", options=["browser_upload", "local_copy"]),
-                io.Float.Input("max_megapixels", default=2, min=0.01),
+                io.Float.Input("max_megapixels", default=4.0, min=0.01),
             ], outputs=[])
 
 
@@ -44,19 +46,11 @@ class CanvasH3Settings(CanvasCard):
                 model_input("video_vae", "vae"), model_input("audio_vae", "vae"),
                 io.String.Input("loras", default="[]", multiline=True, advanced=True,
                     tooltip='JSON list: [{"name":"model.safetensors","strength":1.0}]'),
+                io.Boolean.Input("force_int8_gemm", default=False, advanced=True),
                 io.Combo.Input("attention", options=["w8a8", "sage", "sdpa"], advanced=True),
-                io.DynamicCombo.Input("sol", options=[
+                io.DynamicCombo.Input("strategy", options=[
                     io.DynamicCombo.Option("disabled", []),
-                    io.DynamicCombo.Option("enabled", [
-                        io.Float.Input("routing_threshold", default=1.0, min=0, max=1, step=0.01),
-                        io.Int.Input("dense_prefix_steps", default=0, min=0),
-                        io.Int.Input("dense_suffix_steps", default=0, min=0),
-                        io.Int.Input("dense_prefix_layers", default=2, min=0),
-                        io.Int.Input("dense_suffix_layers", default=0, min=0),
-                        io.Boolean.Input("sparse_reference_image", default=False),
-                        io.Boolean.Input("sparse_reference_video", default=True),
-                        io.Boolean.Input("sparse_reference_audio", default=False),
-                    ]),
+                    *AttentionStrategy.define_schema().inputs[1].options,
                 ]),
                 io.Int.Input("steps", default=8, min=1, max=100, advanced=True),
                 io.String.Input("sigmas", default="", advanced=True,
@@ -75,17 +69,16 @@ def asset_schema(node_id, title, output):
     inputs = [io.String.Input("asset_id", default="", advanced=True),
               io.String.Input("local_path", default="", tooltip="Local-copy mode: path relative to this server instance's input directory.")]
     if output != ImageAsset:
-        inputs += [io.Float.Input("start_seconds", default=0, min=0),
-                   io.Float.Input("duration_seconds", default=0, min=0, tooltip="0: to end")]
+        inputs += [io.Float.Input("start_seconds", default=0, min=0, step=0.01, round=0.001),
+                   io.Float.Input("end_seconds", default=0, min=0, step=0.01, round=0.001, tooltip="End time in seconds; 0: to end")]
+    if output != AudioAsset:
+        inputs += [io.Float.Input("max_megapixels", default=0, min=0,
+            tooltip="Maximum decoded megapixels; 0 inherits Canvas Root. Original file is unchanged.")]
     if output == VideoAsset:
-        inputs += [io.Float.Input("force_rate", default=0, min=0, tooltip="0: source FPS; H3 inputs are normalized to 24 FPS."),
-                   io.Int.Input("custom_width", default=0, min=0), io.Int.Input("custom_height", default=0, min=0),
-                   io.Int.Input("skip_first_frames", default=0, min=0),
-                   io.Int.Input("frame_load_cap", default=0, min=0),
-                   io.Int.Input("select_every_nth", default=1, min=1)]
-    outputs = [output.Output("material")]
+        inputs += [io.Boolean.Input("include_audio", default=True)]
+    outputs = [output.Output("image" if output == ImageAsset else "video" if output == VideoAsset else "audio")]
     if output == VideoAsset:
-        outputs.append(AudioAsset.Output("soundtrack"))
+        outputs.append(AudioAsset.Output("audio"))
     return io.Schema(node_id=node_id, display_name=title, category=CATEGORY, inputs=inputs, outputs=outputs)
 
 
@@ -119,9 +112,11 @@ class CanvasH3(CanvasCard):
                 VideoAsset.Input("prefix", optional=True), VideoAsset.Input("target", optional=True),
                 io.String.Input("user_prompt", default="", multiline=True),
                 io.String.Input("model_prompt", default="", multiline=True),
-                io.Int.Input("width", default=832, min=32, step=32),
+                io.Combo.Input("aspect_ratio", options=[*[x.value for x in AspectRatio], "Custom"], default=AspectRatio.WIDESCREEN_H.value),
+                io.Float.Input("megapixels", default=0.4, min=0.01, step=0.05),
+                io.Int.Input("width", default=864, min=32, step=32),
                 io.Int.Input("height", default=480, min=32, step=32),
-                io.Int.Input("frames", default=124, min=5, max=3600),
+                io.Float.Input("duration", default=5.0, min=0.21, max=150, step=0.1, round=0.001, tooltip="Seconds at 24 FPS; with target, its selected interval determines the duration. Internal padding is removed from the result."),
                 io.Float.Input("denoise", default=1.0, min=0, max=1, step=0.01,
                     tooltip="KSampler denoise: 1 fully redraws, 0 skips sampling. Without target, lower values do not preserve an original image."),
                 io.String.Input("filename_prefix", default="h3"),

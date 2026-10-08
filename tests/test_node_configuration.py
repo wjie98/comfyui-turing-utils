@@ -36,7 +36,7 @@ class NodeConfigurationTest(unittest.TestCase):
                 self.assertEqual(len(category.split("/")), 2, name)
                 self.assertTrue(category.startswith("Turing Utils/"), name)
                 categories.add(category.split("/")[1])
-        self.assertEqual((public, internal), (44, 10))
+        self.assertEqual((public, internal), (44, 9))
         self.assertEqual(categories, {"Models", "Prompt", "Video", "Mask", "MiniMax H3", "Bernini", "Krea2", "Workflow", "Canvas"})
         self.assertEqual(AttentionStrategy.GET_SCHEMA().category, "Turing Utils/Models")
         for name in ("TuringUtilsSeCModelLoader", "TuringUtilsSeCTrackVisualConceptApply",

@@ -35,7 +35,7 @@ def read_material(project, ref, width=0, height=0, max_frames=0):
             dw = max(1, round(w * dh / h))
         elif not dh:
             dh = max(1, round(h * dw / w))
-        limit = float(ref.get("max_megapixels", 2)) * 1e6
+        limit = float(ref.get("max_megapixels") or 4) * 1024 * 1024
         if limit <= 0 or not math.isfinite(limit):
             raise ValueError("max_megapixels must be positive and finite")
         scale = min(1, math.sqrt(limit / (dw * dh)))
@@ -58,7 +58,7 @@ def read_material(project, ref, width=0, height=0, max_frames=0):
             pixels = torch.from_numpy(np.asarray(image).copy()).float().unsqueeze(0) / 255
         return pixels, None, pixels[..., 0]
     frames = []
-    if item["kind"] == "video" and not ref.get("slot", 0):
+    if item["kind"] == "video" and not ref.get("slot", 0) and ref.get("modality") != "audio":
         with av.open(str(path)) as container:
             stream = container.streams.video[0]
             if stream.duration is not None:
@@ -97,6 +97,11 @@ def read_material(project, ref, width=0, height=0, max_frames=0):
                 next_time += 1 / 24
         if not frames:
             raise ValueError("Selected video interval contains no frames")
+    if ref.get("modality") == "video" or not ref.get("include_audio", True):
+        if ref.get("modality") == "audio" or ref.get("slot", 0):
+            raise ValueError("Audio output is disabled for this video")
+        images = torch.from_numpy(np.stack(frames)).float() / 255 if frames else None
+        return images, None, images[..., 0] if images is not None else None
     chunks = []
     rate = 44100
     with av.open(str(path)) as container:
@@ -133,7 +138,7 @@ def read_material(project, ref, width=0, height=0, max_frames=0):
         for pos, data in chunks:
             waveform[:, pos:pos + data.shape[1]] = data[:, :max(0, length - pos)]
         audio = {"waveform": torch.from_numpy(waveform).unsqueeze(0), "sample_rate": rate}
-    if ref.get("slot", 0) and audio is None:
+    if (ref.get("slot", 0) or ref.get("modality") == "audio") and audio is None:
         raise ValueError("The selected material has no audio in this interval")
     images = torch.from_numpy(np.stack(frames)).float() / 255 if frames else None
     return images, audio, images[..., 0] if images is not None else None

@@ -3,6 +3,7 @@
 import hashlib
 import json
 import re
+from .schema import VERSION
 
 
 PREFIX = "TuringCanvas"
@@ -29,6 +30,8 @@ def image_ports(materials):
 
 
 def validate_canvas(graph):
+    if int(graph.get("schema_version", 1)) > VERSION:
+        raise ValueError("This Canvas was saved by a newer plugin; update before editing it")
     nodes = graph.get("nodes", [])
     if not nodes:
         raise ValueError("Canvas is empty")
@@ -91,8 +94,25 @@ def material_inputs(node, nodes, state, project, allow_missing=False):
                         "start": float(values.get("start_seconds", 0)) if source["type"] in ASSETS else 0,
                         "duration": float(values.get("duration_seconds", 0)) if source["type"] in ASSETS else 0}
         if source["type"] in ASSETS:
+            if source["type"] == PREFIX + "Video":
+                result[port]["force_rate"] = 24
             result[port].update({key: values[key] for key in ("force_rate", "custom_width", "custom_height",
                 "skip_first_frames", "frame_load_cap", "select_every_nth") if key in values})
+            if "end_seconds" in values:
+                end = float(values["end_seconds"])
+                if end and end <= result[port]["start"]:
+                    raise ValueError("End time must be after start time")
+                result[port]["duration"] = end - result[port]["start"] if end else 0
+            result[port]["max_megapixels"] = values.get("max_megapixels", 0)
+        modality = "audio" if port.startswith("audios.") else "av" if port in {"prefix", "target"} else "video" if port.startswith("videos.") else "image"
+        result[port]["modality"] = modality
+        result[port]["include_audio"] = bool(values.get("include_audio", True))
+        if modality == "audio" and data["kind"] == "video":
+            if not values.get("include_audio", True) or data.get("metadata", {}).get("audio") is False:
+                if allow_missing:
+                    result[port] = {"missing": source_id, "error": "Video audio is disabled or absent"}
+                    continue
+                raise ValueError(f"Input {port}: video audio is disabled or absent")
         if data["kind"] not in port_kinds(port):
             raise ValueError(f"Wrong asset kind for {port}")
     return result

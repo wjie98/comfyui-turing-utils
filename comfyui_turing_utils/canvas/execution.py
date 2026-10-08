@@ -17,7 +17,6 @@ from ..nodes.video_padding import VideoFramesPadding, padded_frame_count
 from ..nodes.video_sequence import VideoContinuationConcat, H3SetAudioPrefixNoiseMask
 from .media import read_material
 from .store import Project
-from ..nodes.attention import _ATTENTION_STRATEGIES
 
 
 class ReadAsset:
@@ -151,19 +150,7 @@ class RunNoise:
         return (noise,)
 
 
-class Sol:
-    CATEGORY = ""
-    FUNCTION = "apply"
-    RETURN_TYPES = ("MODEL",)
-    @classmethod
-    def INPUT_TYPES(cls):
-        return {"required": {"model": ("MODEL",), "settings": ("STRING",)}}
-
-    def apply(self, model, settings):
-        return (_ATTENTION_STRATEGIES["sol"](model, **json.loads(settings)),)
-
-
 INTERNAL_NODES = {"_TuringCanvasRead": ReadAsset, "_TuringCanvasPrepare": PrepareH3,
-                  "_TuringCanvasPublish": Publish, "_TuringCanvasRunNoise": RunNoise, "_TuringCanvasSol": Sol}
+                  "_TuringCanvasPublish": Publish, "_TuringCanvasRunNoise": RunNoise}
 for _node in INTERNAL_NODES.values():
     _node.DEV_ONLY = True

@@ -20,13 +20,15 @@ from ..nodes.multimodal_chat import MultimodalPromptChat
 from .compiler import compile_task
 from .graph import ASSETS, H3, PUBLIC, material_inputs, plan, validate_canvas, image_ports, reference_ports
 from .media import read_material
-from .store import Project, atomic_json, local_source, probe_import, contained
+from .store import Project, atomic_json, local_source, probe_import, contained, remove_empty_directory
+from .schema import VERSION, generation_values
 
 
-def context(data):
+def context(data, create=True):
     nodes, settings = validate_canvas(data["graph"])
-    project = Project(settings["work_directory"])
-    project.configure_cache(settings["cache_directory"])
+    project = Project(settings["work_directory"], create=create)
+    if create:
+        project.configure_cache(settings["cache_directory"])
     return nodes, settings, project
 
 
@@ -64,7 +66,7 @@ def install_canvas_routes():
     @endpoint("post", "state")
     async def state(request):
         data = await request.json()
-        _, _, project = context(data)
+        _, _, project = context(data, create=False)
         tasks = {k: {"asset": v["asset"], "signature": v["signature"]} for k, v in project.state()["tasks"].items()}
         return web.json_response({"state": {"tasks": tasks}, "plan": plan(data["graph"], project)})
 
@@ -79,7 +81,7 @@ def install_canvas_routes():
         if data["asset"] not in {a["id"] for a in project.history("video", prefix)}:
             raise ValueError("Result is not in this filename prefix")
         metadata = project.asset(data["asset"])["metadata"]
-        project.publish(data["task"], data["asset"], metadata["signature"], metadata["snapshot"])
+        project.publish(data["task"], data["asset"], metadata["signature"], metadata["snapshot"], generated=False)
         return web.json_response({"ok": True})
 
     @endpoint("post", "history")
@@ -97,14 +99,54 @@ def install_canvas_routes():
         root = Path(folder_paths.get_output_directory()).resolve()
         relative = data.get("path", "")
         directory = contained(root, relative) if relative else root
-        children = sorted(p.name for p in directory.iterdir() if p.is_dir() and not p.is_symlink() and not p.name.startswith("."))
+        children = await asyncio.to_thread(lambda: sorted(p.name for p in directory.iterdir() if p.is_dir() and not p.is_symlink() and not p.name.startswith(".")))
         return web.json_response({"path": directory.relative_to(root).as_posix(), "directories": children})
+
+    @endpoint("post", "remove-directory")
+    async def remove_directory(request):
+        data = await request.json()
+        await asyncio.to_thread(remove_empty_directory, data["path"])
+        return web.json_response({"ok": True})
+
+    @endpoint("post", "metadata")
+    async def metadata(request):
+        data = await request.json()
+        _, _, project = context(data, create=False)
+        item = await asyncio.to_thread(project.asset, data["asset"])
+        return web.json_response(item["metadata"])
+
+    @endpoint("post", "restore")
+    async def restore(request):
+        data = await request.json()
+        nodes, _, project = context(data, create=False)
+        task = str(data["task"])
+        if nodes[task]["type"] == H3:
+            state = project.state()["tasks"].get(task, {})
+            records = state.get("history", [])
+            if not records:
+                raise ValueError("This node has no successful generation to restore")
+            snapshot = project.asset(state.get("last_generated", records[-1]["asset"]))["metadata"]["snapshot"]
+            if snapshot.get("template", 1) > VERSION:
+                raise ValueError("Result uses a newer Canvas schema")
+            values = generation_values(snapshot["values"])
+        else:
+            path = contained(project.root, "parameters.json")
+            if not path.exists():
+                raise ValueError("Save the Canvas project once to create a parameter checkpoint")
+            checkpoint = json.loads(path.read_text(encoding="utf-8"))
+            if checkpoint.get("schema_version", 1) > VERSION:
+                raise ValueError("Checkpoint uses a newer Canvas schema")
+            values = checkpoint["nodes"][task]["values"]
+        # Restoring root settings must not silently switch the project being edited.
+        return web.json_response({"values": {k: v for k, v in values.items() if k not in {"work_directory", "cache_directory", "seed", "frames"}}})
 
     @endpoint("post", "save")
     async def save(request):
         data = await request.json()
         _, _, project = context(data)
         atomic_json(project.root / "canvas.json", data["workflow"])
+        atomic_json(project.root / "parameters.json", {"schema_version": VERSION,
+            "nodes": {str(n["id"]): {"type": n["type"], "values": n["values"]} for n in data["graph"]["nodes"]}})
         return web.json_response({"ok": True})
 
     @endpoint("post", "load")
@@ -224,7 +266,8 @@ def install_canvas_routes():
         for port in (*image_ports(materials), *reference_ports(materials, "video"), "prefix", "target", "first_frame", "last_frame"):
             if port not in materials:
                 continue
-            pixels, _, _ = await asyncio.to_thread(read_material, project, materials[port], 384, 384, 240)
+            ref = {**materials[port], "include_audio": False}
+            pixels, _, _ = await asyncio.to_thread(read_material, project, ref, 384, 384, 240)
             if port in ("first_frame", "last_frame"):
                 keyframes[port] = pixels[:1]
             elif port in image_ports(materials):

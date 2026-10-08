@@ -215,7 +215,7 @@ class PackageArchitectureTest(unittest.TestCase):
                 "TuringCanvasSettings", "TuringCanvasImage", "TuringCanvasVideo",
                 "TuringCanvasAudio", "TuringCanvasH3", "TuringCanvasH3Settings",
                 "_TuringCanvasRead", "_TuringCanvasPrepare", "_TuringCanvasPublish",
-                "_TuringCanvasRunNoise", "_TuringCanvasSol",
+                "_TuringCanvasRunNoise",
             ),
         )
 

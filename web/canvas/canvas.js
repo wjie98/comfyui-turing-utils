@@ -1,11 +1,11 @@
 import { app } from "../../../scripts/app.js";
 import { api } from "../../../scripts/api.js";
+import { directoryPicker, resolutionControls, rangeControls, restoreValues, persistParameters, socketLabels, MATERIAL_COLORS } from "./controls.js";
 
 const PREFIX = "TuringCanvas";
 const isCard = n => (n?.comfyClass ?? n?.type ?? "").startsWith(PREFIX);
 const manager = () => app.graph?._nodes?.find(n => n.type === "TuringCanvasSettings");
 const value = (n, key) => n.widgets?.find(w => w.name === key)?.value;
-let armed = false;
 let busy = false;
 let refreshTimer;
 let lastState = {tasks: {}};
@@ -14,12 +14,16 @@ let configuring = false;
 let filteredState;
 let activeTask = null;
 let refreshPending = false;
+let refreshAgain = false;
 
 function snapshot() {
-  return {nodes: app.graph._nodes.map(n => ({
+  if (app.graph._nodes.some(n => (n.properties?.canvasSchemaVersion ?? 1) > 2)) {
+    throw new Error("Canvas schema is newer than this plugin; update before editing");
+  }
+  return {schema_version: 2, nodes: app.graph._nodes.map(n => ({
     id: String(n.id), type: n.comfyClass ?? n.type, mode: n.mode,
-    values: Object.fromEntries((n.widgets ?? []).filter(w => typeof w.value !== "function" && w.type !== "button" && !w.canvasPreview)
-      .map(w => [w.name, w.value])),
+    values: {...n.properties?.canvasLegacySelection, ...Object.fromEntries((n.widgets ?? []).filter(w => typeof w.value !== "function" && w.type !== "button" && !w.canvasPreview)
+      .map(w => [w.name, w.value]))},
     inputs: Object.fromEntries((n.inputs ?? []).filter(i => i.link != null).map(i => {
       const link = app.graph.links[i.link];
       return [i.name, {node: String(link.origin_id), slot: link.origin_slot,
@@ -66,27 +70,6 @@ async function history(node) {
   await refresh();
 }
 
-async function directoryPicker(node) {
-  let path = "";
-  for (;;) {
-    const data = await request("directories", {path});
-    const selected = await choose(`服务器 output/${path}`, [
-      ...(path ? [{id: "select", name: "使用当前目录"}, {id: "up", name: ".."}] : []),
-      {id: "new", name: "新建项目目录…"}, ...data.directories.map(name => ({id: "dir:" + name, name}))]);
-    if (!selected) return;
-    if (selected === "up") { path = path.split("/").slice(0, -1).join("/"); continue; }
-    if (selected.startsWith("dir:")) { path = [path, selected.slice(4)].filter(Boolean).join("/"); continue; }
-    if (selected === "new") {
-      const name = window.prompt("新项目目录名");
-      if (!name) return;
-      if (/[\\/]/.test(name) || [".", ".."].includes(name)) throw new Error("请输入目录名，不是路径");
-      path = [path, name].filter(Boolean).join("/");
-    }
-    node.widgets.find(w => w.name === "work_directory").value = path;
-    await refresh(); return;
-  }
-}
-
 function preview(node, asset) {
   if (!node.canvasMedia || !asset || !manager()) return;
   const directory = value(manager(), "work_directory");
@@ -95,17 +78,19 @@ function preview(node, asset) {
   node.canvasMedia.dataset.assetUrl = url;
   node.canvasMedia.src = node.canvasMedia.tagName === "IMG" ? `${url}&preview=1` : url;
   if (node.canvasMedia.tagName === "VIDEO") node.canvasMedia.poster = `${url}&preview=1`;
+  node.canvasUpdateRange?.(asset);
 }
 
 async function refresh() {
-  if (!manager()) { armed = false; return; }
-  if (refreshPending) return;
+  if (!manager()) return;
+  if (refreshPending) { refreshAgain = true; return; }
   refreshPending = true;
   try {
   const data = await request("state", {graph: snapshot()});
   lastState = data.state;
   lastPlan = data.plan;
   for (const node of app.graph._nodes.filter(isCard)) {
+    socketLabels(node);
     const result = lastState.tasks[String(node.id)];
     if (result) {
       node.properties.canvasAsset = result.asset;
@@ -116,7 +101,10 @@ async function refresh() {
     node.canvasStatus = lastPlan.find(p => p.id === String(node.id))?.status ?? "material";
   }
   app.graph.setDirtyCanvas(true, true);
-  } finally { refreshPending = false; }
+  } finally {
+    refreshPending = false;
+    if (refreshAgain) { refreshAgain = false; scheduleRefresh(); }
+  }
 }
 
 function scheduleRefresh() {
@@ -162,26 +150,11 @@ async function generate(node) {
   try { await runTask(node); } finally { busy = false; }
 }
 
-async function globalRefresh() {
-  if (!armed) { app.extensionManager?.toast?.add({severity: "info", summary: "Canvas refresh is locked", detail: "Prepare refresh in Canvas Settings first.", life: 3500}); return; }
-  if (busy) throw new Error("A canvas task is already running");
-  const graph = snapshot();
-  const data = await request("state", {graph});
-  const jobs = data.plan.filter(p => ["changed", "upstream"].includes(p.status));
-  if (data.plan.some(p => p.status === "blocked")) throw new Error("Canvas has missing inputs. Resolve blocked cards before global refresh.");
-  if (!window.confirm(`Generate ${jobs.length} material tasks once? Model/prompt-only changes are not included.`)) return;
-  armed = false;
-  busy = true;
-  try {
-    for (const job of jobs) await runTask(app.graph.getNodeById(Number(job.id)) ?? app.graph.getNodeById(job.id), graph);
-  } finally { busy = false; armed = false; }
-}
-
 async function importFile(node, file) {
   const settings = manager();
   if (!settings) throw new Error("Create Canvas Settings first");
   if (value(settings, "import_mode") !== "browser_upload") {
-    throw new Error("Local-copy mode: browsers cannot expose the server path of a dropped file. Put it in the server input directory, enter local_path, then click Load / Refresh. No upload was started.");
+    throw new Error("Local-copy mode: browsers cannot expose the server path of a dropped file. Put it in the server input directory, enter local_path, then click 导入素材. No upload was started.");
   }
   const form = new FormData();
   form.append("canvas", JSON.stringify({graph: snapshot(), task: String(node.id)}));
@@ -227,6 +200,7 @@ function filterTypes() {
 app.registerExtension({
   name: "TuringUtils.MaterialCanvas",
   async setup() {
+    Object.assign(app.canvas.constructor.link_type_colors, MATERIAL_COLORS);
     api.addEventListener("progress", event => {
       if (!activeTask || (event.detail.prompt_id && event.detail.prompt_id !== activeTask.promptId)) return;
       activeTask.node.canvasProgress = `${event.detail.value}/${event.detail.max}`;
@@ -235,7 +209,8 @@ app.registerExtension({
     const queue = app.queuePrompt;
     app.queuePrompt = function (...args) {
       if (!manager() && !app.graph._nodes.some(isCard)) return queue.apply(this, args);
-      return globalRefresh().catch(report);
+      app.extensionManager?.toast?.add({severity: "info", summary: "Canvas：请使用节点的生成按钮", life: 2500});
+      return Promise.resolve();
     };
     const create = LiteGraph.createNode;
     LiteGraph.createNode = function(type, ...args) {
@@ -253,13 +228,16 @@ app.registerExtension({
     if (!isCard(node)) return;
     const type = node.comfyClass ?? node.type;
     node.properties ??= {};
+    persistParameters(node);
+    if (type === "TuringCanvasH3") resolutionControls(node);
+    socketLabels(node);
     const changed = node.onWidgetChanged;
     node.onWidgetChanged = function(...args) { changed?.apply(this, args); scheduleRefresh(); };
     const connected = node.onConnectionsChange;
-    node.onConnectionsChange = function(...args) { connected?.apply(this, args); scheduleRefresh(); };
+    node.onConnectionsChange = function(...args) { connected?.apply(this, args); socketLabels(this); scheduleRefresh(); };
     const removed = node.onRemoved;
     node.onRemoved = function(...args) { removed?.apply(this, args); this.canvasMedia?.pause?.(); scheduleRefresh(); };
-    node.size = [390, 350];
+    node.size[0] = 390;
     const draw = node.onDrawForeground;
     node.onDrawForeground = function(ctx, ...args) {
       draw?.call(this, ctx, ...args);
@@ -286,15 +264,11 @@ app.registerExtension({
         if (widget) widget.value = name;
       }
       const directory = node.widgets.find(w => w.name === "work_directory");
-      directory.mouse = () => { directoryPicker(node).catch(report); return true; };
-      button(node, "选择工作目录", () => directoryPicker(node));
-      button(node, "允许 / 取消全局执行一次", async () => {
-        if (busy) throw new Error("Wait for the current canvas run before preparing another refresh");
-        await refresh(); armed = !armed; app.graph.setDirtyCanvas(true, true);
-      });
-      button(node, "执行已变化的节点一次", globalRefresh);
-      button(node, "Save Canvas Project", async () => request("save", {graph: snapshot(), workflow: app.graph.serialize()}));
-      button(node, "Open Saved Project", async () => {
+      const browse = button(node, "📁 选择工作目录", () => directoryPicker(node, request));
+      node.widgets.splice(node.widgets.indexOf(browse), 1);
+      node.widgets.splice(node.widgets.indexOf(directory) + 1, 0, browse);
+      button(node, "保存画布", async () => request("save", {graph: snapshot(), workflow: app.graph.serialize()}));
+      button(node, "打开已保存画布", async () => {
         if (!window.confirm("Replace the current canvas with the saved project?")) return;
         await app.loadGraphData(await request("load", {graph: snapshot()}));
       });
@@ -349,7 +323,13 @@ app.registerExtension({
       widget.computeSize = () => [350, tag === "audio" ? 65 : 220];
       node.canvasMedia = media;
     }
+    button(node, "恢复上次参数", async () => {
+      const result = await request("restore", {graph: snapshot(), task: String(node.id)});
+      restoreValues(node, result.values);
+      scheduleRefresh();
+    });
     if (type === "TuringCanvasH3") button(node, "生成", () => generate(node));
+    if (["TuringCanvasVideo", "TuringCanvasAudio"].includes(type)) rangeControls(node, request, snapshot, scheduleRefresh);
     const oldMenu = node.getExtraMenuOptions;
     node.getExtraMenuOptions = function(_, options) {
       oldMenu?.apply(this, arguments);
@@ -370,8 +350,9 @@ app.registerExtension({
         }});
       }
     };
+    node.setSize(node.computeSize());
     scheduleRefresh();
   },
   beforeConfigureGraph() { configuring = true; },
-  afterConfigureGraph() { configuring = false; armed = false; filterTypes(); refresh().catch(() => {}); },
+  afterConfigureGraph() { configuring = false; filterTypes(); refresh().catch(() => {}); },
 });
