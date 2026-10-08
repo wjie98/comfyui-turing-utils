@@ -7,6 +7,8 @@ test('connected coordinate controls retain their rows, values and sockets', () =
   const widgets = ['positive_coords','negative_coords'].map(name=>({name,type:'text',computeSize,value:'[]',options:{}}));
   const inputs = widgets.map(w=>({name:w.name,widget:{name:w.name},link:null}));
   const node = {widgets, inputs}, restore = stableInputRows(node, widgets.map(w=>w.name));
+  restore();
+  assert.ok(inputs.every(input => !input.widget));
   inputs[0].link = 42;
   widgets[0].hidden = true; widgets[0].type = 'converted-widget'; widgets[0].computeSize = () => [0,-4];
   restore();

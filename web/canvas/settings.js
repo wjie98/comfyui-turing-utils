@@ -1,5 +1,6 @@
 import { app } from "../../../scripts/app.js";
 import { choiceMenu, requestGuard } from "./ui.js";
+import { PowerLoraRow, PowerLoraHeader } from "./power_lora_widget.js";
 
 export function namespaceLabels(node) {
   for (const w of node.widgets ?? []) {
@@ -16,6 +17,7 @@ export function namespaceLabels(node) {
 // rgthree uses Canvas row widgets and this LiteGraph menu, not HTML selects.
 export function loraControls(node, request, changed) {
   const storage = node.widgets.find(w => w.name === "loras");
+  storage.hidden = true; storage.options.hidden = true;
   storage.type = "hidden"; storage.computeSize = () => [0, -4];
   let rows = [], current;
   const beginSelection = requestGuard(node);
@@ -37,44 +39,12 @@ export function loraControls(node, request, changed) {
     catch (error) { app.extensionManager?.toast?.add({severity: "error", summary: error.message}); return; }
     current = storage.value;
     node.widgets = node.widgets.filter(w => !w.canvasLoraRow);
-    const widgets = rows.map((entry, index) => node.addCustomWidget({
-      name: `lora_row_${index}`, type: "custom", canvasPreview: true, canvasLoraRow: true,
-      options: {serialize: false}, serialize: false, value: null, y: 0, last_y: 0,
-      computeLayoutSize: () => ({minWidth: 300, minHeight: 26, maxHeight: 26}),
-      draw(ctx, owner, width, y, height) {
-        this.last_y = y;
-        ctx.save(); ctx.fillStyle = LiteGraph.WIDGET_BGCOLOR;
-        ctx.beginPath(); ctx.roundRect(10, y, width - 20, height, 5); ctx.fill();
-        ctx.font = "13px sans-serif"; ctx.textBaseline = "middle";
-        ctx.fillStyle = entry.on !== false ? "#72b98b" : "#777";
-        ctx.fillText(entry.on !== false ? "●" : "○", 17, y + height / 2);
-        ctx.fillStyle = LiteGraph.WIDGET_TEXT_COLOR;
-        ctx.save(); ctx.beginPath(); ctx.rect(38, y, Math.max(0, width - 180), height); ctx.clip();
-        ctx.fillText(entry.name || "选择 LoRA", 38, y + height / 2); ctx.restore();
-        ctx.textAlign = "center";
-        ctx.fillText("▾", width - 133, y + height / 2);
-        ctx.fillText("−", width - 112, y + height / 2);
-        ctx.save(); ctx.beginPath(); ctx.rect(width - 98, y, 41, height); ctx.clip();
-        ctx.fillText(String(Number(entry.strength ?? 1)), width - 78, y + height / 2, 40);
-        ctx.restore();
-        ctx.fillText("+", width - 45, y + height / 2);
-        ctx.fillText("×", width - 20, y + height / 2); ctx.restore();
-      },
-      mouse(event, pos) {
-        if (!["pointerdown", "mousedown"].includes(event.type)) return false;
-        const x = pos[0], width = node.size[0];
-        if (x < 35) { entry.on = entry.on === false; commit(); }
-        else if (x < width - 122) select(event, name => { if (rows.includes(entry)) { entry.name = name; commit(); } });
-        else if (x > width - 32) { rows.splice(index, 1); commit(); rebuild(); }
-        else if (x < width - 98 || x > width - 57) {
-          const next = Number((Number(entry.strength ?? 1) + (x < width - 98 ? -.05 : .05)).toPrecision(15));
-          if (Number.isFinite(next)) { entry.strength = next; commit(); }
-        } else app.canvas.prompt("LoRA strength (finite float, negative / >1 allowed)", String(entry.strength ?? 1), input => {
-          const strength = Number(input); if (rows.includes(entry) && input?.trim() && Number.isFinite(strength)) { entry.strength = strength; commit(); }
-        }, event);
-        return true;
-      },
-    }));
+    const widgets = rows.map((entry, index) => node.addCustomWidget(new PowerLoraRow(`lora_row_${index}`, entry, {
+      valid: () => rows.includes(entry), changed: commit,
+      choose: event => select(event, name => { if (rows.includes(entry)) { entry.name = name; commit(); } }),
+      prompt: (event, callback) => app.canvas.prompt("LoRA strength", String(entry.strength ?? 1), callback, event),
+    })));
+    if (rows.length) widgets.unshift(node.addCustomWidget(new PowerLoraHeader(() => rows, commit)));
     for (const row of widgets) node.widgets.splice(node.widgets.indexOf(row), 1);
     const add = node.addWidget("button", "+ 添加 LoRA", null, (...args) => {
       const event = args.find(arg => arg && typeof arg.clientX === "number");
@@ -87,6 +57,29 @@ export function loraControls(node, request, changed) {
     node.setSize([Math.max(node.size[0], minimum[0]), Math.max(node.size[1], minimum[1])]);
     node.setDirtyCanvas(true, true);
   };
+  // Match Power LoRA's row context menu rather than squeezing a delete button
+  // into the strength control. Use the very same painted row bounds.
+  const getSlot = node.getSlotInPosition;
+  const slotMenu = node.getSlotMenuOptions;
+  node.getSlotInPosition = function(x, y, ...args) {
+    const slot = getSlot?.call(this, x, y, ...args);
+    if (slot) { this.getSlotMenuOptions = slotMenu; return slot; }
+    const widget = this.widgets.find(w => w.canvasLoraEntry && x >= this.pos[0] + 10 && x <= this.pos[0] + this.size[0] - 10 && y >= this.pos[1] + w.last_y && y <= this.pos[1] + w.last_y + w.computeSize()[1]);
+    this.getSlotMenuOptions = widget ? loraMenu : slotMenu;
+    return widget ? {widget, output: {type: "LORA WIDGET"}} : slot;
+  };
+  const loraMenu = function(slot) {
+    if (!slot.widget?.canvasLoraEntry) return slotMenu?.call(this, slot);
+    const entry = slot.widget.entry, index = rows.indexOf(entry);
+    const update = fn => () => { if (!rows.includes(entry)) return; fn(); commit(); rebuild(); };
+    return [
+      {content: entry.on === false ? "Toggle On" : "Toggle Off", callback: update(() => { entry.on = entry.on === false; })},
+      {content: "Move Up", disabled: index <= 0, callback: update(() => { const i = rows.indexOf(entry); if (i > 0) [rows[i-1], rows[i]] = [rows[i], rows[i-1]]; })},
+      {content: "Move Down", disabled: index >= rows.length - 1, callback: update(() => { const i = rows.indexOf(entry); if (i < rows.length - 1) [rows[i+1], rows[i]] = [rows[i], rows[i+1]]; })},
+      {content: "Remove LoRA", callback: update(() => rows.splice(rows.indexOf(entry), 1))},
+    ];
+  };
+  node.getSlotMenuOptions = loraMenu;
   const callback = storage.callback;
   storage.callback = function(...args) { callback?.apply(this, args); rebuild(); };
   const draw = node.onDrawForeground;

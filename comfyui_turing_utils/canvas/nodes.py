@@ -44,7 +44,7 @@ class CanvasH3Settings(CanvasCard):
             inputs=[
                 model_input("dit", "diffusion_models"), model_input("clip", "text_encoders"),
                 model_input("video_vae", "vae"), model_input("audio_vae", "vae"),
-                io.String.Input("loras", default="[]",
+                io.String.Input("loras", default="[]", socketless=True,
                     tooltip='JSON list: [{"name":"model.safetensors","strength":1.0}]'),
                 io.Boolean.Input("force_int8_gemm", default=False, advanced=True),
                 io.Combo.Input("attention", options=["w8a8", "sage", "sdpa"], advanced=True),

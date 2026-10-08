@@ -19,6 +19,9 @@ try {
       return widget.y;
     });
     await wait(); const before=positions();
+    for (const name of ['positive_coords','negative_coords']) {
+      check(!target.inputs.find(s=>s.name===name).widget, 'Coordinate socket still uses widget-conversion path');
+    }
     for(const name of ['positive_coords','negative_coords']) {
       const output=source.outputs.findIndex(s=>s.name===name),input=target.inputs.findIndex(s=>s.name===name);
       check(source.connect(output,target,input), 'Connection failed: '+name);

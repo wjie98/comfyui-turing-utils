@@ -13,6 +13,7 @@ try {
   await page.waitForTimeout(1500);
   console.log(await page.evaluate(async () => {
     const check = (ok, text) => { if (!ok) throw Error(text); };
+    check(!LiteGraph.vueNodesMode, "This regression must run on the classic canvas");
     app.graph.clear();
     const add = type => { const node = LiteGraph.createNode(type); app.graph.add(node); return node; };
     const store = window.comfyAPI?.nodeDefStore?.useNodeDefStore?.() ?? app.extensionManager?._p?._s?.get("nodeDef");
@@ -29,6 +30,9 @@ try {
     const sec = add(type);
     sec.showAdvanced = true;
     const serializedOrder = (sec.widgets ?? []).map(w => w.name);
+    sec.showAdvanced = false;
+    check(sec.getLayoutWidgets().every(w => !w.advanced), 'Classic canvas leaked advanced controls: ' + type);
+    sec.showAdvanced = true;
     const layout = sec.getLayoutWidgets();
     let advanced = false;
     for (const w of layout) {
@@ -60,6 +64,7 @@ try {
     const savedNode = sec.serialize();
     const clone = add(type); clone.configure({...savedNode, id: clone.id});
     check(JSON.stringify(clone.serialize().widgets_values) === JSON.stringify(savedNode.widgets_values), `Widget roundtrip: ${type}`);
+    check([...clone.computeSize()].every(Number.isFinite), `Invalid restored size: ${type}`);
     app.graph.remove(clone);
     app.graph.remove(sec);
     }
@@ -72,7 +77,8 @@ try {
     const settingsLayout = settings.getLayoutWidgets();
     const addIndex = settingsLayout.findLastIndex(w => w.canvasLoraRow);
     check(settingsLayout[addIndex + 1]?.name === "shift_video" && settingsLayout[addIndex + 2]?.name === "shift_audio", "Shift controls not below LoRA");
-    check(settings.widgets.filter(w => w.canvasLoraRow).length === 3, "LoRA row count");
+    check(settings.widgets.filter(w => w.canvasLoraRow).length === 4, "LoRA row count");
+    check(!settingsLayout.includes(storage), "Internal JSON control is visible");
     check(!settings.widgets.some(w => w.name === "lora_stack"), "HTML LoRA overlay remains");
     const sizes = [];
     for (const node of assets) {
@@ -103,9 +109,9 @@ try {
   await page.waitForTimeout(800);
   const point = await page.evaluate(() => {
     const node = app.graph._nodes.find(n => n.type === "TuringCanvasH3Settings");
-    const rows = node.widgets.filter(w => w.type === "custom" && w.canvasLoraRow);
+    const rows = node.widgets.filter(w => w.canvasLoraEntry);
     const following = node.widgets.find(w => w.name === "sampler_name");
-    if (!(following.last_y >= rows.at(-1).last_y + 26)) throw Error(`Rows overlap following parameter ${following.last_y} ${rows.at(-1).last_y}`);
+    if (!(following.last_y >= rows.at(-1).last_y + 20)) throw Error(`Rows overlap following parameter ${following.last_y} ${rows.at(-1).last_y}`);
     const rect = app.canvas.canvas.getBoundingClientRect();
     return {x: rect.x + node.pos[0] + 55, y: rect.y + node.pos[1] + rows[0].last_y + 13};
   });
@@ -113,8 +119,9 @@ try {
   await page.evaluate(({x, y}) => {
     app.canvas.ds.scale = 2.5;
     const node = app.graph._nodes.find(n => n.type === "TuringCanvasH3Settings");
-    const row = node.widgets.find(w => w.type === "custom" && w.canvasLoraRow);
+    const row = node.widgets.find(w => w.canvasLoraEntry);
     row.mouse(new PointerEvent("pointerdown", {clientX:x, clientY:y}), [55, row.last_y + 13], node);
+    row.mouse(new PointerEvent("pointerup", {clientX:x, clientY:y}), [55, row.last_y + 13], node);
   }, point);
   if (process.env.CANVAS_SCREENSHOT) await page.screenshot({path:process.env.CANVAS_SCREENSHOT});
   await page.waitForSelector(".litecontextmenu");
@@ -129,21 +136,26 @@ try {
     const node = app.graph._nodes.find(n => n.type === "TuringCanvasH3Settings");
     const storage = node.widgets.find(w => w.name === "loras");
     if (JSON.parse(storage.value)[0].name !== "folder/beta.safetensors") throw Error("Native LoRA selection failed: " + storage.value);
-    const row = node.widgets.find(w => w.type === "custom" && w.canvasLoraRow);
-    const event = new PointerEvent("pointerdown");
-    row.mouse(event, [20, row.last_y + 10]);
+    const row = node.widgets.find(w => w.canvasLoraEntry);
+    const click = part => {
+      const b = row.hitAreas[part], pos = [b[0] + b[2]/2, b[1] + b[3]/2];
+      row.mouse(new PointerEvent("pointerdown"), pos, node);
+      row.mouse(new PointerEvent("pointerup"), pos, node);
+    };
+    click("toggle");
     if (JSON.parse(storage.value)[0].on !== false) throw Error("LoRA toggle failed");
-    row.mouse(event, [node.size[0] - 45, row.last_y + 10]);
+    click("strengthInc");
     if (JSON.parse(storage.value)[0].strength !== 1.05) throw Error("LoRA strength failed");
     const prompt = app.canvas.prompt;
     try {
       for (const value of ["-2.345678", "12.000123"]) {
         app.canvas.prompt = (_title, _value, callback) => callback(value);
-        row.mouse(event, [node.size[0] - 78, row.last_y + 10]);
+        click("strengthVal");
         if (JSON.parse(storage.value)[0].strength !== Number(value)) throw Error("LoRA float precision/range lost");
       }
     } finally { app.canvas.prompt = prompt; }
-    row.mouse(event, [node.size[0] - 20, row.last_y + 10]);
+    const slot = node.getSlotInPosition(node.pos[0] + 60, node.pos[1] + row.last_y + 10);
+    node.getSlotMenuOptions(slot).find(item => item.content === "Remove LoRA").callback();
     if (JSON.parse(storage.value).length !== 1) throw Error("LoRA removal failed");
     return {loraSelection: "OK"};
   }));

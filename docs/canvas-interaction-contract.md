@@ -84,6 +84,13 @@ node resize and restored dimensions are clamped, with a maximum preview height
 of 900 pixels and node width of 1600 pixels.
 
 LoRA rows are Canvas widgets beside ordinary controls, not floating DOM overlays.
+The shared `power_lora_widget.js` adapter follows rgthree Power LoRA's native
+row layout and pointer interaction (MIT attribution is shipped beside it).
+Use a left enable toggle, filename picker, right strength arrows/value, and a
+row context menu for removal/reordering. Arrow step is 0.05; direct entry accepts
+any finite float. Hidden JSON storage must have `hidden` set, not merely its
+`type` changed. Draw width, outer widget hit width and per-control hit rectangles
+must agree after every resize; never trust a stale supplied widget width.
 Their picker stays in screen space, independent of graph zoom, and is constrained
 to the viewport. Click strength to enter a finite float (negative and >1 are valid);
 the +/- controls are small increments, not a 0–1 slider. Video/audio sigma shifts
@@ -111,6 +118,37 @@ layout and repeated preview resize against a running development server. It requ
 external Playwright/Chromium (PLAYWRIGHT_MODULE and CHROMIUM_PATH); do not install
 browser dependencies into production. Widget-handler tests are not a replacement
 for manual dragging/clicking in an active ComfyUI workflow tab.
+
+### Frontend compatibility gate
+
+Classic LiteGraph canvas is a required path for **all** public nodes, not only
+Canvas cards. Never require users to enable Nodes 2.0. New controls must work
+with the classic widget, socket, serialization and DOM-widget lifecycle; Nodes
+2.0 is an additional compatibility path, not a substitute for these tests.
+Keep `widget.advanced` and `widget.options.advanced` synchronized. Sort display
+layout only, never serialized widget values or connection indices. Do not depend
+on Vue-only node components to expose an essential control.
+
+Current audit entry points:
+
+| Extension | Classic-canvas responsibility | Regression |
+| --- | --- | --- |
+| `node_configuration.js` / `lib/widget_layout.js` | advanced flags, dynamic parameter order, hidden internal entries | all public ordinary types and DynamicCombo branches in `canvas_controls.mjs` |
+| `lib/stable_inputs.js` | SeC coordinate editors remain separate from named STRING sockets | `sec_connections.mjs`: both links, API serialization, legacy conversion, reload/reconnect |
+| `keyframe_outputs.js`, `stage_barrier_outputs.js` | dynamic outputs use shared LiteGraph APIs, not Vue rendering | source audit and node/schema tests; target-version manual link/resize check remains required |
+| `canvas/canvas.js`, `controls.js`, `ui.js` | native selectors/buttons, material ports, bounded DOM previews | Canvas card creation, history selectors, resize/reload and idle request checks |
+| `canvas/settings.js`, `power_lora_widget.js` | native LoRA row drawing and hit testing | `power_lora_interaction.mjs`: DOM pointer events through canvas listener after repeated resize/redraw with stale width |
+
+SeC positive/negative editors are deliberately not widget-backed input sockets:
+legacy widget conversion otherwise hides the editor upon connection. Ordinary
+STRING ports retain their names/indices; the separate editor is disabled while
+linked and re-enabled on disconnect. API links take precedence over local text.
+
+The automated classic-canvas pass is not a claim of compatibility with every
+historical frontend or third-party widget extension. Verify the user's installed
+frontend when reproducing a remaining issue. Subgraph embedding and Nodes 2.0
+require their own interaction checks; node-level serialization alone does not
+prove either rendering path. Keep these limits explicit in release handoffs.
 
 Persist schema version and named widget values, never rely on positional widget
 arrays for new saves. Maintain explicit migration for supported older schemas;
