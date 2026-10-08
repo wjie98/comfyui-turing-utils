@@ -82,7 +82,7 @@ class _H3UpscaleApply(io.ComfyNode):
         return io.Schema(
             node_id="_TuringUtilsH3UpscaleApply",
             is_dev_only=True,
-            display_name="MiniMax H3 Latent Upscale",
+            display_name="MiniMax H3 Latent Upscale (Internal Apply)",
             category="",
             description=(
                 "Learned spatial pixel-count upscale for MiniMax H3 AV latents. The video stream and "
@@ -131,6 +131,7 @@ class MiniMaxH3LatentUpscale(io.ComfyNode):
     def define_schema(cls):
         schema = _H3UpscaleApply.define_schema()
         schema.node_id = "TuringUtilsMiniMaxH3LatentUpscale"
+        schema.display_name = "MiniMax H3 Latent Upscale"
         schema.is_dev_only = False
         schema.category = "Turing Utils/MiniMax H3"
         schema.inputs = _H3UpscaleLoader.define_schema().inputs + schema.inputs[1:]

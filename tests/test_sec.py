@@ -171,6 +171,8 @@ class SeCNodeTest(unittest.TestCase):
         self.assertIn("bounding_box", tracker_inputs)
         self.assertIn("mask", tracker_inputs)
         tracker_by_id = {item.id: item for item in tracker.inputs}
+        self.assertFalse(tracker_by_id["bounding_box"].socketless)
+        self.assertTrue(tracker_by_id["bounding_box"].force_input)
         self.assertFalse(tracker_by_id["positive_coords"].multiline)
         self.assertFalse(tracker_by_id["negative_coords"].multiline)
         self.assertEqual(tracker_by_id["annotation_frame_idx"].min, -1_000_000)

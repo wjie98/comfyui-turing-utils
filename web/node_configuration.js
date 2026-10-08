@@ -1,8 +1,17 @@
 import { app } from "../../scripts/app.js";
 import { migrateNoiseGrid } from "./lib/node_migrations.js";
+import { advancedLast, isInternalNode, hideInternalNode } from "./lib/widget_layout.js";
 
 app.registerExtension({
   name: "TuringUtils.NodeConfiguration",
+  beforeRegisterNodeDef(type, data) {
+    if (isInternalNode(data.name)) hideInternalNode(type);
+  },
+  setup() {
+    const store = window.comfyAPI?.nodeDefStore?.useNodeDefStore?.()
+      ?? app.extensionManager?._p?._s?.get("nodeDef");
+    store?.registerNodeDefFilter?.({id: "turing.internal", predicate: def => !isInternalNode(def.name)});
+  },
   nodeCreated(node) {
     if (!node.comfyClass?.startsWith("TuringUtils") && !node.comfyClass?.startsWith("TuringCanvas")) return;
     // The legacy canvas reads widget.advanced; Nodes 2.0 reads options.advanced.
@@ -18,8 +27,14 @@ app.registerExtension({
     const layoutWidgets = node.getLayoutWidgets;
     if (layoutWidgets && node.isWidgetVisible) {
       node.getLayoutWidgets = function (...args) {
+        // DynamicCombo can create children after nodeCreated/onConfigure.
+        sync();
         const widgets = layoutWidgets.apply(this, args);
-        return globalThis.LiteGraph?.vueNodesMode ? widgets : widgets.filter(w => this.isWidgetVisible(w));
+        const visible = globalThis.LiteGraph?.vueNodesMode ? widgets : widgets.filter(w => this.isWidgetVisible(w));
+        // Sort the display only: widgets_values must retain its serialized order.
+        return this.comfyClass?.startsWith("TuringUtils")
+          ? advancedLast(visible)
+          : visible;
       };
     }
     // Size new nodes compactly; onConfigure still restores users' saved sizes.

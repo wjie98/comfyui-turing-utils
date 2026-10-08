@@ -239,7 +239,9 @@ export function rangeControls(node, request, snapshot, changed) {
   let revision = 0;
   node.canvasUpdateRange = async asset => {
     const current = ++revision;
+    duration = 0; node.canvasSyncRange();
     inputs.forEach(input => { input.disabled = true; });
+    if (!asset) return;
     try {
       const metadata = await request("metadata", {graph: snapshot(), asset});
       if (current !== revision) return;

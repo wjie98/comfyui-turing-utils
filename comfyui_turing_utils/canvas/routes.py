@@ -88,7 +88,7 @@ def install_canvas_routes():
     @endpoint("post", "history")
     async def history(request):
         data = await request.json()
-        nodes, _, project = context(data)
+        nodes, _, project = context(data, create=False)
         node = nodes[str(data["task"])]
         kind = ASSETS.get(node["type"], "video")
         prefix = node["values"].get("filename_prefix", "h3") if node["type"] == H3 else None

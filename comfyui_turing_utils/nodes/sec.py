@@ -54,7 +54,7 @@ class _SeCApply(io.ComfyNode):
         return io.Schema(
             node_id="_TuringUtilsSeCApply",
             is_dev_only=True,
-            display_name="SeC Track Visual Concept",
+            display_name="SeC Track Visual Concept (Internal Apply)",
             category="",
             description=(
                 "Track one visual concept through a video. With mask connected, the mask is "
@@ -79,6 +79,7 @@ class _SeCApply(io.ComfyNode):
                 io.BoundingBox.Input(
                     "bounding_box",
                     optional=True,
+                    socketless=False,
                     force_input=True,
                     tooltip="Canonical ComfyUI BOUNDING_BOX prompt.",
                 ),
@@ -167,6 +168,7 @@ class SeCTrackVisualConcept(io.ComfyNode):
     def define_schema(cls):
         schema = _SeCApply.define_schema()
         schema.node_id = "TuringUtilsSeCTrackVisualConcept"
+        schema.display_name = "SeC Track Visual Concept"
         schema.is_dev_only = False
         schema.category = "Turing Utils/Mask"
         schema.inputs = _SeCLoader.define_schema().inputs + schema.inputs[1:]

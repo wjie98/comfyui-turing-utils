@@ -2,6 +2,7 @@ import { app } from "../../../scripts/app.js";
 import { api } from "../../../scripts/api.js";
 import { directoryPicker, resolutionControls, rangeControls, restoreValues, persistParameters, socketLabels, MATERIAL_COLORS } from "./controls.js";
 import { loraControls, namespaceLabels } from "./settings.js";
+import { boundedPreview, requestGuard } from "./ui.js";
 
 const PREFIX = "TuringCanvas";
 const isCard = n => (n?.comfyClass ?? n?.type ?? "").startsWith(PREFIX);
@@ -16,6 +17,7 @@ let filteredState;
 let activeTask = null;
 let refreshPending = false;
 let refreshAgain = false;
+let historyRevision = 0;
 
 function snapshot() {
   if (app.graph._nodes.some(n => (n.properties?.canvasSchemaVersion ?? 1) > 3)) {
@@ -44,35 +46,64 @@ async function request(path, body) {
 
 function report(error) { console.error("Turing Canvas", error); window.alert(error.message ?? String(error)); }
 
-function choose(title, items) {
-  return new Promise(resolve => {
-    const dialog = document.createElement("dialog");
-    dialog.style.cssText = "min-width:360px;max-width:80vw;background:var(--comfy-menu-bg);color:var(--input-text);border:1px solid #555;padding:20px";
-    const heading = document.createElement("h3"); heading.textContent = title;
-    const select = document.createElement("select"); select.size = 12; select.style.cssText = "width:100%;min-height:220px";
-    for (const item of items) { const option = document.createElement("option"); option.value = item.id; option.textContent = item.name; select.append(option); }
-    const ok = document.createElement("button"); ok.textContent = "选择";
-    const cancel = document.createElement("button"); cancel.textContent = "取消";
-    let answer = null;
-    ok.onclick = () => { answer = select.value || null; dialog.close(); };
-    select.ondblclick = ok.onclick;
-    cancel.onclick = () => dialog.close();
-    dialog.onclose = () => { dialog.remove(); resolve(answer); };
-    dialog.append(heading, select, ok, cancel); document.body.append(dialog); dialog.showModal();
-  });
-}
-
-async function history(node) {
-  const {items} = await request("history", {graph: snapshot(), task: String(node.id)});
-  const asset = await choose(node.type === "TuringCanvasH3" ? "历史生成结果" : "项目素材", items);
-  if (!asset) return;
-  if (node.type === "TuringCanvasH3") await request("select", {graph: snapshot(), task: String(node.id), asset});
-  else node.widgets.find(w => w.name === "asset_id").value = asset;
-  await refresh();
+function historyControl(node) {
+  const generated = (node.comfyClass ?? node.type) === "TuringCanvasH3";
+  const beginRead = requestGuard(node, () => value(manager(), "work_directory"));
+  const beginSelection = requestGuard(node, () => value(manager(), "work_directory"));
+  let selection = Promise.resolve();
+  let widget = generated ? node.addWidget("combo", "历史生成结果", "", async asset => {
+    if (!asset) { widget.value = node.properties.canvasAsset || ""; return; }
+    const valid = beginSelection(), graph = snapshot();
+    const pending = {};
+    node.canvasSelectionPending = pending;
+    selection = selection.catch(() => {}).then(async () => {
+      try { if (!valid()) return; await request("select", {graph, task: String(node.id), asset}); if (valid()) await refresh(); }
+      catch (error) { if (valid()) { widget.value = node.properties.canvasAsset || ""; report(error); } }
+      finally { if (node.canvasSelectionPending === pending) node.canvasSelectionPending = false; }
+    });
+    await selection;
+  }, {values: [""], serialize: false}) : node.widgets.find(w => w.name === "asset_id");
+  if (generated) widget.canvasPreview = true;
+  else {
+    // Changing a TextWidget's type does not replace its native click handler.
+    const original = widget, index = node.widgets.indexOf(original);
+    widget = node.addWidget("combo", original.name, original.value, function(...args) {
+      original.callback?.apply(this, args); scheduleRefresh();
+    }, {...original.options, values: [""], advanced: false});
+    node.widgets.splice(node.widgets.indexOf(widget), 1);
+    node.widgets.splice(index, 1, widget);
+    original.onRemove?.();
+    widget.label = "项目素材";
+    widget.advanced = false;
+  }
+  let key;
+  node.canvasUpdateHistory = async () => {
+    const selected = generated ? node.properties.canvasAsset || "" : widget.value;
+    if (generated) widget.value = selected;
+    const next = JSON.stringify([value(manager(), "work_directory"), value(node, "filename_prefix"), selected, historyRevision]);
+    if (next === key) return;
+    key = next;
+    const valid = beginRead();
+    try {
+      const {items} = await request("history", {graph: snapshot(), task: String(node.id)});
+      if (key !== next || !valid()) return;
+      widget.options.values = [...new Set(["", ...items.map(item => item.id), ...(selected ? [selected] : [])])];
+      node.setDirtyCanvas(true, true);
+    } catch (error) { if (key === next) key = undefined; }
+  };
+  const refreshCombo = node.refreshComboInNode;
+  node.refreshComboInNode = function(...args) { refreshCombo?.apply(this, args); key = undefined; this.canvasUpdateHistory(); };
 }
 
 function preview(node, asset) {
-  if (!node.canvasMedia || !asset || !manager()) return;
+  if (!node.canvasMedia || !manager()) return;
+  if (!asset) {
+    if (node.canvasMedia.dataset.assetUrl) {
+      node.canvasMedia.pause?.(); node.canvasMedia.removeAttribute("src"); node.canvasMedia.removeAttribute("poster");
+      delete node.canvasMedia.dataset.assetUrl; node.canvasMedia.load?.(); node.canvasUpdateRange?.(null);
+    }
+    return;
+  }
   const directory = value(manager(), "work_directory");
   const url = api.apiURL(`/turing/canvas/asset?directory=${encodeURIComponent(directory)}&id=${encodeURIComponent(asset)}`);
   if (node.canvasMedia.tagName === "VIDEO") {
@@ -90,7 +121,9 @@ async function refresh() {
   if (refreshPending) { refreshAgain = true; return; }
   refreshPending = true;
   try {
+  const graph = app.graph, directory = value(manager(), "work_directory");
   const data = await request("state", {graph: snapshot()});
+  if (app.graph !== graph || value(manager(), "work_directory") !== directory) return;
   lastState = data.state;
   lastPlan = data.plan;
   for (const node of app.graph._nodes.filter(isCard)) {
@@ -103,7 +136,10 @@ async function refresh() {
       preview(node, result.asset);
     } else if (["TuringCanvasImage", "TuringCanvasVideo", "TuringCanvasAudio"].includes(node.type)) {
       preview(node, value(node, "asset_id"));
+    } else if (node.type === "TuringCanvasH3") {
+      delete node.properties.canvasAsset; preview(node, null);
     }
+    node.canvasUpdateHistory?.();
     node.canvasStatus = lastPlan.find(p => p.id === String(node.id))?.status ?? "material";
   }
   app.graph.setDirtyCanvas(true, true);
@@ -144,6 +180,7 @@ async function runTask(node, graph = snapshot()) {
     const result = await request("run", {graph, task: String(node.id), client_id: api.clientId});
     activeTask = {node, promptId: result.prompt_id};
     await waitResult(result.prompt_id);
+    historyRevision++;
     node.canvasError = false;
     await refresh();
   } catch (error) { node.canvasError = true; throw error; }
@@ -152,6 +189,7 @@ async function runTask(node, graph = snapshot()) {
 
 async function generate(node) {
   if (busy) throw new Error("A canvas task is already running. Wait for it to finish.");
+  if (app.graph._nodes.some(n => n.canvasSelectionPending)) throw new Error("请等待历史素材选择完成后再生成。");
   busy = true;
   try { await runTask(node); } finally { busy = false; }
 }
@@ -159,8 +197,10 @@ async function generate(node) {
 async function importFile(node, file) {
   const settings = manager();
   if (!settings) throw new Error("Create Canvas Settings first");
+  const valid = node.canvasBeginImport();
+  const graph = snapshot();
   const form = new FormData();
-  form.append("canvas", JSON.stringify({graph: snapshot(), task: String(node.id)}));
+  form.append("canvas", JSON.stringify({graph, task: String(node.id)}));
   form.append("file", file);
   let asset;
   try {
@@ -169,11 +209,13 @@ async function importFile(node, file) {
     if (!response.ok) throw new Error(asset.error || `HTTP ${response.status}`);
   } catch (uploadError) {
     try {
-      asset = await request("import", {graph: snapshot(), task: String(node.id), filename: file.name, size: file.size});
+      asset = await request("import", {graph, task: String(node.id), filename: file.name, size: file.size});
     } catch (copyError) {
       throw new Error(`上传失败：${uploadError.message}\n服务器拷贝失败：${copyError.message}\n浏览器不能提供本机绝对路径；可将文件放到服务器 input 目录，并填写 local_path。`);
     }
   }
+  if (!valid()) return;
+  historyRevision++;
   node.widgets.find(w => w.name === "asset_id").value = asset.id;
   await refresh();
 }
@@ -240,6 +282,8 @@ app.registerExtension({
     if (!isCard(node)) return;
     const type = node.comfyClass ?? node.type;
     node.properties ??= {};
+    node.canvasBeginImport = requestGuard(node, () => value(manager(), "work_directory"));
+    node.canvasBeginEdit = requestGuard(node, () => value(manager(), "work_directory"));
     persistParameters(node);
     namespaceLabels(node);
     if (type === "TuringCanvasH3Settings") loraControls(node, request, scheduleRefresh);
@@ -287,10 +331,13 @@ app.registerExtension({
         await app.loadGraphData(await request("load", {graph: snapshot()}));
       });
     } else if (["TuringCanvasImage", "TuringCanvasVideo", "TuringCanvasAudio"].includes(type)) {
-      button(node, "选择项目素材", () => history(node));
+      historyControl(node);
       button(node, "导入素材", async () => {
         if (value(node, "local_path")) {
+          const valid = node.canvasBeginImport();
           const asset = await request("import", {graph: snapshot(), task: String(node.id)});
+          if (!valid()) return;
+          historyRevision++;
           node.widgets.find(w => w.name === "asset_id").value = asset.id;
           await refresh();
         } else {
@@ -308,9 +355,11 @@ app.registerExtension({
       };
     } else if (type === "TuringCanvasH3") {
       const promptButton = button(node, "生成模型提示词", async () => {
+        const valid = node.canvasBeginEdit();
         const widget = node.widgets.find(w => w.name === "model_prompt");
         const before = widget.value;
         const result = await request("enhance", {graph: snapshot(), task: String(node.id)});
+        if (!valid()) return;
         if (widget.value !== before && !window.confirm("Model prompt was edited during enhancement. Replace it?")) return;
         node.properties.canvasPreviousPrompt = widget.value;
         widget.value = result.model_prompt;
@@ -318,7 +367,7 @@ app.registerExtension({
       });
       node.widgets.splice(node.widgets.indexOf(promptButton), 1);
       node.widgets.splice(node.widgets.findIndex(w => w.name === "model_prompt"), 0, promptButton);
-      button(node, "历史生成结果", () => history(node));
+      historyControl(node);
     }
     if (!["TuringCanvasSettings", "TuringCanvasH3Settings"].includes(type)) {
       const tag = type === "TuringCanvasImage" ? "img" : type === "TuringCanvasAudio" ? "audio" : "video";
@@ -333,27 +382,17 @@ app.registerExtension({
         if (event.dataTransfer.files[0]) importFile(node, event.dataTransfer.files[0]).catch(report);
       });
       const box = document.createElement("div");
-      box.style.cssText = "display:flex;flex-direction:column;width:100%;height:100%;min-height:0;background:#161616";
-      media.style.minHeight = "0"; media.style.flex = "1 1 0";
+      box.style.cssText = "display:flex;flex-direction:column;width:100%;height:100%;min-width:0;min-height:0;max-width:1580px;max-height:900px;overflow:hidden;background:#161616";
+      media.style.minHeight = "0"; media.style.minWidth = "0"; media.style.flex = "1 1 0";
       box.append(media);
-      const widget = node.addDOMWidget("material_preview", "canvas_preview", box, {serialize: false, hideOnZoom: true});
-      widget.canvasPreview = true;
-      widget.computeSize = () => [Math.max(200, node.size[0] - 20), node.properties.canvasPreviewHeight ?? (tag === "audio" ? 95 : 260)];
-      const resize = node.onResize;
-      let previousHeight;
-      node.onResize = function(size) {
-        resize?.call(this, size);
-        if (previousHeight !== undefined && !configuring) {
-          this.properties.canvasPreviewHeight = Math.max(tag === "audio" ? 95 : 180,
-            (this.properties.canvasPreviewHeight ?? (tag === "audio" ? 95 : 260)) + size[1] - previousHeight);
-        }
-        previousHeight = size[1];
-      };
+      boundedPreview(node, box, tag === "audio");
       node.canvasMedia = media;
       node.canvasPreviewBox = box;
     }
     button(node, "恢复上次参数", async () => {
+      const valid = node.canvasBeginEdit();
       const result = await request("restore", {graph: snapshot(), task: String(node.id)});
+      if (!valid()) return;
       restoreValues(node, result.values);
       scheduleRefresh();
     });
@@ -379,7 +418,8 @@ app.registerExtension({
         }});
       }
     };
-    node.setSize(node.computeSize());
+    const minimum = node.computeSize();
+    node.setSize([Math.max(390, minimum[0]), minimum[1]]);
     scheduleRefresh();
   },
   beforeConfigureGraph() { configuring = true; },

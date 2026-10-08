@@ -120,7 +120,7 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "TuringUtilsH3BuildConditioning": "H3 Build Conditioning",
     "_TuringUtilsH3UpscaleLoader": "H3 Upscale Loader (Internal)",
     "TuringUtilsMiniMaxH3LatentUpscale": "MiniMax H3 Latent Upscale",
-    "_TuringUtilsH3UpscaleApply": "MiniMax H3 Latent Upscale (Internal)",
+    "_TuringUtilsH3UpscaleApply": "MiniMax H3 Latent Upscale (Internal Apply)",
     "TuringUtilsResizeImageIfPresent": "Resize Image If Present",
     "TuringUtilsVideoMotionContactSheet": "Video Motion Contact Sheet (Experimental)",
     "TuringUtilsMultimodalPromptChat": "Multimodal Prompt Chat",
@@ -139,7 +139,7 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "TuringUtilsMaskToVisualPrompts": "Mask to Visual Prompts",
     "_TuringUtilsSeCLoader": "SeC Loader (Internal)",
     "TuringUtilsSeCTrackVisualConcept": "SeC Track Visual Concept",
-    "_TuringUtilsSeCApply": "SeC Track Visual Concept (Internal)",
+    "_TuringUtilsSeCApply": "SeC Track Visual Concept (Internal Apply)",
 }
 
 from .canvas.nodes import PUBLIC_NODES as CANVAS_NODES
@@ -148,4 +148,6 @@ from .canvas.routes import install_canvas_routes
 
 NODE_CLASS_MAPPINGS.update(CANVAS_NODES)
 NODE_CLASS_MAPPINGS.update(CANVAS_INTERNAL_NODES)
+for _name in CANVAS_INTERNAL_NODES:
+    NODE_DISPLAY_NAME_MAPPINGS[_name] = f"Canvas {_name.removeprefix('_TuringCanvas')} (Internal)"
 install_canvas_routes()

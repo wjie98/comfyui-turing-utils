@@ -75,6 +75,39 @@ Duration is seconds at 24 FPS, with model frame padding internal and trimmed awa
 
 ## Evolution
 
+### Reusable frontend controls
+
+`web/canvas/ui.js` owns native choice menus, request lifetime guards and bounded
+preview sizing. Use these helpers for new cards rather than per-node HTML
+selectors or resize-delta accumulation. The preview layout minimum is constant;
+node resize and restored dimensions are clamped, with a maximum preview height
+of 900 pixels and node width of 1600 pixels.
+
+LoRA rows are Canvas widgets beside ordinary controls, not floating DOM overlays.
+Only the JSON storage widget is persisted; visual rows are rebuilt from it.
+Material/history selectors use native combo widgets and project-relative filenames.
+History listing must not create project directories. Selection errors retain the
+previous successful output. Pending selections prevent generation until settled.
+
+Async UI work must validate node identity, project and request revision before
+applying results. Clearing a material releases its preview source and timeline.
+History lists invalidate on import/generation, not idle polling. Preserve stable
+serialized widget/socket order when changing display order (see `widget_layout.js`).
+
+Ordinary Turing nodes display common controls before advanced controls without
+reordering their serialized widgets. Dynamic children synchronize advanced flags
+at layout time, not just node creation. Internal execution nodes remain registered
+for API execution, but `turing.internal` filters the search/library and a permanent
+`skip_list` hides the native context-menu entry even with ComfyUI developer mode
+enabled. Internal schema titles and display mappings must explicitly say Internal;
+public fused nodes must override any inherited internal title.
+
+`tests/browser/canvas_controls.mjs` checks native control contracts, LoRA persistence,
+layout and repeated preview resize against a running development server. It requires
+external Playwright/Chromium (PLAYWRIGHT_MODULE and CHROMIUM_PATH); do not install
+browser dependencies into production. Widget-handler tests are not a replacement
+for manual dragging/clicking in an active ComfyUI workflow tab.
+
 Persist schema version and named widget values, never rely on positional widget
 arrays for new saves. Maintain explicit migration for supported older schemas;
 Version 3 removes import_mode/manual sigmas and folds old audio-output links into
