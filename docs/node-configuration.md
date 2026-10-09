@@ -22,6 +22,18 @@ native toggle, sizing, serialization and rendering remain in charge. Installatio
 is idempotent and per-node, not a global prototype patch. Remove this bridge when
 the supported native frontend handles both flags and folded layout consistently.
 
+Maintenance requirement: on each frontend upgrade, or whenever an upstream fix
+is encountered, explicitly recheck this workaround with the helper disabled.
+If native flag propagation and classic folded layout pass resize, native toggle,
+DynamicCombo and reload tests, proactively delete web/lib/advanced_layout.js and
+web/chat_advanced.js in that change. Do not preserve them for speculative legacy
+compatibility. Adapt chat_advanced_layout.mjs to test native behavior without its
+helper import/idempotence assertion; update package-architecture assertions and
+retain the geometry regressions. If only one defect is fixed, remove only the
+now-redundant portion. A version bump alone is not evidence of a fix.
+Last checked 2026-10-09: runtime verified on 1.53.6; v1.57.0 and main still reserve
+folded advanced layout space in source review (not runtime verification).
+
 There is no old-workflow migration or detached-socket repair layer. Workflows
 saved with previous custom layouts may need affected nodes recreated. Do not
 reintroduce broad compatibility hooks to preserve those broken layouts.
