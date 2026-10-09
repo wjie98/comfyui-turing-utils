@@ -11,7 +11,7 @@ sys.path.insert(0, str(ROOT))
 
 from comfyui_turing_utils.nodes.video_padding import VideoFramesPadding, padded_frame_count
 from comfyui_turing_utils.nodes.latent import VIDEO_MASK_SPECS, SetVideoLatentNoiseMask, _image_frame_groups
-from comfyui_turing_utils.nodes.video_sequence import H3SetAudioPrefixNoiseMask, VideoPrefixContextNoise
+from comfyui_turing_utils.nodes.video_sequence import H3SetAudioPrefixNoiseMask, VideoPrefixContextNoise, _add_prefix_chroma_blocks
 
 
 class VideoConfigurationTest(unittest.TestCase):
@@ -117,10 +117,12 @@ class VideoConfigurationTest(unittest.TestCase):
         images = torch.rand(22, 9, 13, 3)
         for pattern in ("poc_chroma_blocks", "gaussian_rgb", "uniform_rgb"):
             for grid in ("poc_36x64", "block_size"):
-                old = VideoPrefixContextNoise.execute(images, pattern=pattern, grid_mode=grid, block_size=3).result[0]
+                old = _add_prefix_chroma_blocks(images, 0.45, 0, end_strength=0.1,
+                    transition_frames=4, tail_protection_frames=5, pattern=pattern,
+                    grid_mode=grid, block_size=3)
                 new = VideoPrefixContextNoise.execute(images, pattern=pattern, grid_mode={"grid_mode": grid, "block_size": 3}).result[0]
                 self.assertTrue(torch.equal(old, new))
-        # Old flat API value takes precedence over an omitted optional dynamic value.
-        old = VideoPrefixContextNoise.execute(images, grid_mode="block_size", block_size=3).result[0]
-        new = VideoPrefixContextNoise.execute(images, grid_mode={"grid_mode": "block_size", "block_size": None}, block_size=3).result[0]
+        # Omitted optional branch input retains its declared default.
+        old = VideoPrefixContextNoise.execute(images, grid_mode={"grid_mode": "block_size", "block_size": 16}).result[0]
+        new = VideoPrefixContextNoise.execute(images, grid_mode={"grid_mode": "block_size"}).result[0]
         self.assertTrue(torch.equal(old, new))

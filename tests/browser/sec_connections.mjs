@@ -30,7 +30,8 @@ try {
       check(source.connect(output,target,input), 'Connection failed: '+name);
       await wait();
       check(JSON.stringify(positions())===JSON.stringify(before), 'Coordinate rows moved on connection');
-      check(target.widgets.find(w=>w.name===name).disabled, 'Connected field remains editable');
+      target.updateComputedDisabled();
+      check(target.widgets.find(w=>w.name===name).computedDisabled, 'Connected field remains editable');
     }
     check(before[1]>before[0], 'Overlapping coordinates');
     const prompt=await app.graphToPrompt();
@@ -38,11 +39,6 @@ try {
       const link=prompt.output[String(target.id)].inputs[name];
       check(Array.isArray(link) && String(link[0])===String(source.id) && link[1]===source.outputs.findIndex(s=>s.name===name), 'Local text replaced upstream connection: '+name);
     }
-    // Exercise legacy/extension conversion even on frontends which keep widgets.
-    const positive=target.widgets.find(w=>w.name==='positive_coords');
-    positive.type='converted-widget';positive.hidden=true;positive.computeSize=()=>[0,-4];
-    target.getLayoutWidgets();await wait();
-    check(JSON.stringify(positions())===JSON.stringify(before), 'Converted row did not recover');
     const saved=app.graph.serialize(),targetId=target.id,sourceId=source.id;
     await app.loadGraphData(saved);target=app.graph.getNodeById(targetId);source=app.graph.getNodeById(sourceId);
     await wait();positions();
@@ -50,9 +46,10 @@ try {
       const input=target.inputs.findIndex(s=>s.name===name);
       check(target.inputs[input].link!=null,'Link lost during reload');
       target.disconnectInput(input);await wait();positions();
-      check(!target.widgets.find(w=>w.name===name).disabled,'Field did not unlock');
+      target.updateComputedDisabled();
+      check(!target.widgets.find(w=>w.name===name).computedDisabled,'Field did not unlock');
       check(source.connect(source.outputs.findIndex(s=>s.name===name),target,input),'Reconnect failed');
     }
-    return 'SeC: stable rows, independent connections, legacy conversion, reload and reconnect OK';
+    return 'SeC native controls: same-row sockets, independent connections, reload and reconnect OK';
   }));
 } finally {await browser.close();}

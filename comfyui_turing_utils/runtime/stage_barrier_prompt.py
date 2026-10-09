@@ -19,28 +19,18 @@ from .stage_barrier import STAGE_BARRIER_NODE_ID, STAGE_PATH_NODE_ID
 
 LOG = get_logger("stage")
 _PROMPT_HANDLER_MARKER = "_turing_utils_stage_barrier_prompt_compiler"
-_DYNAMIC_VALUE_INPUT = re.compile(r"^values\.value_(\d+)$")
-_NESTED_VALUE_INPUT = re.compile(r"^value_(\d+)$")
+_VALUE_INPUT = re.compile(r"^value_([0-7])$")
 
 
 def _input_routes(inputs: Mapping[str, Any]) -> dict[int, Any]:
-    """Return explicitly supplied dynamic values indexed by visual port."""
+    """Return supplied static values indexed by visual port."""
 
     routes: dict[int, Any] = {}
     for name, value in inputs.items():
-        match = _DYNAMIC_VALUE_INPUT.fullmatch(str(name))
+        match = _VALUE_INPUT.fullmatch(str(name))
         if match is not None:
             routes[int(match.group(1))] = value
 
-    # The current frontend serializes Autogrow inputs with flattened names.
-    # Accept a nested representation as well so API clients can use the same
-    # compiler without depending on that frontend detail.
-    nested = inputs.get("values")
-    if isinstance(nested, Mapping):
-        for name, value in nested.items():
-            match = _NESTED_VALUE_INPUT.fullmatch(str(name))
-            if match is not None:
-                routes[int(match.group(1))] = value
     return routes
 
 

@@ -1,124 +1,72 @@
-# Node configuration and presets
+# Native node configuration contract
 
-## Current ordinary-node policy (supersedes earlier simplification notes)
+## Ordinary nodes
 
-Only Multimodal Prompt Chat's former Options fields are advanced. Its
-`system_prompt` is ordinary. All other ordinary public nodes expose their
-parameters directly, including inherited ConvRot CLIP device settings.
-DynamicCombo branches remain mode-dependent, not advanced sections.
+ComfyUI owns parameter order, widget/socket binding, layout, connection state,
+serialization, search and menus. Backend schemas are the single source of
+parameter definitions. Do not patch these to implement our own visual conventions.
+DynamicCombo remains appropriate for genuinely mode-dependent input branches.
 
-The frontend no longer sorts ordinary nodes by advanced status, except Chat.
-Schema input order, persisted widget order, socket IDs, defaults and computation
-are unchanged by this restoration. Fused SeC/upscaler nodes retain their loader
-fields followed by their existing apply inputs; retired entry points are not
-reintroduced. Legacy flat noise-grid migration remains in place.
+Only Multimodal Prompt Chat's former Options parameters are advanced;
+system_prompt remains ordinary. web/chat_advanced.js only copies the native
+options.advanced flag to widget.advanced because the tested classic frontend
+1.53.6 uses different properties when constructing and displaying widgets.
+It does not sort, hide, resize or disable widgets. Remove this bridge when the
+supported native frontend handles that flag itself.
 
-The independent Material Workspace is outside this ordinary-node policy.
-SeC/Crop controls retain native widget-backed sockets on the same row as their
-editors. Older workflows saved with detached bindings are repaired on load,
-without replacing slots or renumbering links. Connected editors stay visible
-and disabled. No separate top-of-node socket list is created for these fields.
+There is no old-workflow migration or detached-socket repair layer. Workflows
+saved with previous custom layouts may need affected nodes recreated. Do not
+reintroduce broad compatibility hooks to preserve those broken layouts.
 
-Restoration checklist: simple loaders/VAE/upscaler, media/ROI/mask prompts,
-padding/segment output/prefix noise, SeC, Bernini and ordinary Attention all use
-their existing definition order without advanced filtering. Chat retains its
-ordinary parameter order and appends the former Options in their existing order
-(JPEG quality stays inside the JPEG branch). No positional-value migration is
-needed because definitions were not reordered.
+H3 Keyframe Reference has three fixed optional image inputs and three matching
+outputs. Empty positions remain empty. Stage Barrier has eight fixed optional
+value inputs and eight matching outputs. Its execution scheduling/compiler is
+retained; frontend socket growth and output synchronization are removed.
 
-## Completed follow-up 1–5
+## Internal nodes
 
-1. Real frontend 1.53.6 browser validation covers Sol/SLA switching, prefix
-   controls, JPEG/PNG, noise grids, advanced visibility, connected subgraph
-   inputs, serialization and reopening. A plugin-scoped bridge supplies the
-   advanced flag expected by the legacy canvas and excludes hidden advanced
-   controls from its layout. Use the native node menu's advanced toggle.
-   Saved sizes are preserved: resize-to-content can compact older tall nodes.
-   No global settings cache, separate sidebar or model copy is added.
-2. Three reusable subgraph workflows are provided below. No Python mega-node
-   for references or Padding/Encode/Mask/AV was introduced.
-3. Video Frames Padding shares the six video-mask types: Wan/Hunyuan/Hunyuan 1.5
-   use 4*n+1; LTXV 8*n+1; Mochi 6*n+1 with minimum seven; H3 17*n+5.
-   These are frame grids, not full VAE/conditioning compatibility claims.
-4. Prefix Context Noise exposes block_size only in custom-grid mode. Legacy
-   flat API arguments remain accepted. UI migration preserves custom-grid
-   input slots/links, including inside subgraphs. Noise values are unchanged.
-   Fixed-grid mode continues to ignore block size.
-5. Audio protect_all and generate_all no longer require trim metadata.
-   protect_prefix_generate_body still validates it. Video and audio temporal
-   mappings remain separate.
+Every implementation-only node must use native is_dev_only (V3) or DEV_ONLY
+(V1), a display name ending in (Internal), and the shared INTERNAL_NODE_NOTE
+in its description. Developer mode may intentionally expose these nodes.
+No custom search interception, palette filtering, or strict hiding is needed.
+Public fused nodes must not inherit the internal description marker.
 
-## Reusable presets
+## Material Workspace
 
-Load the JSON workflow, then copy its subgraph into your workflow. External
-model/material inputs are intentionally unconnected. These are expandable
-building blocks, not standalone generation workflows with selected model files.
+The independent workspace retains its material persistence and execution UI,
+explicit endpoint sorting, previews and workflow editing commands. These are
+user-facing capabilities, not ordinary-node layout replacements.
 
-| File | Inputs / behavior | Outputs |
-|---|---|---|
-| [H3 shared references](../examples/h3_references_subgraph.json) | CLIP, prompt, target latent, optional encoded first/last/image/video/audio references; each reference feeds semantic encoding and conditioning assembly | conditioning |
-| [H3 video preparation](../examples/h3_video_subgraph.json) | images, video VAE, optional image-frame masks; separate image-padding and mask-padding branches | latent, original length, padded length |
-| [H3 AV preparation](../examples/h3_av_subgraph.json) | video preparation plus audio, audio VAE and mask policy; trim_info is last | AV latent, original length, padded length |
+Material types are declared once in workspace/protocol.py. API graph interfaces
+are derived rather than separately persisted. H3's starting workflow lives in
+examples/h3_material_card.json and is loaded with app.loadGraphData; do not
+recreate its graph with a parallel JavaScript builder. Hidden endpoint metadata
+uses native hidden/socketless input declarations.
 
-References are encoded outside the shared-reference preset. This avoids eagerly
-loading VAEs for unused reference types and supports independent material reuse.
-For ordinary fresh ref2va generation the core MiniMaxH3ReferenceToVideo already
-assembles conditioning and an empty AV latent; this preset instead targets an
-existing latent, useful for editing. Unpack it when semantic and DiT reference
-selections must differ. No second-pass/upscaler is assumed.
+Use small shared functions for real repeated behavior. A one-off fix does not
+justify a widget framework or overrides on every node prototype.
 
-Preparation masks are image-frame masks. A single mask repeats to padded length;
-otherwise provide masks matching source frame count. Already-latent-time masks
-should go directly to Set Video Latent Noise Mask outside the preset. Missing
-masks preserve latent metadata; fresh VAE output has no mask and is unrestricted.
-Spatial resizing is not part of preparation.
+## Reusable ordinary workflows
 
-AV defaults to protect_all. Audio is required, not silently replaced by generated
-audio. Align source duration explicitly: video padding does not invent matching
-audio samples. Only prefix protection requires trim_info. Choose video-only
-preparation to avoid unnecessary audio VAE execution.
+- examples/h3_references_subgraph.json: shared semantic/conditioning references.
+- examples/h3_video_subgraph.json: frame padding and video VAE encoding.
+- examples/h3_av_subgraph.json: video preparation plus audio/mask policy.
 
-Real PromptExecutor tests confirm mask edits do not re-encode video, strategy
-edits do not reload the upstream model, and fixed chat inputs reuse cache while
-advanced edits invalidate it. Browser checks confirm all presets reopen and
-flatten to the expected internal API graph. These are graph/cache checks, not
-new end-to-end model-quality benchmarks.
+These remain editable workflows, not new Python mega-nodes. Image-frame masks
+must match source length, or contain one mask for repetition. Latent-time masks
+belong directly on the latent. AV protect_all requires audio; only prefix
+protection requires trim metadata. Prefix Context Noise's custom block size is
+inside its native DynamicCombo branch; old flat arguments are not migrated.
 
-Verification note (2026-10-08, after entry cleanup): targeted tests passed
-(116 tests, 106 subtests). The wider selected suite passed 688 tests and
-1178 subtests after excluding CUDA/quantization selections and the VAE INT8 FP16
-test file. Two existing strict numerical-equality checks in that file fail even
-when run alone: 36-block decoder scoped rotation and FP32 fallback equality.
-Their compute paths were not changed by this UI/preset work; tolerances were not
-relaxed. Do not treat this result as a clean full numerical/kernel regression.
+## Verification
 
-## Simplification boundaries
+tests/browser/native_parameter_layout.mjs compares each ordinary public node
+against native registration of the same schema: order, widget/socket geometry,
+DynamicCombo modes, connections, resizing and serialized reloads. Crop and SeC
+also have dedicated link and disabled-editor tests. Chat checks the native
+advanced toggle. Run these on the classic canvas, not only Nodes 2.0.
 
-- Unified attention offers Sol/SLA/Veda under Models; individual strategy IDs,
-  Image Sol, Static Virtual KV and experimental Block Cache are removed.
-- Chat settings are inline advanced inputs; the old Options node/socket is removed.
-- INT8 forcing, H3 decode backend, SeC backend and upscaler precision are
-  ordinary controls, with unchanged defaults.
-- Old model loader/apply IDs are removed. Five private, dev-only execution
-  nodes preserve shared loading and independent cache boundaries.
-- Public menus have one level beneath Turing Utils; see the inventory.
-- Keep load/save/merge, crop/stitch, continuation/trim and prefix noise separate.
-  Their different workflow positions and independent reuse are intentional.
-- Ordinary workflows retain these composable boundaries. The separate
-  [Material Workspace](material-canvas.md) uses ordinary workflows as cards.
-
-### Native layout regression
-
-`tests/browser/native_parameter_layout.mjs` builds a native-reference node from
-each public ordinary node's schema, without the plugin's layout hooks. It checks
-parameter order, native widget/socket row alignment, DynamicCombo branches,
-Primitive connections, disconnects, and serialized reloads. Crop/SeC additionally
-reload the detached bindings produced by the old workaround. The dedicated
-Crop/SeC browser tests also assert real upstream API links and same-row geometry.
-Visibility alone is not a layout acceptance criterion.
-
-The 2026-10-09 classic frontend 1.53.6 run passed for 37 ordinary nodes,
-13 dynamic branches and Chat's advanced toggle. The reference uses the same
-schema through native registration; it does not apply Turing's parameter-layout
-hooks. Stage/Keyframe references keep their intentional dynamic data-port counts.
-This is not a claim of testing every older frontend or third-party extension.
+Material browser tests cover workflow templates, endpoint edits, nested
+subgraphs, persistence and bounded playback. Tests must check actual links and
+geometry, not just whether controls remain visible. Passing the tested frontend
+is not a claim that every historical frontend or third-party extension works.

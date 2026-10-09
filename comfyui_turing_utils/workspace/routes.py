@@ -66,6 +66,14 @@ def install_routes():
     async def page(request):
         return web.FileResponse(ui / "index.html")
 
+    @endpoint("get", "/h3-template")
+    async def h3_template(request):
+        return web.FileResponse(Path(__file__).resolve().parents[2] / "examples" / "h3_material_card.json")
+
+    @endpoint("get", "/protocol")
+    async def protocol(request):
+        return web.json_response({"materials": MATERIALS})
+
     @endpoint("get", "/ui/{name}")
     async def static(request):
         name = request.match_info["name"]

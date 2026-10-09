@@ -2,10 +2,9 @@
 
 from __future__ import annotations
 
-import re
-
 import torch
 from comfy_api.latest import io
+from . import INTERNAL_NODE_NOTE
 
 from ..log import get_logger
 from ..runtime.stage_barrier import STAGE_BARRIER_NODE_ID, STAGE_PATH_NODE_ID
@@ -13,8 +12,7 @@ from ..runtime.stage_barrier import STAGE_BARRIER_NODE_ID, STAGE_PATH_NODE_ID
 
 LOG = get_logger("stage")
 _MISSING = object()
-_MAX_STAGE_BARRIER_VALUES = 100
-_DYNAMIC_VALUE_SUFFIX = re.compile(r"(\d+)$")
+_STAGE_BARRIER_VALUES = 8
 
 
 def is_value_present(value=None) -> bool:
@@ -150,7 +148,7 @@ class StageBarrier(io.ComfyNode):
             display_name="Stage Barrier",
             category="Turing Utils/Workflow",
             description=(
-                "Tag independent arbitrary-value paths for dependency-first phase "
+                "Eight fixed arbitrary-value paths for dependency-first phase "
                 "ordering. Each visual input/output pair is compiled into its own "
                 "cache and execution unit, so unselected lazy branches stay skipped. "
                 "Stage is a reusable phase label: barriers with the same inferred "
@@ -173,48 +171,22 @@ class StageBarrier(io.ComfyNode):
                         "scheduler can plan it before executing upstream nodes."
                     ),
                 ),
-                io.Autogrow.Input(
-                    "values",
-                    optional=True,
-                    template=io.Autogrow.TemplatePrefix(
-                        input=io.AnyType.Input("value"),
-                        prefix="value_",
-                        min=0,
-                        max=_MAX_STAGE_BARRIER_VALUES,
-                    ),
-                    tooltip=(
-                        "Connect any number and mixture of ComfyUI values. Each input "
-                        "is forwarded to the matching output without copying it."
-                    ),
-                ),
+                *[io.AnyType.Input(f"value_{index}", optional=True) for index in range(_STAGE_BARRIER_VALUES)],
             ],
             outputs=[
                 io.AnyType.Output(f"value_{index}")
-                for index in range(_MAX_STAGE_BARRIER_VALUES)
+                for index in range(_STAGE_BARRIER_VALUES)
             ],
         )
 
     @classmethod
-    def execute(cls, stage, values=None) -> io.NodeOutput:
+    def execute(cls, stage, **values) -> io.NodeOutput:
         stage = int(stage)
         if stage < 0:
             raise ValueError("Stage Barrier stage must be greater than or equal to zero")
 
-        outputs = [None] * _MAX_STAGE_BARRIER_VALUES
-        connected = 0
-        for name, value in (values or {}).items():
-            match = _DYNAMIC_VALUE_SUFFIX.search(str(name))
-            if match is None:
-                raise ValueError(f"Invalid Stage Barrier dynamic input name: {name}")
-            index = int(match.group(1))
-            if index >= _MAX_STAGE_BARRIER_VALUES:
-                raise ValueError(
-                    f"Stage Barrier supports at most {_MAX_STAGE_BARRIER_VALUES} values"
-                )
-            outputs[index] = value
-            connected += 1
-
-        LOG.info("Stage Barrier reached: stage=%d values=%d", stage, connected)
+        outputs = [values.get(f"value_{index}") for index in range(_STAGE_BARRIER_VALUES)]
+        LOG.info("Stage Barrier reached: stage=%d values=%d", stage, len(values))
         return io.NodeOutput(*outputs)
 
 
@@ -227,7 +199,7 @@ class StagePath(io.ComfyNode):
             node_id=STAGE_PATH_NODE_ID,
             display_name="Stage Path (Internal)",
             category="",
-            description=(
+            description=INTERNAL_NODE_NOTE + (
                 "Internal one-input/one-output Stage Barrier route. The server "
                 "creates this node while compiling a submitted workflow."
             ),

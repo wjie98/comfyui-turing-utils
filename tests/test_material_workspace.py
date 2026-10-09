@@ -107,6 +107,13 @@ class WorkspaceTest(unittest.TestCase):
         self.assertEqual(result[0].result[0], "hello?")
         self.assertIsNot(cls, AddTextV3)
         self.assertNotIn("fingerprint_inputs", AddTextV3.__dict__)
+        from comfyui_turing_utils.nodes import INTERNAL_NODE_NOTE
+        schema = cls.GET_SCHEMA()
+        self.assertEqual(schema.node_id, name)
+        self.assertTrue(schema.is_dev_only)
+        self.assertTrue(schema.display_name.endswith("(Internal)"))
+        self.assertTrue(schema.description.startswith(INTERNAL_NODE_NOTE))
+        self.assertFalse(AddTextV3.GET_SCHEMA().is_dev_only)
 
     def test_fresh_signatures_differ(self):
         async def signatures():

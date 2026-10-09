@@ -53,7 +53,7 @@ class CanvasInputs:
 
     @classmethod
     def INPUT_TYPES(cls):
-        return {"required": {"ports": ("STRING", {"default": "[]"})}, "optional": PortInputs()}
+        return {"required": {"ports": ("STRING", {"default": "[]", "hidden": True, "socketless": True})}, "optional": PortInputs()}
 
     def check_lazy_status(self, ports, **kwargs):
         return [f"port_{p['slot']}" for p in parse_ports(ports)

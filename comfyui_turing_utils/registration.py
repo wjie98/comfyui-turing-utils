@@ -120,7 +120,7 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "TuringUtilsH3BuildConditioning": "H3 Build Conditioning",
     "_TuringUtilsH3UpscaleLoader": "H3 Upscale Loader (Internal)",
     "TuringUtilsMiniMaxH3LatentUpscale": "MiniMax H3 Latent Upscale",
-    "_TuringUtilsH3UpscaleApply": "MiniMax H3 Latent Upscale (Internal Apply)",
+    "_TuringUtilsH3UpscaleApply": "MiniMax H3 Latent Upscale Apply (Internal)",
     "TuringUtilsResizeImageIfPresent": "Resize Image If Present",
     "TuringUtilsVideoMotionContactSheet": "Video Motion Contact Sheet (Experimental)",
     "TuringUtilsMultimodalPromptChat": "Multimodal Prompt Chat",
@@ -139,7 +139,7 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "TuringUtilsMaskToVisualPrompts": "Mask to Visual Prompts",
     "_TuringUtilsSeCLoader": "SeC Loader (Internal)",
     "TuringUtilsSeCTrackVisualConcept": "SeC Track Visual Concept",
-    "_TuringUtilsSeCApply": "SeC Track Visual Concept (Internal Apply)",
+    "_TuringUtilsSeCApply": "SeC Track Visual Concept Apply (Internal)",
 }
 
 from .workspace.nodes import PUBLIC_NODES as MATERIAL_NODES

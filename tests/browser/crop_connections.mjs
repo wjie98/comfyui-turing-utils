@@ -29,10 +29,9 @@ try {
       let i=crop.inputs.findIndex(s=>s.name===name);
       if(i<0){crop.addInput(name,'INT',{widget:{name}});i=crop.inputs.length-1;}
       check(source.connect(0,crop,i),'Could not connect '+name);
-      // Force the legacy hide path even on a frontend that no longer hides it.
-      w.type='converted-widget';w.hidden=true;w.computeSize=()=>[0,-4];
       crop.getLayoutWidgets();await wait();
-      check(w.type==='number'&&w.disabled,'Connected numeric editor not retained');
+      crop.updateComputedDisabled();
+      check(w.type==='number'&&w.computedDisabled,'Connected numeric editor not retained');
       check(JSON.stringify(rows())===JSON.stringify(before),'Rows moved');
     }
     let prompt=await app.graphToPrompt();
@@ -42,8 +41,9 @@ try {
     for(const name of ['width','height']){
       const i=crop.inputs.findIndex(s=>s.name===name);
       check(crop.inputs[i].link!=null,'Link lost on reload');crop.disconnectInput(i);await wait();rows();
-      check(!crop.widgets.find(w=>w.name===name).disabled,'Editor did not unlock');
+      crop.updateComputedDisabled();
+      check(!crop.widgets.find(w=>w.name===name).computedDisabled,'Editor did not unlock');
     }
-    return 'Crop classic canvas: visible controls, width/height links, legacy conversion, API links and reload/disconnect passed';
+    return 'Crop native controls: same-row sockets, API links and reload/disconnect passed';
   }));
 } finally {await browser.close();}

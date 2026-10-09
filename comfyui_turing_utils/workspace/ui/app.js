@@ -97,12 +97,9 @@ window.addEventListener("beforeunload", (event) => {
   }
 });
 const clientId = crypto.randomUUID();
-const kinds = {
-  TuringMaterialText: "text",
-  TuringMaterialImage: "image",
-  TuringMaterialVideo: "video",
-  TuringMaterialAudio: "audio",
-};
+const protocolResponse = await fetch(new URL("protocol", apiBase), {headers: userHeaders});
+if (!protocolResponse.ok) throw Error("Cannot load material protocol");
+const kinds = (await protocolResponse.json()).materials;
 
 function status(message, error = false) {
   $("status").textContent = message;

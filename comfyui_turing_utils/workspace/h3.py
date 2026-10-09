@@ -7,6 +7,7 @@ from comfy_extras.nodes_minimax_h3 import EmptyMiniMaxH3LatentAV
 from comfy_extras.nodes_audio import VAEEncodeAudio
 from comfy_extras.nodes_lt import LTXVConcatAVLatent
 from ..nodes.latent import SetVideoLatentNoiseMask
+from ..nodes import INTERNAL_NODE_NOTE
 from ..nodes.minimax_vae import MiniMaxH3VideoVAEEncode
 from ..nodes.video_padding import VideoFramesPadding, padded_frame_count
 from ..nodes.video_sequence import VideoContinuationConcat, H3SetAudioPrefixNoiseMask
@@ -14,6 +15,7 @@ from ..nodes.video_sequence import VideoContinuationConcat, H3SetAudioPrefixNois
 
 class PrepareH3:
     DEV_ONLY = True
+    DESCRIPTION = INTERNAL_NODE_NOTE
     CATEGORY = ""
     FUNCTION = "prepare"
     RETURN_TYPES = ("LATENT", "INT", "INT", "AUDIO")
@@ -92,6 +94,7 @@ class PrepareH3:
 
 class SigmaRefiner:
     DEV_ONLY = True
+    DESCRIPTION = INTERNAL_NODE_NOTE
     CATEGORY = ""
     FUNCTION = "refine"
     RETURN_TYPES = ("SIGMAS",)
@@ -117,6 +120,7 @@ class SigmaRefiner:
 
 class FinishH3:
     DEV_ONLY = True
+    DESCRIPTION = INTERNAL_NODE_NOTE
     CATEGORY = ""
     FUNCTION = "finish"
     RETURN_TYPES = ("IMAGE", "AUDIO")

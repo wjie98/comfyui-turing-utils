@@ -868,7 +868,6 @@ class VideoPrefixContextNoise(io.ComfyNode):
         return io.Schema(
             node_id="TuringUtilsVideoPrefixContextNoise",
             display_name="Video Prefix Context Noise",
-            accept_all_inputs=True,
             category="Turing Utils/Video",
             description=(
                 "Treat the complete IMAGE batch as a video prefix. Preserve a clean tail first, place a "
@@ -940,12 +939,13 @@ class VideoPrefixContextNoise(io.ComfyNode):
         transition_frames=4,
         pattern="poc_chroma_blocks",
         grid_mode="poc_36x64",
-        block_size=16,
     ) -> io.NodeOutput:
-        # Old API prompts use flat block_size; the UI migrates it to the branch.
+        block_size = 16
         if isinstance(grid_mode, dict):
-            block_size = grid_mode.get("block_size") if grid_mode.get("block_size") is not None else block_size
+            block_size = grid_mode.get("block_size", 16)
             grid_mode = grid_mode["grid_mode"]
+        if block_size is None:
+            block_size = 16
         if images is None:
             return io.NodeOutput(None)
         return io.NodeOutput(

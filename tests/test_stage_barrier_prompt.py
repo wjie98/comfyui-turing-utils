@@ -33,8 +33,8 @@ class StageBarrierPromptCompilerTest(unittest.TestCase):
                 "class_type": STAGE_BARRIER_NODE_ID,
                 "inputs": {
                     "stage": 3,
-                    "values.value_0": ["source_true", 0],
-                    "values.value_1": ["source_false", 0],
+                    "value_0": ["source_true", 0],
+                    "value_1": ["source_false", 0],
                 },
                 "_meta": {"title": "Characters prepared"},
             },
@@ -75,7 +75,7 @@ class StageBarrierPromptCompilerTest(unittest.TestCase):
                 "class_type": STAGE_BARRIER_NODE_ID,
                 "inputs": {
                     "stage": 1,
-                    "values.value_4": ["source", 0],
+                    "value_4": ["source", 0],
                 },
             },
             "output": {
@@ -100,11 +100,11 @@ class StageBarrierPromptCompilerTest(unittest.TestCase):
             "source": _source("Source"),
             "first": {
                 "class_type": STAGE_BARRIER_NODE_ID,
-                "inputs": {"stage": 0, "values.value_0": ["source", 0]},
+                "inputs": {"stage": 0, "value_0": ["source", 0]},
             },
             "second": {
                 "class_type": STAGE_BARRIER_NODE_ID,
-                "inputs": {"stage": 1, "values.value_2": ["first", 0]},
+                "inputs": {"stage": 1, "value_2": ["first", 0]},
             },
             "output": {
                 "class_type": "Output",
@@ -144,14 +144,14 @@ class StageBarrierPromptCompilerTest(unittest.TestCase):
             ["barrier.turing_stage_path.7", 0],
         )
 
-    def test_nested_api_values_are_supported(self):
+    def test_static_api_values_are_supported(self):
         prompt = {
             "source": _source("Source"),
             "barrier": {
                 "class_type": STAGE_BARRIER_NODE_ID,
                 "inputs": {
                     "stage": 2,
-                    "values": {"value_0": ["source", 0]},
+                    "value_0": ["source", 0],
                 },
             },
             "output": {
@@ -227,8 +227,8 @@ class StageBarrierPromptCompilerTest(unittest.TestCase):
                 "class_type": STAGE_BARRIER_NODE_ID,
                 "inputs": {
                     "stage": 0,
-                    "values.value_0": ["source_true", 0],
-                    "values.value_1": ["source_false", 0],
+                    "value_0": ["source_true", 0],
+                    "value_1": ["source_false", 0],
                 },
             },
             "switch": {

@@ -15,13 +15,6 @@ try {
     let nodes=0, fields=0, branches=0;
     const scalar = new Set(['number','text','string','combo','toggle']);
     const audit = (node, native, phase) => {
-      // These two nodes deliberately trim their fixed backend output capacity
-      // to active Autogrow inputs. Give the reference the same data ports;
-      // parameter widgets and their layout remain entirely native.
-      if(['TuringUtilsStageBarrier','TuringUtilsH3KeyframeReference'].includes(node.type)) {
-        while(native.outputs.length>node.outputs.length)native.removeOutput(native.outputs.length-1);
-        while(native.outputs.length<node.outputs.length){const s=node.outputs[native.outputs.length];native.addOutput(s.name,s.type);}
-      }
       const size=[Math.max(node.size[0],native.size[0]),Math.max(node.size[1],native.size[1])];
       node.setSize(size);native.setSize(size);
       node.arrange();native.arrange();
@@ -85,12 +78,6 @@ try {
       }
       const id=node.id, nativeId=native.id;
       const saved=app.graph.serialize();
-      // Reproduce workflows saved by the old destructive binding workaround.
-      if(['TuringUtilsVideoMaskGuidedCrop','TuringUtilsSeCTrackVisualConcept'].includes(name)) {
-        const broken=saved.nodes.find(n=>String(n.id)===String(id));
-        check(broken,`${name}: missing serialized node ${id}`);
-        for(const s of broken.inputs)if(names.includes(s.name)){delete s.widget;delete s.pos;}
-      }
       await app.loadGraphData(saved);node=app.graph.getNodeById(id);native=app.graph.getNodeById(nativeId);
       await tick();audit(node,native,'reloaded');
       const prompt=await app.graphToPrompt();
@@ -113,7 +100,7 @@ try {
     const values=JSON.stringify(chat.serialize().widgets_values);
     for(const shown of [false,true,false]) {
       chat.showAdvanced=shown;chat.arrange();
-      const visible=chat.getLayoutWidgets();
+      const visible=chat.getLayoutWidgets().filter(w=>chat.isWidgetVisible(w));
       for(const w of chat.widgets) {
         if(w.advanced)check(visible.includes(w)===shown,`Chat advanced visibility: ${w.name}`);
       }

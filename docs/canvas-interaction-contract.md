@@ -12,12 +12,13 @@
 - workspace/routes.py: storage and preview API, not another executor.
 - workspace/ui: independent virtualized page; no LiteGraph / Nodes 2.0 dependency.
 - web/material_workspace.js: native commands and official graph import/export.
-- web/lib/material_h3_template.js: ordinary editable example, not a model implementation.
+- examples/h3_material_card.json: native editable workflow template, not a JavaScript graph builder or model implementation.
 
 ## Files and stable identities
 
 canvas.json format 2 owns card positions and connections. Each instance owns cards/<id>/workflow.json.
-Its extra.turing_card.version = 1 holds a derived API prompt, interface, source hash and input overrides.
+Its extra.turing_card.version = 1 holds a derived API prompt, source hash and input overrides.
+The interface is derived on read, not stored as a second competing definition.
 Unknown versions fail explicitly. Library files live in the ComfyUI user's canvas_cards directory.
 Import copies a template; editing an instance cannot edit the template or another instance.
 
@@ -58,7 +59,8 @@ Test Classic, LRU and RAM-pressure modes.
 
 ## Verification
 
-Use ops/test-dev.sh, node-layout JS tests and tests/browser/material_workspace.mjs in development.
+Use ops/test-dev.sh, tests/browser/native_parameter_layout.mjs and
+tests/browser/material_workspace.mjs in development.
 The browser harness uses Playwright/Chromium. MATERIAL_VIDEO_FIXTURE enables cold/play/Range and
 1000-card virtualization checks. Keep synthetic artifacts inside the development instance.
 Event dispatch tests handlers, not physical pointer accuracy on every client.

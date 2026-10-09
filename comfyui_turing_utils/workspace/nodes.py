@@ -1,6 +1,7 @@
 """Material boundaries and private execution adapters using normal ComfyUI nodes."""
 
 from fractions import Fraction
+import copy
 
 import numpy as np
 from PIL import Image
@@ -13,6 +14,8 @@ from .store import Project
 from .media import read_material
 from .h3 import PrepareH3, FinishH3, SigmaRefiner
 from .endpoints import ENDPOINT_NODES, POSITION
+from ..nodes import INTERNAL_NODE_NOTE
+from .protocol import MATERIAL_TYPES
 
 
 def fresh_type(name):
@@ -21,10 +24,20 @@ def fresh_type(name):
     key = "_TuringMaterialFresh_" + name
     if key not in nodes.NODE_CLASS_MAPPINGS:
         fingerprint = classmethod(lambda cls, **kwargs: float("nan"))
-        attributes = {"IS_CHANGED": fingerprint, "DEV_ONLY": True, "CATEGORY": ""}
+        attributes = {"IS_CHANGED": fingerprint, "DEV_ONLY": True, "CATEGORY": "", "DESCRIPTION": INTERNAL_NODE_NOTE}
         if issubclass(original, io.ComfyNode):
             attributes["fingerprint_inputs"] = fingerprint
+            def schema(cls):
+                result = copy.deepcopy(original.define_schema())
+                result.node_id = key
+                result.display_name = f"{result.display_name or name} Fresh (Internal)"
+                result.description = INTERNAL_NODE_NOTE + (result.description or "")
+                result.category = ""
+                result.is_dev_only = True
+                return result
+            attributes["define_schema"] = classmethod(schema)
         nodes.NODE_CLASS_MAPPINGS[key] = type(key, (original,), attributes)
+        nodes.NODE_DISPLAY_NAME_MAPPINGS[key] = f"{name} Fresh (Internal)"
     return key
 
 
@@ -40,7 +53,7 @@ class Material:
                   "asset": ("STRING", {"default": ""}),
                   "prefix": ("STRING", {"default": cls.KIND})}
         optional = {"value": (cls.RETURN_TYPES[0], {"lazy": True}), "position": (POSITION, {"lazy": True})}
-        inputs["stub_id"] = ("STRING", {"default": ""})
+        inputs["stub_id"] = ("STRING", {"default": "", "hidden": True, "socketless": True})
         if cls.KIND == "text":
             inputs["text"] = ("STRING", {"default": "", "multiline": True})
         if cls.KIND == "video":
@@ -82,6 +95,7 @@ class Read:
     FUNCTION = "read"
     CATEGORY = ""
     DEV_ONLY = True
+    DESCRIPTION = INTERNAL_NODE_NOTE
 
     @classmethod
     def INPUT_TYPES(cls):
@@ -98,6 +112,7 @@ class Write:
     RETURN_TYPES = ("STRING",)
     CATEGORY = ""
     DEV_ONLY = True
+    DESCRIPTION = INTERNAL_NODE_NOTE
 
     @classmethod
     def INPUT_TYPES(cls):
@@ -155,7 +170,7 @@ class Write:
 
 PUBLIC_NODES = {}
 INTERNAL_NODES = {}
-for _kind, _returns in {"text": ("STRING",), "image": ("IMAGE",), "video": ("IMAGE", "AUDIO"), "audio": ("AUDIO",)}.items():
+for _kind, _returns in MATERIAL_TYPES.items():
     _suffix = _kind.title()
     PUBLIC_NODES["TuringMaterial" + _suffix] = type("Material" + _suffix, (Material,), {"KIND": _kind, "RETURN_TYPES": _returns})
     INTERNAL_NODES["_TuringMaterialRead" + _suffix] = type("Read" + _suffix, (Read,), {"KIND": _kind, "RETURN_TYPES": _returns})

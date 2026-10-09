@@ -320,8 +320,6 @@ try {
     await page.unroute("**/turing/workspace/project");
     const h3 = await native.evaluate(async () => {
       const { app } = await import("/scripts/app.js");
-      const { createH3Template } =
-        await import("/extensions/comfyui-turing-utils/lib/material_h3_template.js");
       const { bindMaterials } =
         await import("/extensions/comfyui-turing-utils/material_workspace.js");
       const { entries, syncPorts, addPort } =
@@ -368,8 +366,7 @@ try {
       const restored = (await app.graphToPrompt()).output[input.id].inputs;
       if (JSON.stringify(incoming) !== JSON.stringify(restored))
         throw Error("Endpoint reload changed links");
-      app.graph.clear();
-      createH3Template(app);
+      await app.loadGraphData(await (await fetch('/turing/workspace/h3-template')).json());
       bindMaterials();
       return await app.graphToPrompt();
     });

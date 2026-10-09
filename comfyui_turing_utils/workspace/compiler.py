@@ -3,12 +3,8 @@
 import copy
 
 from ..runtime.shared_loaders import compile_shared_loaders
+from .protocol import MATERIALS
 
-
-MATERIALS = {
-    "TuringMaterialText": "text", "TuringMaterialImage": "image",
-    "TuringMaterialVideo": "video", "TuringMaterialAudio": "audio",
-}
 
 # Explicit contracts, not a guess based on a MODEL output or a class name suffix.
 MODEL_PREPARATION = {

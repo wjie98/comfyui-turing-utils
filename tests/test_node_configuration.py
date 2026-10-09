@@ -47,7 +47,8 @@ class NodeConfigurationTest(unittest.TestCase):
         self.assertEqual(found, expected)
 
     def test_public_categories_are_flat_and_internal_nodes_hidden(self):
-        from comfyui_turing_utils.registration import NODE_CLASS_MAPPINGS
+        from comfyui_turing_utils.registration import NODE_CLASS_MAPPINGS, NODE_DISPLAY_NAME_MAPPINGS
+        from comfyui_turing_utils.nodes import INTERNAL_NODE_NOTE
         categories = set()
         public = internal = 0
         for name, node in NODE_CLASS_MAPPINGS.items():
@@ -56,6 +57,10 @@ class NodeConfigurationTest(unittest.TestCase):
             if (schema and schema.is_dev_only) or getattr(node, "DEV_ONLY", False):
                 internal += 1
                 self.assertEqual(category, "", name)
+                title = schema.display_name if schema else NODE_DISPLAY_NAME_MAPPINGS[name]
+                self.assertTrue(title.endswith("(Internal)"), (name, title))
+                description = schema.description if schema else node.DESCRIPTION
+                self.assertTrue(description.startswith(INTERNAL_NODE_NOTE), name)
             else:
                 public += 1
                 self.assertEqual(len(category.split("/")), 2, name)

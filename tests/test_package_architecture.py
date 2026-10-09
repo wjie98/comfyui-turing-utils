@@ -15,8 +15,9 @@ class PackageArchitectureTest(unittest.TestCase):
     def test_frontend_extension_is_registered(self):
         source = (ROOT / "__init__.py").read_text(encoding="utf-8")
         self.assertIn('WEB_DIRECTORY = "./web"', source)
-        self.assertTrue((ROOT / "web" / "keyframe_outputs.js").is_file())
-        self.assertTrue((ROOT / "web" / "stage_barrier_outputs.js").is_file())
+        self.assertTrue((ROOT / "web" / "chat_advanced.js").is_file())
+        for filename in ("keyframe_outputs.js", "stage_barrier_outputs.js", "node_configuration.js", "lib/stable_inputs.js", "lib/node_migrations.js"):
+            self.assertFalse((ROOT / "web" / filename).exists())
 
     def test_kernel_package_is_accessed_only_through_facade(self):
         package = ROOT / "comfyui_turing_utils"

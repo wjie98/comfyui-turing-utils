@@ -36,10 +36,10 @@ def digest(workflow):
 
 
 def pack(workflow, prompt):
-    interface = describe(prompt)
+    describe(prompt)
     result = copy.deepcopy(workflow)
     result.setdefault("extra", {})[KEY] = {"version": 1, "prompt": copy.deepcopy(prompt),
-        "interface": interface, "source_hash": digest(result), "overrides": {}}
+        "source_hash": digest(result), "overrides": {}}
     return result
 
 

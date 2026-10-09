@@ -4,6 +4,7 @@ import copy
 
 from .compiler import MATERIALS, is_link
 from .endpoints import INPUTS, OUTPUTS, parse_ports
+from .protocol import MATERIAL_TYPES
 
 
 def describe(prompt):
@@ -37,11 +38,10 @@ def describe(prompt):
         if port["kind"] != "value" or not is_link(source) or source[0] not in stubs.values():
             raise ValueError("Canvas Outputs only accepts material outputs")
         node = prompt[source[0]]
-        count = 2 if node["class_type"] == "TuringMaterialVideo" else 1
-        if not 0 <= source[1] < count:
+        types = MATERIAL_TYPES[MATERIALS[node["class_type"]]]
+        if not 0 <= source[1] < len(types):
             raise ValueError("Invalid material output slot")
-        types = {"text":("STRING",), "image":("IMAGE",), "video":("IMAGE","AUDIO"), "audio":("AUDIO",)}
-        if port["type"] != types[MATERIALS[node["class_type"]]][source[1]]:
+        if port["type"] != types[source[1]]:
             raise ValueError("Exported port type does not match its material output")
         exported.add(source[0])
     if exported != set(stubs.values()):

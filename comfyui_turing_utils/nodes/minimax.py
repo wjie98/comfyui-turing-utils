@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import folder_paths
 from comfy_api.latest import io
+from . import INTERNAL_NODE_NOTE
 from ..adapters.minimax.latent_noise import add_h3_noise_for_resampling
 from ..adapters.minimax.latent_upscaler import (
     load_h3_latent_upscaler,
@@ -49,7 +50,7 @@ class _H3UpscaleLoader(io.ComfyNode):
             display_name="H3 Upscale Loader (Internal)",
             is_dev_only=True,
             category="",
-            description=(
+            description=INTERNAL_NODE_NOTE + (
                 "Load an attention-free 3D MiniMax H3 latent upscaler from "
                 "models/latent_upscale_models with ComfyUI-managed VRAM offloading."
             ),
@@ -82,9 +83,9 @@ class _H3UpscaleApply(io.ComfyNode):
         return io.Schema(
             node_id="_TuringUtilsH3UpscaleApply",
             is_dev_only=True,
-            display_name="MiniMax H3 Latent Upscale (Internal Apply)",
+            display_name="MiniMax H3 Latent Upscale Apply (Internal)",
             category="",
-            description=(
+            description=INTERNAL_NODE_NOTE + (
                 "Learned spatial pixel-count upscale for MiniMax H3 AV latents. The video stream and "
                 "optional FL2AV keyframe latents are enlarged together; audio and Ref2AV "
                 "references remain unchanged. Video noise_mask uses conservative spatial maximum "
@@ -133,6 +134,7 @@ class MiniMaxH3LatentUpscale(io.ComfyNode):
         schema.node_id = "TuringUtilsMiniMaxH3LatentUpscale"
         schema.display_name = "MiniMax H3 Latent Upscale"
         schema.is_dev_only = False
+        schema.description = schema.description.removeprefix(INTERNAL_NODE_NOTE)
         schema.category = "Turing Utils/MiniMax H3"
         schema.inputs = _H3UpscaleLoader.define_schema().inputs + schema.inputs[1:]
         return schema

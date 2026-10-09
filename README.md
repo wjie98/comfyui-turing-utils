@@ -354,7 +354,7 @@ original loading functions; callers bypassing the prompt server must invoke
 - `Lazy If / Else` switches values of any ComfyUI type while lazily evaluating
   only the selected branch, unless another workflow output also needs the
   unselected branch.
-- `Stage Barrier` forwards a dynamic set of arbitrary values and treats its
+- `Stage Barrier` forwards eight fixed, optional arbitrary-value pairs and treats its
   non-negative `stage` widget as a reusable phase label. The scheduler derives
   dependency rounds automatically: increasing or equal labels stay in the
   current round, while a dependency whose label decreases starts the next

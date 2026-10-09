@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from comfy_api.latest import io
+from . import INTERNAL_NODE_NOTE
 
 from ..adapters.sec import load_sec_model, sec_model_choices, track_visual_concept
 
@@ -19,7 +20,7 @@ class _SeCLoader(io.ComfyNode):
             display_name="SeC Loader (Internal)",
             is_dev_only=True,
             category="",
-            description=(
+            description=INTERNAL_NODE_NOTE + (
                 "Load a SeC visual-concept tracking model through ComfyUI's model "
                 "lifecycle. Device placement, residency, and unloading are managed by ComfyUI."
             ),
@@ -54,9 +55,9 @@ class _SeCApply(io.ComfyNode):
         return io.Schema(
             node_id="_TuringUtilsSeCApply",
             is_dev_only=True,
-            display_name="SeC Track Visual Concept (Internal Apply)",
+            display_name="SeC Track Visual Concept Apply (Internal)",
             category="",
-            description=(
+            description=INTERNAL_NODE_NOTE + (
                 "Track one visual concept through a video. With mask connected, the mask is "
                 "authoritative and points must agree with it; the bounding box limits its region. "
                 "Without a mask, the box and positive/negative coordinates form one SAM2 prompt."
@@ -168,6 +169,7 @@ class SeCTrackVisualConcept(io.ComfyNode):
         schema.node_id = "TuringUtilsSeCTrackVisualConcept"
         schema.display_name = "SeC Track Visual Concept"
         schema.is_dev_only = False
+        schema.description = schema.description.removeprefix(INTERNAL_NODE_NOTE)
         schema.category = "Turing Utils/Mask"
         schema.inputs = _SeCLoader.define_schema().inputs + schema.inputs[1:]
         return schema

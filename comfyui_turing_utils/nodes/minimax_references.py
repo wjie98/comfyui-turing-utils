@@ -15,7 +15,6 @@ from ..adapters.minimax.references import (
     H3ReferenceManifest,
     H3SemanticReferenceData,
     H3VideoReferenceData,
-    H3_MAX_KEYFRAME_REFERENCES,
     H3_MODEL_FPS,
     H3_QWEN_VIDEO_FPS,
     _align_keyframe_pixels,
@@ -151,7 +150,7 @@ class H3KeyframeReference(io.ComfyNode):
             display_name="H3 Keyframe Reference",
             category="Turing Utils/MiniMax H3",
             description=(
-                "Encode dynamic reusable H3 keyframes without assigning first/last "
+                "Encode three reusable H3 keyframes without assigning first/last "
                 "roles. Each image_N input has a matching keyframe_N output. With an "
                 "optional latent, images are cover-resized and cropped to its decoded "
                 "pixel canvas."
@@ -159,27 +158,22 @@ class H3KeyframeReference(io.ComfyNode):
             inputs=[
                 io.Vae.Input("vae"),
                 io.Latent.Input("latent", optional=True),
-                io.Autogrow.Input(
-                    "images",
-                    optional=True,
-                    template=io.Autogrow.TemplatePrefix(
-                        input=io.Image.Input("image"),
-                        prefix="image_",
-                        min=0,
-                        max=H3_MAX_KEYFRAME_REFERENCES,
-                    ),
-                ),
+                *[io.Image.Input(f"image_{index}", optional=True) for index in range(3)],
             ],
             outputs=[
                 H3KeyframeReferenceType.Output(f"keyframe_{index}")
-                for index in range(H3_MAX_KEYFRAME_REFERENCES)
+                for index in range(3)
             ],
         )
 
     @classmethod
-    def execute(cls, vae, latent=None, images=None) -> io.NodeOutput:
+    def execute(cls, vae, latent=None, image_0=None, image_1=None, image_2=None) -> io.NodeOutput:
         outputs = []
-        for name, image in _dynamic_entries(images):
+        for index, image in enumerate((image_0, image_1, image_2)):
+            if image is None:
+                outputs.append(None)
+                continue
+            name = f"image_{index}"
             pixels = _align_keyframe_pixels(image[:1], latent, name)
             outputs.append(
                 H3KeyframeReferenceData(
@@ -187,7 +181,6 @@ class H3KeyframeReference(io.ComfyNode):
                     latent=_encode_visual(vae, pixels, name),
                 )
             )
-        outputs.extend([None] * (H3_MAX_KEYFRAME_REFERENCES - len(outputs)))
         return io.NodeOutput(*outputs)
 
 

@@ -1,6 +1,5 @@
 import { app } from "../../scripts/app.js";
 import { api } from "../../scripts/api.js";
-import { createH3Template } from "./lib/material_h3_template.js";
 import {
   INPUTS,
   OUTPUTS,
@@ -166,10 +165,14 @@ app.registerExtension({
     },
     {
       id: "Turing.MaterialWorkspace.H3",
-      label: "添加 H3 卡片工作流",
-      function: () => {
+      label: "打开 H3 卡片模板",
+      function: async () => {
+        if (!confirm("打开 H3 模板会替换当前编辑器内容，请先保存工作流。继续？")) return;
         try {
-          createH3Template(app);
+          const response = await api.fetchApi("/turing/workspace/h3-template");
+          if (!response.ok) throw Error("无法加载 H3 模板");
+          await app.loadGraphData(await response.json());
+          editing = null;
           bindMaterials();
         } catch (e) {
           show(e);
