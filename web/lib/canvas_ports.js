@@ -93,18 +93,7 @@ export function appendSocket(node) {
     else node.addOutput("＋", "*");
     (inputs ? node.inputs : node.outputs).at(-1)._append = true;
   }
-  node.size[0] = Math.max(260, node.size[0]);
-  node.size[1] = Math.max(80, (entries(node).length + 1) * 28 + 20);
-  for (const [isInput, sockets] of [
-    [true, node.inputs],
-    [false, node.outputs],
-  ])
-    for (const s of sockets) {
-      const index = s._append
-        ? entries(node).length
-        : entries(node).findIndex((p) => p.id === s._portId);
-      s.pos = [isInput ? 0 : node.size[0], 24 + index * 28];
-    }
+  for (const s of [...node.inputs, ...node.outputs]) delete s.pos;
   node._appendingSocket = false;
 }
 export function addPort(node, name, type = "STRING", kind = "value") {

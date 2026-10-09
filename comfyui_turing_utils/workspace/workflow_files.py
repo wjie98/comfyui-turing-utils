@@ -11,8 +11,7 @@ import threading
 import uuid
 
 from .cards import describe, flatten
-from .compiler import MATERIALS, is_link
-from .endpoints import INPUTS, parse_ports
+from .compiler import is_link
 
 LOCK = threading.RLock()
 KEY = "turing_card"
@@ -46,12 +45,10 @@ def pack(workflow, prompt):
 
 def unpack(workflow):
     data = workflow.get("extra", {}).get(KEY)
-    if not data or data.get("version") not in {1, 2}:
+    if not data or data.get("version") != 2:
         raise ValueError("Open this workflow in ComfyUI and save it as a Canvas card first")
     if data["source_hash"] != digest(workflow):
         raise ValueError("Workflow was edited externally; open it and Save Back to Card to refresh the execution graph")
-    if data["version"] == 1 and any(n["class_type"] == "TuringMaterialVideo" for n in data["prompt"].values()):
-        raise ValueError("This card uses legacy IMAGE/AUDIO video outputs. Open its workflow, reconnect the VIDEO output using native video component nodes, then save the card again. Material files are unchanged.")
     interface = describe(data["prompt"])
     return data, interface
 
@@ -74,10 +71,10 @@ def add_instance(root, workflow, title):
     unpack(workflow)
     with LOCK:
         path = Path(root) / "canvas.json"
-        canvas = load_json(path) if path.exists() else {"format": 2, "revision": 0, "cards": []}
+        canvas = load_json(path)
         identity = uuid.uuid4().hex
         atomic_json(card_path(root, identity), workflow)
-        canvas["cards"].append({"id": identity, "title": title, "x": len(canvas["cards"])*420, "y": 0})
+        canvas["cards"].append({"id": identity, "title": title})
         canvas["revision"] += 1
         atomic_json(path, canvas)
         return identity
@@ -99,15 +96,7 @@ def save_instance(root, identity, workflow, prompt, revision):
         canvas = load_json(Path(root) / "canvas.json")
         _, interface = unpack(result)
         previous = current["workflow"]["extra"][KEY]
-        # Read the old identities without applying the new output schema: a
-        # legacy IMAGE/AUDIO video card must remain repairable in the editor.
-        old_prompt = previous["prompt"]
-        old_interface = {
-            "stubs": {n["inputs"]["stub_id"]: key for key, n in old_prompt.items()
-                      if n["class_type"] in MATERIALS},
-            "inputs": next(parse_ports(n["inputs"]["ports"]) for n in old_prompt.values()
-                           if n["class_type"] == INPUTS),
-        }
+        old_interface = describe(previous["prompt"])
         for stub in old_interface["stubs"].keys() & interface["stubs"].keys():
             old = previous["prompt"][old_interface["stubs"][stub]]["class_type"]
             if old != prompt[interface["stubs"][stub]]["class_type"]:
@@ -121,8 +110,6 @@ def save_instance(root, identity, workflow, prompt, revision):
                     raise ValueError("Disconnect the card input before deleting it or changing its type")
             if connection["source"].startswith(identity + ":"):
                 stub = connection["source"].split(":", 1)[1]
-                if previous.get("version") == 1 and old_prompt[old_interface["stubs"][stub]]["class_type"] == "TuringMaterialVideo":
-                    raise ValueError("Disconnect legacy video outputs before changing them to VIDEO")
                 if (interface["stubs"].get(stub), connection.get("slot", 0)) not in exports:
                     raise ValueError("Disconnect the card output before removing its material export")
         atomic_json(card_path(root, identity), result)
@@ -133,7 +120,7 @@ def save_instance(root, identity, workflow, prompt, revision):
 
 def document(root):
     canvas = load_json(Path(root) / "canvas.json")
-    if canvas.get("format") != 2:
+    if canvas.get("format") != 3:
         raise ValueError("Unsupported Canvas project format")
     prompt, cards = {}, []
     for instance in canvas["cards"]:
@@ -189,7 +176,7 @@ def document(root):
             outputs.append({**port, "source":identities[source], "source_slot":slot})
         cards.append({**instance, "materials": materials, "fields": fields, "layout":layout, "instance":True, "outputs":outputs,
             "ports":[p for p in interface["inputs"] if p["kind"] == "value"], "bindings":bindings})
-    return {"revision":canvas["revision"], "prompt":prompt, "workflow":{}, "cards":cards, "format":2}
+    return {"revision":canvas["revision"], "prompt":prompt, "workflow":{}, "cards":cards, "format":3}
 
 
 def connect(root, revision, target, port_id, source, source_slot=None):
@@ -232,13 +219,7 @@ def patch(root, revision, changes):
             raise ValueError("Canvas changed; reload before saving")
         pending = {}
         for change in changes:
-            if change["type"] == "position":
-                card = next(c for c in canvas["cards"] if c["id"] == change["id"])
-                x, y = float(change["x"]), float(change["y"])
-                if not math.isfinite(x) or not math.isfinite(y):
-                    raise ValueError("Card coordinates must be finite")
-                card.update(x=x, y=y)
-            elif change["type"] == "input":
+            if change["type"] == "input":
                 identity, suffix = change["id"].split(":",1)
                 if suffix != "parameters":
                     raise ValueError("Only endpoint parameters can be edited on a card")

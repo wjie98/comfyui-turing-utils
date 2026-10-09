@@ -25,6 +25,7 @@ from comfyui_turing_utils.workspace.endpoints import CanvasInputs, parse_ports
 from comfyui_turing_utils.workspace.cards import describe, flatten
 from comfyui_turing_utils.workspace import workflow_files
 from comfyui_turing_utils.workspace.templates import material_template
+from comfyui_turing_utils.workspace.native import project_workflow, save_layout
 import torch
 
 
@@ -48,6 +49,37 @@ class AddTextV3(io.ComfyNode):
 
 
 class WorkspaceTest(unittest.TestCase):
+    def test_native_project_layout_and_validation(self):
+        source, prompt = material_template(("text",))
+        identity = workflow_files.add_instance(self.project.root, workflow_files.pack(source,prompt), "text")
+        data = project_workflow(self.project)
+        graph = data["workflow"]
+        graph["nodes"][1]["pos"] = [600,200]
+        result = save_layout(self.project, graph, data["document"]["revision"])
+        self.assertEqual(project_workflow(self.project)["workflow"]["nodes"][1]["pos"], [600,200])
+        with self.assertRaises(ValueError): save_layout(self.project, graph, data["document"]["revision"])
+        bad = copy.deepcopy(graph)
+        bad["nodes"][1]["type"] = "LoadImage"
+        with self.assertRaises(ValueError): save_layout(self.project, bad, result["revision"])
+        bad = copy.deepcopy(graph)
+        bad["nodes"][1]["pos"] = [float("nan"),0]
+        with self.assertRaises(ValueError): save_layout(self.project, bad, result["revision"])
+        bad = copy.deepcopy(graph)
+        bad["nodes"].append(copy.deepcopy(bad["nodes"][1]))
+        with self.assertRaises(ValueError): save_layout(self.project, bad, result["revision"])
+        graph["nodes"] = graph["nodes"][:1]
+        save_layout(self.project, graph, result["revision"])
+        self.assertTrue(workflow_files.card_path(self.project.root,identity).is_file())
+
+    def test_open_does_not_initialize_invalid_project(self):
+        root = Path(self.tmp.name) / "invalid"
+        root.mkdir()
+        path = root / "canvas.json"
+        path.write_text('{"format":2}')
+        with self.assertRaises(ValueError): Project("invalid")
+        self.assertFalse((root / "workspace.sqlite3").exists())
+        self.assertEqual(path.read_text(), '{"format":2}')
+
     def test_starter_and_basic_templates(self):
         workflow, prompt = material_template()
         self.assertEqual(len(workflow["nodes"]), 6)
@@ -71,41 +103,27 @@ class WorkspaceTest(unittest.TestCase):
         self.assertEqual(video.get_bit_depth(),10)
         self.assertEqual(video.get_color_space(),"HDR")
 
-    def test_legacy_video_can_be_repaired_and_saved(self):
-        workflow, prompt = material_template(("video",))
-        package = workflow_files.pack(workflow, prompt)
-        identity = workflow_files.add_instance(self.project.root, package, "video")
-        package["extra"][workflow_files.KEY]["version"] = 1
-        old_prompt = package["extra"][workflow_files.KEY]["prompt"]
-        output = next(n for n in old_prompt.values() if n["class_type"] == "TuringCanvasOutputs")
-        ports = json.loads(output["inputs"]["ports"])
-        ports[0]["type"] = "IMAGE"
-        output["inputs"]["ports"] = json.dumps(ports)
-        workflow_files.atomic_json(workflow_files.card_path(self.project.root, identity), package)
-        opened = workflow_files.read_instance(self.project.root, identity)
-        workflow_files.save_instance(self.project.root, identity, workflow, prompt, opened["revision"])
-        repaired = workflow_files.read_instance(self.project.root, identity)["workflow"]
-        self.assertEqual(workflow_files.unpack(repaired)[0]["version"], 2)
 
-    def test_empty_text_and_legacy_text_migration(self):
+    def test_empty_text_and_explicit_project_creation(self):
         self.project.select("empty", {"text":""})
         self.assertEqual(self.project.selections()["empty"]["text"], "")
-        legacy = Project("legacy")
-        asset, path = legacy.reserve("text", ".txt", "old")
-        path.write_text("legacy content", encoding="utf-8")
-        legacy.register(asset,"text",{})
-        with legacy.connect() as db:
-            db.execute("INSERT INTO selections VALUES(?,?,?)",("old",2,json.dumps({"asset":asset,"start":1})))
-        self.assertEqual(legacy.selections()["old"],{"text":"legacy content","revision":2})
-        self.assertTrue(path.exists())
-        self.assertEqual(workflow_files.load_json(legacy.root/"canvas.json")["selections"]["old"]["text"],"legacy content")
+        root = Path(self.tmp.name) / "other"
+        with self.assertRaises(ValueError): Project("other")
+        self.assertFalse(root.exists())
+        root.mkdir()
+        (root / "keep.txt").write_text("user data")
+        with self.assertRaises(ValueError): Project.create("other")
+        self.assertFalse((root / "canvas.json").exists())
+        self.assertEqual((root / "keep.txt").read_text(), "user data")
+        with self.assertRaises(ValueError): Project.create("test")
 
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
         patch = mock.patch("folder_paths.get_output_directory", return_value=self.tmp.name)
         patch.start(); self.addCleanup(patch.stop)
-        self.project = Project("test")
+        (Path(self.tmp.name) / "test").mkdir()
+        self.project = Project.create("test")
         self.mapping = mock.patch.dict(nodes.NODE_CLASS_MAPPINGS, {
             **PUBLIC_NODES, **INTERNAL_NODES, "WorkspaceTest": AddText, "WorkspaceTestV3": AddTextV3})
         self.mapping.start(); self.addCleanup(self.mapping.stop)
@@ -344,8 +362,6 @@ class WorkspaceTest(unittest.TestCase):
         revision = self.project.document()["revision"]
         with self.assertRaisesRegex(ValueError, "type"):
             workflow_files.patch(self.project.root,revision,[{"type":"input","id":b+":parameters","name":"parameter","value":123}])
-        with self.assertRaisesRegex(ValueError, "finite"):
-            workflow_files.patch(self.project.root,revision,[{"type":"position","id":b,"x":float("nan"),"y":0}])
         with self.assertRaisesRegex(ValueError, "Unknown"):
             workflow_files.patch(self.project.root,revision,[{"type":"input","id":b+":parameters","name":"parameter","value":"pending"},{"type":"invalid"}])
         self.assertEqual(workflow_files.read_instance(self.project.root,b), original_file)

@@ -445,11 +445,12 @@ original loading functions; callers bypassing the prompt server must invoke
   storyboard from a loaded `VIDEO` or decoded `IMAGE` frame batch. It can use
   uniform or motion-weighted sampling and optionally wraps each panel in
   annotated film rails so frame numbers and timestamps stay outside the image.
-- **Material Workspace** is an independent page opened from the Turing Utils menu.
+- **Material Workspace** opens in ComfyUI's native workflow tabs from the Turing Utils menu.
   Four material boundary nodes persist text, images, video and audio. Ordinary
   workflows with Canvas Inputs/Outputs become independent card copies; executing a material runs only the segment back
   to the preceding saved materials through ComfyUI's normal queue. Videos load a
-  poster only until playback is requested. The previous Canvas nodes are removed.
+  poster only until playback is requested. Creating a project requires an empty
+  folder; opening one requires its valid `canvas.json`. The standalone page is removed.
   See [Material Workspace](docs/material-canvas.md) for usage and validation limits.
 - `Configure Attention Strategy` is the unified entry for Sol, SLA, and Veda.
   H3 Image Sol and Static Virtual KV have been removed, including their node IDs.

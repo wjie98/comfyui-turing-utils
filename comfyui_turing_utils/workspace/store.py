@@ -26,20 +26,31 @@ class Conflict(ValueError):
 
 
 class Project:
+    @classmethod
+    def create(cls, directory):
+        root = inside(folder_paths.get_output_directory(), directory)
+        with workflow_files.LOCK:
+            if not root.is_dir() or any(root.iterdir()):
+                raise ValueError("Select an existing empty folder to create a Canvas project")
+            workflow_files.atomic_json(root / "canvas.json", {"format":3, "id":str(uuid.uuid4()), "revision":0, "cards":[], "selections":{}})
+        return cls(directory)
+
     def __init__(self, directory):
         self.directory = directory
         self.root = inside(folder_paths.get_output_directory(), directory)
-        self.root.mkdir(parents=True, exist_ok=True)
         with workflow_files.LOCK:
             path = inside(self.root, "canvas.json")
-            if not path.exists():
-                workflow_files.atomic_json(path, {"format":2, "revision":0, "cards":[]})
+            if not path.is_file():
+                raise ValueError("This folder has no canvas.json; create a project in an empty folder first")
+            data = workflow_files.load_json(path)
+            if not isinstance(data, dict) or data.get("format") != 3 or not isinstance(data.get("cards"), list) or not isinstance(data.get("selections"), dict) or not isinstance(data.get("id"), str) or type(data.get("revision")) is not int or data["revision"] < 0:
+                raise ValueError("Invalid or unsupported Canvas project")
+            uuid.UUID(data["id"])
         with self.connect() as db:
             db.executescript("""
                 CREATE TABLE IF NOT EXISTS materials (
                     id TEXT PRIMARY KEY, kind TEXT NOT NULL, name TEXT NOT NULL,
                     metadata TEXT NOT NULL, created INTEGER NOT NULL DEFAULT(unixepoch()));
-                CREATE TABLE IF NOT EXISTS selections (node TEXT PRIMARY KEY, revision INTEGER NOT NULL, content TEXT NOT NULL);
                 CREATE TABLE IF NOT EXISTS runs (id TEXT PRIMARY KEY, target TEXT NOT NULL,
                     revision INTEGER NOT NULL, status TEXT NOT NULL, asset TEXT, selected INTEGER DEFAULT 0);
                 CREATE INDEX IF NOT EXISTS material_kind ON materials(kind, created DESC);
@@ -63,18 +74,6 @@ class Project:
         with workflow_files.LOCK:
             path = self.root / "canvas.json"
             canvas = workflow_files.load_json(path)
-            if "selections" not in canvas:
-                with self.connect() as db:
-                    canvas["selections"] = {r["node"]: {**json.loads(r["content"]), "revision": r["revision"]}
-                        for r in db.execute("SELECT * FROM selections")}
-                for content in canvas["selections"].values():
-                    content.pop("start", None)
-                    content.pop("end", None)
-                    asset = content.get("asset")
-                    if asset and self.asset(asset)["kind"] == "text":
-                        content["text"] = self.path(asset).read_text(encoding="utf-8")
-                        del content["asset"]
-                workflow_files.atomic_json(path, canvas)
             return canvas["selections"]
 
     def patch(self, revision, changes):

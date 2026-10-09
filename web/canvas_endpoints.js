@@ -9,13 +9,6 @@ app.registerExtension({
     const type = node.comfyClass || node.constructor.type || node.type;
     if (type?.startsWith("TuringMaterial")) {
       const kind = type.slice("TuringMaterial".length).toLowerCase();
-      const colors = {
-        image: ["#276447", "#203c30"],
-        video: ["#305e8a", "#21384c"],
-        audio: ["#8a6030", "#483725"],
-        text: ["#6b4a8b", "#382a49"],
-      };
-      [node.color, node.bgcolor] = colors[kind];
       const id = node.widgets?.find((w) => w.name === "stub_id");
       if (id) {
         if (!id.value) id.value = crypto.randomUUID();

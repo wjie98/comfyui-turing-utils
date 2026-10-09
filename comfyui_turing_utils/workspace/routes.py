@@ -19,6 +19,7 @@ from .nodes import fresh_type
 from .store import Conflict, Project, inside
 from . import workflow_files
 from .templates import material_template
+from .native import project_workflow, save_layout
 
 
 def probe(path, kind):
@@ -48,7 +49,6 @@ def install_routes():
     server._turing_material_workspace = True
     thumbnail_slots = asyncio.Semaphore(2)
     thumbnails = {}
-    ui = Path(__file__).with_name("ui")
 
     def endpoint(method, path):
         def decorate(fn):
@@ -63,10 +63,6 @@ def install_routes():
             return wrapped
         return decorate
 
-    @endpoint("get", "/")
-    async def page(request):
-        return web.FileResponse(ui / "index.html")
-
     @endpoint("get", "/new-template")
     async def new_template(request):
         return web.json_response(material_template()[0])
@@ -75,12 +71,27 @@ def install_routes():
     async def protocol(request):
         return web.json_response({"materials": MATERIALS})
 
-    @endpoint("get", "/ui/{name}")
-    async def static(request):
-        name = request.match_info["name"]
-        if name not in {"app.js", "style.css"}:
-            raise web.HTTPNotFound()
-        return web.FileResponse(ui / name)
+    @endpoint("post", "/project/create")
+    async def create_project(request):
+        data = await request.json()
+        return web.json_response(await asyncio.to_thread(lambda: project_workflow(Project.create(data["directory"]))))
+
+    @endpoint("post", "/project/open")
+    async def open_project(request):
+        data = await request.json()
+        return web.json_response(await asyncio.to_thread(lambda: project_workflow(Project(data["directory"]))))
+
+    @endpoint("post", "/project/save")
+    async def save_project(request):
+        data = await request.json()
+        return web.json_response(await asyncio.to_thread(lambda: save_layout(Project(data["directory"]), data["workflow"], data["revision"])))
+
+    @endpoint("post", "/directory/create")
+    async def create_directory(request):
+        data = await request.json()
+        path = inside(folder_paths.get_output_directory(), data["directory"])
+        await asyncio.to_thread(path.mkdir)
+        return web.json_response({"directory":data["directory"]})
 
     @endpoint("post", "/project")
     async def project(request):
@@ -168,8 +179,6 @@ def install_routes():
             identity=workflow_files.add_instance(project.root, workflow, title)
             for stub,selection in selections.items():
                 project.select(f"{identity}:{stub}",selection)
-            if "x" in data and "y" in data:
-                project.patch(project.document()["revision"], [{"type":"position", "id":identity, "x":data["x"], "y":data["y"]}])
             return identity
         return web.json_response({"id":await asyncio.to_thread(add)})
 
@@ -214,6 +223,11 @@ def install_routes():
         data = await request.json()
         result = await asyncio.to_thread(lambda: Project(data["directory"]).select(data["node"], data["selection"], data["revision"]))
         return web.json_response({"revision": result})
+
+    @endpoint("post", "/selection")
+    async def selection(request):
+        data = await request.json()
+        return web.json_response(await asyncio.to_thread(lambda: Project(data["directory"]).selections().get(data["node"], {})))
 
     @endpoint("post", "/text")
     async def text(request):
