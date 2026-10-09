@@ -5,6 +5,13 @@ export function entries(node) {
   return JSON.parse(node.widgets.find((w) => w.name === "ports").value || "[]");
 }
 export function syncPorts(node, ports) {
+  node._syncingPorts = true;
+  for (let i = (node.inputs?.length || 0) - 1; i >= 0; i--)
+    if (node.inputs[i]._append || node.inputs[i].name === "＋")
+      node.removeInput(i);
+  for (let i = (node.outputs?.length || 0) - 1; i >= 0; i--)
+    if (node.outputs[i]._append || node.outputs[i].name === "＋")
+      node.removeOutput(i);
   const old = entries(node),
     ids = new Map(old.map((p) => [p.slot, p.id]));
   for (const input of node.inputs || [])
@@ -72,7 +79,33 @@ export function syncPorts(node, ports) {
   }
   node.widgets.find((w) => w.name === "ports").value = JSON.stringify(ports);
   node.setSize(node.computeSize());
+  node._syncingPorts = false;
+  appendSocket(node);
   node.graph?.setDirtyCanvas(true, true);
+}
+export function appendSocket(node) {
+  if (node._appendingSocket || node._syncingPorts) return;
+  node._appendingSocket = true;
+  const inputs = node.comfyClass === OUTPUTS || node.type === OUTPUTS;
+  const slots = inputs ? node.inputs : node.outputs;
+  if (!slots?.some((s) => s._append)) {
+    if (inputs) node.addInput("＋", "*");
+    else node.addOutput("＋", "*");
+    (inputs ? node.inputs : node.outputs).at(-1)._append = true;
+  }
+  node.size[0] = Math.max(260, node.size[0]);
+  node.size[1] = Math.max(80, (entries(node).length + 1) * 28 + 20);
+  for (const [isInput, sockets] of [
+    [true, node.inputs],
+    [false, node.outputs],
+  ])
+    for (const s of sockets) {
+      const index = s._append
+        ? entries(node).length
+        : entries(node).findIndex((p) => p.id === s._portId);
+      s.pos = [isInput ? 0 : node.size[0], 24 + index * 28];
+    }
+  node._appendingSocket = false;
 }
 export function addPort(node, name, type = "STRING", kind = "value") {
   const ports = entries(node),
@@ -80,109 +113,4 @@ export function addPort(node, name, type = "STRING", kind = "value") {
   ports.push(port);
   syncPorts(node, ports);
   return port;
-}
-export function editPorts(node) {
-  const dialog = document.createElement("dialog"),
-    list = document.createElement("div");
-  dialog.style.cssText =
-    "max-height:80vh;overflow:auto;background:var(--comfy-menu-bg);color:var(--input-text);padding:16px";
-  dialog.append(list);
-  let dragged;
-  const draw = () => {
-    list.replaceChildren();
-    for (const port of entries(node)) {
-      const row = document.createElement("div");
-      row.draggable = true;
-      row.style.cssText = "display:flex;gap:8px;padding:8px";
-      const handle = document.createElement("span");
-      handle.textContent = "☰";
-      row.append(handle);
-      const name = document.createElement("input");
-      name.value = port.name;
-      name.onchange = () => {
-        const ps = entries(node);
-        ps.find((p) => p.id === port.id).name = name.value;
-        syncPorts(node, ps);
-      };
-      row.append(name);
-      const label = document.createElement("span");
-      label.textContent = port.kind === "position" ? "素材桩位置" : port.type;
-      row.append(label);
-      if (
-        port.kind === "value" &&
-        ["STRING", "INT", "FLOAT", "BOOLEAN"].includes(port.type)
-      ) {
-        const value = document.createElement("input");
-        value.placeholder = "未连接时的默认值";
-        value.value = port.default ?? "";
-        value.onchange = () => {
-          const ps = entries(node),
-            p = ps.find((p) => p.id === port.id);
-          p.default =
-            p.type === "STRING"
-              ? value.value
-              : p.type === "BOOLEAN"
-                ? value.value === "true"
-                : Number(value.value);
-          syncPorts(node, ps);
-        };
-        row.append(value);
-      }
-      row.ondragstart = (e) => {
-        dragged = port.id;
-        e.dataTransfer.setData("text/plain", port.id);
-      };
-      row.ondragover = (e) => e.preventDefault();
-      row.ondrop = (e) => {
-        e.preventDefault();
-        const ps = entries(node),
-          from = ps.findIndex((p) => p.id === dragged),
-          to = ps.findIndex((p) => p.id === port.id);
-        if (from < 0) return;
-        ps.splice(to, 0, ps.splice(from, 1)[0]);
-        syncPorts(node, ps);
-        draw();
-      };
-      const remove = document.createElement("button");
-      remove.textContent = "删除";
-      remove.onclick = () => {
-        if (!confirm("删除端点会断开对应连线，继续？")) return;
-        syncPorts(
-          node,
-          entries(node).filter((p) => p.id !== port.id),
-        );
-        draw();
-      };
-      row.append(remove);
-      list.append(row);
-    }
-  };
-  for (const kind of node.type === INPUTS ? ["value", "position"] : ["value"]) {
-    const add = document.createElement("button");
-    add.textContent = kind === "position" ? "添加桩位置" : "添加参数 / 数据";
-    add.onclick = () => {
-      const name = prompt("显示名称");
-      if (!name) return;
-      const type =
-        kind === "position"
-          ? POSITION
-          : prompt(
-              "ComfyUI 类型，例如 STRING / INT / FLOAT / IMAGE / AUDIO",
-              "STRING",
-            );
-      if (type) {
-        addPort(node, name, type, kind);
-        draw();
-      }
-    };
-    dialog.append(add);
-  }
-  const close = document.createElement("button");
-  close.textContent = "完成";
-  close.onclick = () => dialog.close();
-  dialog.append(close);
-  dialog.onclose = () => dialog.remove();
-  draw();
-  document.body.append(dialog);
-  dialog.showModal();
 }

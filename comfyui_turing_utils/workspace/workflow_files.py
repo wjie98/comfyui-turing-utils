@@ -11,7 +11,8 @@ import threading
 import uuid
 
 from .cards import describe, flatten
-from .compiler import is_link
+from .compiler import MATERIALS, is_link
+from .endpoints import INPUTS, parse_ports
 
 LOCK = threading.RLock()
 KEY = "turing_card"
@@ -38,17 +39,19 @@ def digest(workflow):
 def pack(workflow, prompt):
     describe(prompt)
     result = copy.deepcopy(workflow)
-    result.setdefault("extra", {})[KEY] = {"version": 1, "prompt": copy.deepcopy(prompt),
+    result.setdefault("extra", {})[KEY] = {"version": 2, "prompt": copy.deepcopy(prompt),
         "source_hash": digest(result), "overrides": {}}
     return result
 
 
 def unpack(workflow):
     data = workflow.get("extra", {}).get(KEY)
-    if not data or data.get("version") != 1:
+    if not data or data.get("version") not in {1, 2}:
         raise ValueError("Open this workflow in ComfyUI and save it as a Canvas card first")
     if data["source_hash"] != digest(workflow):
         raise ValueError("Workflow was edited externally; open it and Save Back to Card to refresh the execution graph")
+    if data["version"] == 1 and any(n["class_type"] == "TuringMaterialVideo" for n in data["prompt"].values()):
+        raise ValueError("This card uses legacy IMAGE/AUDIO video outputs. Open its workflow, reconnect the VIDEO output using native video component nodes, then save the card again. Material files are unchanged.")
     interface = describe(data["prompt"])
     return data, interface
 
@@ -96,7 +99,15 @@ def save_instance(root, identity, workflow, prompt, revision):
         canvas = load_json(Path(root) / "canvas.json")
         _, interface = unpack(result)
         previous = current["workflow"]["extra"][KEY]
-        old_interface = describe(previous["prompt"])
+        # Read the old identities without applying the new output schema: a
+        # legacy IMAGE/AUDIO video card must remain repairable in the editor.
+        old_prompt = previous["prompt"]
+        old_interface = {
+            "stubs": {n["inputs"]["stub_id"]: key for key, n in old_prompt.items()
+                      if n["class_type"] in MATERIALS},
+            "inputs": next(parse_ports(n["inputs"]["ports"]) for n in old_prompt.values()
+                           if n["class_type"] == INPUTS),
+        }
         for stub in old_interface["stubs"].keys() & interface["stubs"].keys():
             old = previous["prompt"][old_interface["stubs"][stub]]["class_type"]
             if old != prompt[interface["stubs"][stub]]["class_type"]:
@@ -110,6 +121,8 @@ def save_instance(root, identity, workflow, prompt, revision):
                     raise ValueError("Disconnect the card input before deleting it or changing its type")
             if connection["source"].startswith(identity + ":"):
                 stub = connection["source"].split(":", 1)[1]
+                if previous.get("version") == 1 and old_prompt[old_interface["stubs"][stub]]["class_type"] == "TuringMaterialVideo":
+                    raise ValueError("Disconnect legacy video outputs before changing them to VIDEO")
                 if (interface["stubs"].get(stub), connection.get("slot", 0)) not in exports:
                     raise ValueError("Disconnect the card output before removing its material export")
         atomic_json(card_path(root, identity), result)
@@ -196,10 +209,10 @@ def connect(root, revision, target, port_id, source, source_slot=None):
             graph=doc["prompt"]
             kind=graph.get(source,{}).get("class_type")
             allowed={"TuringMaterialText":{"STRING"},"TuringMaterialImage":{"IMAGE"},
-                     "TuringMaterialVideo":{"IMAGE","AUDIO"},"TuringMaterialAudio":{"AUDIO"}}
+                     "TuringMaterialVideo":{"VIDEO"},"TuringMaterialAudio":{"AUDIO"}}
             if port["type"] not in allowed.get(kind,set()):
                 raise ValueError("Material type does not match this input")
-            slot=1 if kind == "TuringMaterialVideo" and port["type"] == "AUDIO" else 0
+            slot=0
             if source_slot is not None and source_slot != slot:
                 raise ValueError("Selected output modality does not match the input")
             if not any(p["source"] == source and p["source_slot"] == slot for c in doc["cards"] for p in c["outputs"]):

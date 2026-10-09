@@ -1,16 +1,19 @@
 """Material boundaries and private execution adapters using normal ComfyUI nodes."""
 
-from fractions import Fraction
 import copy
+from pathlib import Path
 
 import numpy as np
 from PIL import Image
 import torch
 import av
 import nodes
+import folder_paths
 from comfy_api.latest import InputImpl, Types, io
+from comfy_extras.nodes_video import CreateVideo
+from comfy_extras.nodes_audio import load as load_audio
 
-from .store import Project
+from .store import Project, inside
 from .media import read_material
 from .h3 import PrepareH3, FinishH3, SigmaRefiner
 from .endpoints import ENDPOINT_NODES, POSITION
@@ -49,32 +52,47 @@ class Material:
 
     @classmethod
     def INPUT_TYPES(cls):
-        inputs = {"directory": ("STRING", {"default": "materials/project"}),
-                  "asset": ("STRING", {"default": ""}),
-                  "prefix": ("STRING", {"default": cls.KIND})}
+        inputs = {}
         optional = {"value": (cls.RETURN_TYPES[0], {"lazy": True}), "position": (POSITION, {"lazy": True})}
         inputs["stub_id"] = ("STRING", {"default": "", "hidden": True, "socketless": True})
         if cls.KIND == "text":
             inputs["text"] = ("STRING", {"default": "", "multiline": True})
+        else:
+            inputs["file"] = ("STRING", {"default": "", "tooltip": "Input-relative file; a connected computation takes precedence."})
         if cls.KIND == "video":
+            del optional["value"]
+            optional["images"] = ("IMAGE", {"lazy": True})
             optional["audio"] = ("AUDIO", {"lazy": True})
-            inputs["fps"] = ("FLOAT", {"default": 24, "min": 0.01})
-        if cls.KIND in {"video", "audio"}:
-            inputs.update(start=("FLOAT", {"default":0, "min":0}), end=("FLOAT", {"default":0, "min":0}))
-        if cls.KIND == "video":
-            inputs["include_audio"] = ("BOOLEAN", {"default":True})
+            inputs.update(fps=("FLOAT", {"default":30., "min":1., "max":120., "step":1.}),
+                          bit_depth=(["auto", 8, 10],), color_space=(["sRGB", "HDR", "HDR PQ"],),
+                          codec=(["none", *Types.VideoCodec.as_input()],))
         return {"required": inputs, "optional": optional}
 
-    def check_lazy_status(self, asset="", **kwargs):
-        return [name for name in ("value", "audio") if not asset and name in kwargs and kwargs[name] is None]
+    def check_lazy_status(self, **kwargs):
+        return [name for name in ("value", "images", "audio") if name in kwargs and kwargs[name] is None]
 
-    def read(self, directory, asset, prefix="", **kwargs):
-        if not asset and kwargs.get("value") is not None:
-            value = kwargs["value"]
-            return (value, kwargs.get("audio")) if self.KIND == "video" else (value,)
-        if self.KIND == "text" and not asset:
+    def read(self, file="", **kwargs):
+        if self.KIND == "video" and kwargs.get("images") is not None:
+            return (create_video(kwargs["images"], **kwargs),)
+        if kwargs.get("value") is not None:
+            return (kwargs["value"],)
+        if self.KIND == "text":
             return (kwargs.get("text", ""),)
-        return read_selected(self.KIND, directory, asset, kwargs.get("start", 0), kwargs.get("end", 0), kwargs.get("include_audio", True))
+        relative, root = folder_paths.annotated_filepath(file)
+        root = root or folder_paths.get_input_directory()
+        if Path(root).resolve() not in {Path(folder_paths.get_input_directory()).resolve(), Path(folder_paths.get_output_directory()).resolve()}:
+            raise ValueError("Material files must belong to this instance's input or output directory")
+        path = inside(root, relative)
+        if self.KIND == "video":
+            return (InputImpl.VideoFromFile(str(path)),)
+        if self.KIND == "image":
+            return (nodes.LoadImage().load_image(file)[0],)
+        waveform, rate = load_audio(str(path))
+        return ({"waveform": waveform.unsqueeze(0), "sample_rate": rate},)
+
+
+def create_video(value, fps=30., audio=None, bit_depth="auto", color_space="sRGB", codec="none", **kwargs):
+    return CreateVideo.execute(value, fps, audio, bit_depth, color_space, codec).result[0]
 
 
 def read_selected(kind, directory, asset, start=0, end=0, include_audio=True):
@@ -85,6 +103,8 @@ def read_selected(kind, directory, asset, start=0, end=0, include_audio=True):
         return (project.path(asset).read_text(encoding="utf-8"),)
     if end and end <= start:
         raise ValueError("End time must be after start time")
+    if kind == "video":
+        return (InputImpl.VideoFromFile(str(project.path(asset)), start_time=start, duration=end-start if end else 0),)
     images, audio, _ = read_material(project, {"asset": asset, "start": start,
         "duration": end - start if end else 0, "modality": "audio" if kind == "audio" else "av",
         "include_audio": include_audio, "max_megapixels": 4})
@@ -99,10 +119,14 @@ class Read:
 
     @classmethod
     def INPUT_TYPES(cls):
+        if cls.KIND == "text":
+            return {"required": {"text": ("STRING",), "run_id": ("STRING",)}}
         return {"required": {"directory": ("STRING",), "asset": ("STRING",), "run_id": ("STRING",),
                              "start": ("FLOAT",), "end": ("FLOAT",), "include_audio": ("BOOLEAN",)}}
 
-    def read(self, directory, asset, run_id, start=0, end=0, include_audio=True):
+    def read(self, directory="", asset="", run_id="", start=0, end=0, include_audio=True, text=""):
+        if self.KIND == "text":
+            return (text,)
         return read_selected(self.KIND, directory, asset, start, end, include_audio)
 
 
@@ -118,17 +142,20 @@ class Write:
     def INPUT_TYPES(cls):
         return {"required": {"directory": ("STRING",), "target": ("STRING",), "run_id": ("STRING",),
             "revision": ("INT",), "prefix": ("STRING",), "value": (cls.VALUE_TYPE,)},
-            "optional": {"audio": ("AUDIO",), "fps": ("FLOAT", {"default": 24})}}
+            "optional": {"audio": ("AUDIO",), "fps": ("FLOAT", {"default": 30}),
+                         "bit_depth": (["auto", 8, 10],), "color_space": (["sRGB", "HDR", "HDR PQ"],),
+                         "codec": (["none", *Types.VideoCodec.as_input()],)}}
 
-    def write(self, directory, target, run_id, revision, prefix, value, audio=None, fps=24):
+    def write(self, directory, target, run_id, revision, prefix, value, audio=None, fps=30, bit_depth="auto", color_space="sRGB", codec="none"):
         project = Project(directory)
         run = project.run(run_id)
         if run["target"] != target or run["revision"] != revision:
             raise ValueError("Execution destination mismatch")
         if run["status"] == "success":
-            return {"ui": {"material": [run]}, "result": (run["asset"],)}
+            return {"ui": {"material": [run]}, "result": (run["asset"] or "",)}
         if self.KIND == "text":
-            asset = project.text(value, prefix)
+            selected = project.finish_run(run_id, text=value)
+            return {"ui": {"material": [{"target": target, "selected": selected, "run_id": run_id}]}, "result": (value,)}
         else:
             extension = {"image": ".png", "video": ".mp4", "audio": ".wav"}[self.KIND]
             asset, path = project.reserve(self.KIND, extension, prefix)
@@ -141,7 +168,7 @@ class Write:
                     Image.fromarray((value[0].detach().cpu().clamp(0, 1).numpy() * 255).round().astype(np.uint8)).save(temporary)
                     metadata = {"width": value.shape[2], "height": value.shape[1]}
                 elif self.KIND == "video":
-                    video = InputImpl.VideoFromComponents(Types.VideoComponents(images=value, audio=audio, frame_rate=Fraction(str(fps))), bit_depth=8, color_space="sRGB")
+                    video = create_video(value, fps, audio, bit_depth, color_space, codec)
                     video.save_to(str(temporary), format=Types.VideoContainer.MP4, codec=Types.VideoCodec.H264, crf=19)
                     metadata = {"width": value.shape[2], "height": value.shape[1], "duration": len(value) / fps, "fps": fps, "audio": audio is not None}
                 else:
@@ -174,7 +201,7 @@ for _kind, _returns in MATERIAL_TYPES.items():
     _suffix = _kind.title()
     PUBLIC_NODES["TuringMaterial" + _suffix] = type("Material" + _suffix, (Material,), {"KIND": _kind, "RETURN_TYPES": _returns})
     INTERNAL_NODES["_TuringMaterialRead" + _suffix] = type("Read" + _suffix, (Read,), {"KIND": _kind, "RETURN_TYPES": _returns})
-    INTERNAL_NODES["_TuringMaterialWrite" + _suffix] = type("Write" + _suffix, (Write,), {"KIND": _kind, "VALUE_TYPE": _returns[0]})
+    INTERNAL_NODES["_TuringMaterialWrite" + _suffix] = type("Write" + _suffix, (Write,), {"KIND": _kind, "VALUE_TYPE": "IMAGE" if _kind == "video" else _returns[0]})
 INTERNAL_NODES.update({"_TuringMaterialH3Prepare": PrepareH3,
                        "_TuringMaterialH3Finish": FinishH3,
                        "_TuringMaterialH3SigmaRefiner": SigmaRefiner})

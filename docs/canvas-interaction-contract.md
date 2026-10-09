@@ -1,67 +1,50 @@
-# Canvas card contract
+# 素材画布交互与协议契约
 
-## Ownership
+## 边界
 
-- workspace/endpoints.py and web/lib/canvas_ports.js: dynamic ports, stable IDs and ordering.
-- workspace/cards.py: validate endpoints and substitute inputs; native ComfyUI flattens subgraphs.
-- workspace/workflow_files.py: independent instance files, revisions, namespacing and external connections.
-- workspace/store.py: immutable material files, SQLite selections and runs.
-- workspace/compiler.py: execution cut at saved boundaries; preserve model preparation caching.
-- workspace/cache.py: version-sensitive task-end eviction of owned intermediates only.
-- workspace/nodes.py: material boundaries and private fresh/read/write adapters.
-- workspace/routes.py: storage and preview API, not another executor.
-- workspace/ui: independent virtualized page; no LiteGraph / Nodes 2.0 dependency.
-- web/material_workspace.js: native commands and official graph import/export.
-- examples/h3_material_card.json: native editable workflow template, not a JavaScript graph builder or model implementation.
+- 普通工作流自由编辑、执行，不启用特殊工作流模式；保存为卡片时才检查接口。
+- 一个 Inputs、一个 Outputs。每个素材桩用 position 绑定输入端位置，用实际输出绑定输出端。
+- Outputs 只接受素材桩输出；嵌套使用官方 graphToPrompt 展开，不自建子图执行器。
+- 新建只提供 image/video/audio/text 基础模板，不绑定 H3、Chat 或提示词角色。
+- 卡片库与项目实例互不传播修改；普通保存、保存模板、保存回实例是明确的三个操作。
 
-## Files and stable identities
+## 类型与状态
 
-canvas.json format 2 owns card positions and connections. Each instance owns cards/<id>/workflow.json.
-Its extra.turing_card.version = 1 holds a derived API prompt, source hash and input overrides.
-The interface is derived on read, not stored as a second competing definition.
-Unknown versions fail explicitly. Library files live in the ComfyUI user's canvas_cards directory.
-Import copies a template; editing an instance cannot edit the template or another instance.
+- Text 为 STRING 内联内容，workflow 保存默认值，canvas.json 保存当前值；空字符串有效。
+- Image 为 IMAGE，Audio 为 AUDIO，Video 为官方 VIDEO；视频创建复用 Create Video。
+- 连接计算输入优先，未连接时读取手工文本或文件，不用文件选择隐式屏蔽上游。
+- 只有图片/视频/音频写入项目 materials；不为文本建立单独文件或前缀参数。
+- 裁切起止是页面会话状态，执行时快照传递；不进入节点、模板、项目持久化字段。
+- JSON 是布局/连接/选中内容的权威来源，SQLite 保存媒体索引和执行记录。
+- 身份使用 UUID，名称与顺序不作身份。所有修改检查版本并原子替换文件。
 
-Exactly one Canvas Inputs and Canvas Outputs must remain after official flattening.
-Ports have id, zero-based slot, name, type, kind (value or position), optional default/options.
-Slots are contiguous. IDs survive reorder; UI order is not identity.
-Inputs marker links bind every material once. Outputs only accepts material outputs, with matching
-type/slot. Every material must be exported. Position markers never become computation data.
-Project material keys are <instance UUID>:<stub_id>, never native execution paths.
-Do not change material type under a stable ID. Disconnect ports before deleting or retyping them.
+## 端点交互
 
-## Execution and edits
+- 尾部单个追加口动态接线确定类型、名称；无需添加端口表单。
+- 圆点拖线、名称拖动排序/双击改名、标题移动节点，命中区不混用。
+- 排序让位动画只在拖动期间刷新，Esc 取消，最终一次提交并使用原生图变更通知。
+- 输入保留测试输入和默认值；输出在普通工作流透传，不在编辑中强制卡片约束。
+- 不改全局 LiteGraph 行为；不假定 Nodes 2.0。
 
-External binding > card override > internal endpoint test input > endpoint default.
-Overrides disconnect internal test inputs when opened in the editor.
-Recipe changes do not invalidate saved materials or auto-run downstream cards.
-A material's connected value is an explicit local action. Upstream saved boundaries become readers.
-Use native queue/validation/execution; no custom action language or second inference engine.
+## 画布
 
-File hashes protect save-back, project revisions protect edits, selection revisions protect manual
-changes from delayed generation. Validate batches before writing. Each file replacement is atomic;
-multi-file power-loss recovery is not transactional. Stale workflows stay openable but cannot run.
+- 打开项目使用服务器端选择器，仅按需列目录，不递归扫描素材。
+- 右键和添加节点按钮使用同一选择器，基本素材与用户卡片平等。
+- 四类素材以一致的颜色/图标区分，不只靠颜色辨认。
+- 视频冷封面、点击后加载、Range 传输、同页一个播放器、移出视口释放。
+- 视口挂载与低缩放标题模式继续保留，空闲不进行持续动画或轮询。
 
-Do not globally clear caches, pin model tensors or retain an extra model cache.
-Preserve normal preparation signatures/offload behavior. Cleanup must not mask execution errors.
-Test Classic, LRU and RAM-pressure modes.
+## 执行与迁移
 
-## UI rules
+- 执行追溯到上一个已保存桩；不隐式运行其他生成区域。
+- 目标执行成功更新当前内容；有并发手工修改时不覆盖。
+- 中间计算用独立适配类，模型链保留原生缓存；清理不能调用全局 reset。
+- 卡片协议 version 2 使用 VIDEO；旧视频卡片必须明确修正连接，禁止静默改类型。
+- 旧文本文件可读取迁移，但永不自动删除用户文件。
+- 不在自定义节点导入时创建项目，不修改普通节点参数布局。
 
-- Classic LiteGraph is required; do not rely only on Nodes 2.0 widgets.
-- Use native commands, graphToPrompt, loadGraphData, queue and media APIs.
-- Snapshot link membership before moving slots; new LiteGraph derives it from current indices.
-- Reuse ordinary model/LoRA/Attention/Chat nodes rather than duplicate global settings.
-- Drafts outlive virtualized DOM; merge asynchronous selections by revision.
-- Bound previews, mount only nearby cards, titles only when zoomed out.
-- No video/audio source before play; one player, no loop, release on unmount/page hide.
-- Filename/prefix history; code cleanup never removes user material files.
+## 必测
 
-## Verification
-
-Use ops/test-dev.sh, tests/browser/native_parameter_layout.mjs and
-tests/browser/material_workspace.mjs in development.
-The browser harness uses Playwright/Chromium. MATERIAL_VIDEO_FIXTURE enables cold/play/Range and
-1000-card virtualization checks. Keep synthetic artifacts inside the development instance.
-Event dispatch tests handlers, not physical pointer accuracy on every client.
-Real-model quality, target GPUs and remote low-bandwidth responsiveness require separate measurements.
+文本空值与冲突、媒体输入优先、VIDEO 帧率/音频/位深、端口增删改名排序和重开、
+原生子图、模板与实例隔离、路径越界、文件版本冲突、清理后模型缓存复用、
+经典前端、冷媒体、Range 请求、千卡片视口挂载。真实鼠标/模型质量未测时必须明确说明。

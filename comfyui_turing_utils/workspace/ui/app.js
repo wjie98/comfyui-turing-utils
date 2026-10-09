@@ -20,6 +20,7 @@ const mounted = new Map(),
   materialCards = new Map(),
   jobs = new Map();
 const drafts = new Map();
+const trims = new Map();
 const dependencies = new Map();
 const sizes = new ResizeObserver((entries) => {
   let changed = false;
@@ -75,10 +76,9 @@ function flushText(id) {
         node: id,
         revision: current(id).revision,
         text: draft.value,
-        prefix: draft.prefix,
       });
       documentState.selections[id] = {
-        asset: result.asset,
+        text: result.text,
         revision: result.revision,
       };
       if (drafts.get(id) === draft) drafts.delete(id);
@@ -97,7 +97,9 @@ window.addEventListener("beforeunload", (event) => {
   }
 });
 const clientId = crypto.randomUUID();
-const protocolResponse = await fetch(new URL("protocol", apiBase), {headers: userHeaders});
+const protocolResponse = await fetch(new URL("protocol", apiBase), {
+  headers: userHeaders,
+});
 if (!protocolResponse.ok) throw Error("Cannot load material protocol");
 const kinds = (await protocolResponse.json()).materials;
 
@@ -130,7 +132,10 @@ function button(text, fn, cls) {
   return el;
 }
 function current(id) {
-  return documentState.selections[id] || { revision: 0 };
+  return {
+    ...(documentState.selections[id] || { revision: 0 }),
+    ...(trims.get(id) || {}),
+  };
 }
 function assetURL(asset, thumbnail = false, start = 0) {
   const url = new URL("asset", apiBase);
@@ -313,6 +318,7 @@ async function open() {
   sizes.disconnect();
   for (const entry of mounted.values()) entry.root.remove();
   mounted.clear();
+  if (directory !== $("directory").value) trims.clear();
   directory = $("directory").value;
   documentState = await request("project", {});
   index();
@@ -340,6 +346,7 @@ async function select(id, selection) {
     selection,
   });
   if (token !== epoch) return;
+  trims.delete(id);
   documentState.selections[id] = { ...selection, revision: result.revision };
   redrawMaterial(id);
 }
@@ -499,34 +506,32 @@ function buildMaterial(id, card) {
   const box = element("section", null, `material ${kind}`);
   box.dataset.node = id;
   const heading = element("h4", null);
-  heading.append(element("span", node._meta?.title || kind));
+  heading.append(
+    element(
+      "span",
+      { image: "▧", video: "▶", audio: "♫", text: "T" }[kind] +
+        "  " +
+        (node._meta?.title || kind),
+    ),
+  );
   box.append(heading);
   if (kind === "text") {
     const text = element("textarea");
     text.placeholder = "输入文本，离开编辑框时自动保存";
     box.append(text);
     let dirty = drafts.has(id);
-    if (dirty) text.value = drafts.get(id).value;
+    text.value = dirty
+      ? drafts.get(id).value
+      : (selection.text ?? node.inputs.text ?? "");
     text.oninput = () => {
       dirty = true;
       drafts.set(id, {
         value: text.value,
-        prefix: node.inputs.prefix || "text",
       });
       clearTimeout(draftTimer);
       draftTimer = setTimeout(() => flushDrafts().catch(report), 400);
     };
     text.onchange = () => flushText(id).catch(report);
-    if (selection.asset)
-      fetch(assetURL(selection.asset))
-        .then((r) => {
-          if (!r.ok) throw Error("无法读取文本");
-          return r.text();
-        })
-        .then((value) => {
-          if (token === epoch && text.isConnected && !dirty) text.value = value;
-        })
-        .catch(report);
   } else {
     const preview = element("div", null, "preview");
     box.append(preview);
@@ -645,7 +650,7 @@ function buildMaterial(id, card) {
     }
   };
   row.append(history);
-  box.append(row);
+  if (kind !== "text") box.append(row);
   if (kind === "video" || kind === "audio") {
     const range = element("div", null, "row");
     for (const [key, label] of [
@@ -658,16 +663,29 @@ function buildMaterial(id, card) {
       control.min = 0;
       control.step = 0.01;
       control.value = selection[key] || 0;
-      control.onchange = () =>
-        select(id, { ...current(id), [key]: Number(control.value) }).catch(
-          report,
-        );
+      control.onchange = () => {
+        const interval = {
+          ...(trims.get(id) || { start: 0, end: 0 }),
+          [key]: Number(control.value),
+        };
+        if (
+          !Number.isFinite(interval[key]) ||
+          interval[key] < 0 ||
+          (interval.end && interval.end <= interval.start)
+        ) {
+          control.value = current(id)[key] || 0;
+          return report(Error("终点须晚于起点；0 表示素材末尾"));
+        }
+        trims.set(id, interval);
+        stopPlayer();
+        redrawMaterial(id);
+      };
       wrap.append(control);
       range.append(wrap);
     }
     box.append(range);
   }
-  if (Array.isArray(node.inputs.value)) {
+  if (Array.isArray(node.inputs.value) || Array.isArray(node.inputs.images)) {
     const run = button("执行到这里", () => execute(id), "run");
     run.disabled = jobs.has(id);
     if (run.disabled) run.textContent = "执行中…";
@@ -712,6 +730,7 @@ async function execute(id) {
     const compiled = await request("compile", {
       target: id,
       revision: documentState.revision,
+      trims: Object.fromEntries(trims),
     });
     jobs.set(id, { id: compiled.run_id, directory: dir, epoch: token });
     const response = await fetch(new URL("prompt", comfyBase), {
@@ -790,33 +809,114 @@ function connect() {
           .catch(report);
     }, 2000);
 }
-async function refreshTemplates() {
-  const data = await request("templates", {});
-  $("templates").replaceChildren(
-    ...data.items.map((name) => new Option(name, name)),
-  );
+function dialog(title) {
+  const root = element("dialog", null, "picker");
+  root.append(element("h3", title));
+  const close = button("关闭", () => root.close());
+  root.append(close);
+  root.onclose = () => root.remove();
+  document.body.append(root);
+  root.showModal();
+  return root;
 }
-$("open").onclick = () => open().catch(report);
-$("refresh-templates").onclick = () => refreshTemplates().catch(report);
-$("add").onclick = async () => {
-  try {
+async function chooseProject() {
+  const root = dialog("打开项目 · 服务器 output 目录");
+  const path = element("input"),
+    list = element("div", null, "picker-list");
+  path.placeholder = "项目相对路径，例如 materials/project";
+  path.value = directory || $("directory").value;
+  const browse = async (at = "") => {
+    const data = await request("projects", { path: at });
+    list.replaceChildren();
+    if (at)
+      list.append(
+        button("↑ 上一级", () => browse(at.split("/").slice(0, -1).join("/"))),
+      );
+    for (const item of data.items) {
+      const row = element("div", null, "row");
+      row.append(
+        button(`▸ ${item.name}`, () => {
+          path.value = item.path;
+          return browse(item.path);
+        }),
+      );
+      if (item.project) row.append(button("打开", () => load(item.path)));
+      list.append(row);
+    }
+  };
+  const load = async (value) => {
     await flushDrafts();
-    await saving;
-    const name = $("templates").value;
-    if (!name) throw Error("先在 ComfyUI 保存一个 Canvas 卡片");
-    await request("card/add", { name });
+    $("directory").value = value;
     await open();
-  } catch (error) {
-    report(error);
+    root.close();
+  };
+  root.append(
+    path,
+    button("打开 / 新建此项目", () => load(path.value)),
+    list,
+  );
+  await browse();
+}
+async function chooseNode(x = 40, y = 40, pointer = null) {
+  if (!documentState) throw Error("先打开项目");
+  const root = dialog("添加节点");
+  if (pointer) {
+    root.style.cssText = `position:fixed;margin:0;width:320px;left:${Math.max(8, Math.min(pointer.x, innerWidth - 340))}px;top:${Math.max(8, Math.min(pointer.y, innerHeight * 0.3))}px`;
   }
+  const search = element("input"),
+    list = element("div", null, "picker-list");
+  search.placeholder = "搜索素材类型或卡片名称";
+  root.append(search, list);
+  const { items } = await request("templates", {});
+  const options = [
+    ...[
+      ["image", "图片"],
+      ["video", "视频"],
+      ["audio", "音频"],
+      ["text", "文本"],
+    ].map(([kind, title]) => ({ kind, title })),
+    ...items.map((name) => ({ name, title: name.replace(/\.json$/, "") })),
+  ];
+  const draw = () => {
+    list.replaceChildren();
+    for (const item of options.filter((o) =>
+      o.title.toLowerCase().includes(search.value.toLowerCase()),
+    ))
+      list.append(
+        button(item.title, async () => {
+          await flushDrafts();
+          await saving;
+          await request("card/add", { ...item, x, y });
+          await open();
+          root.close();
+        }),
+      );
+  };
+  search.oninput = draw;
+  draw();
+  search.focus();
+}
+$("open").onclick = () => chooseProject().catch(report);
+$("add").onclick = () =>
+  chooseNode(-view.x / view.z + 40, -view.y / view.z + 40).catch(report);
+viewport.oncontextmenu = (e) => {
+  if (e.target.closest("input,textarea,video,audio")) return;
+  e.preventDefault();
+  const rect = viewport.getBoundingClientRect();
+  chooseNode(
+    (e.clientX - rect.left - view.x) / view.z,
+    (e.clientY - rect.top - view.y) / view.z,
+    { x: e.clientX, y: e.clientY },
+  ).catch(report);
 };
 $("fit").onclick = () => {
-  const card = documentState.cards[0];
+  const card = documentState?.cards[0];
   if (card) view = { x: 40 - card.x, y: 40 - card.y, z: 1 };
   schedule();
 };
 let pan;
 viewport.onpointerdown = (e) => {
+  if (e.button !== 0) return;
   if (e.target !== viewport && e.target !== world) return;
   pan = { x: e.clientX, y: e.clientY, vx: view.x, vy: view.y };
   viewport.setPointerCapture(e.pointerId);
@@ -863,5 +963,6 @@ channel.onmessage = async (e) => {
 };
 $("directory").value =
   new URL(location.href).searchParams.get("directory") || "materials/project";
-open().then(connect).catch(report);
-refreshTemplates().catch(report);
+connect();
+if (new URL(location.href).searchParams.has("directory")) open().catch(report);
+else chooseProject().catch(report);

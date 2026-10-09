@@ -58,9 +58,9 @@ explicit endpoint sorting, previews and workflow editing commands. These are
 user-facing capabilities, not ordinary-node layout replacements.
 
 Material types are declared once in workspace/protocol.py. API graph interfaces
-are derived rather than separately persisted. H3's starting workflow lives in
-examples/h3_material_card.json and is loaded with app.loadGraphData; do not
-recreate its graph with a parallel JavaScript builder. Hidden endpoint metadata
+are derived rather than separately persisted. The minimal starter in
+workspace/templates.py contains only endpoints and four typed materials and is
+loaded with app.loadGraphData. No model-specific card builder is needed. Hidden endpoint metadata
 uses native hidden/socketless input declarations.
 
 Use small shared functions for real repeated behavior. A one-off fix does not

@@ -1,8 +1,6 @@
-"""Files own material content; SQLite owns revisions and concurrent selection."""
+"""Project JSON owns selected content; SQLite indexes media and execution records."""
 
 import json
-import math
-import os
 import re
 import sqlite3
 import uuid
@@ -62,26 +60,41 @@ class Project:
             return {**workflow_files.document(self.root), "selections": self.selections()}
 
     def selections(self):
-        with self.connect() as db:
-            return {r["node"]: {**json.loads(r["content"]), "revision": r["revision"]}
-                    for r in db.execute("SELECT * FROM selections")}
+        with workflow_files.LOCK:
+            path = self.root / "canvas.json"
+            canvas = workflow_files.load_json(path)
+            if "selections" not in canvas:
+                with self.connect() as db:
+                    canvas["selections"] = {r["node"]: {**json.loads(r["content"]), "revision": r["revision"]}
+                        for r in db.execute("SELECT * FROM selections")}
+                for content in canvas["selections"].values():
+                    content.pop("start", None)
+                    content.pop("end", None)
+                    asset = content.get("asset")
+                    if asset and self.asset(asset)["kind"] == "text":
+                        content["text"] = self.path(asset).read_text(encoding="utf-8")
+                        del content["asset"]
+                workflow_files.atomic_json(path, canvas)
+            return canvas["selections"]
 
     def patch(self, revision, changes):
         return workflow_files.patch(self.root, revision, changes)
 
     def select(self, node, content, expected=None):
-        start, end = float(content.get("start", 0)), float(content.get("end", 0))
-        if not math.isfinite(start) or not math.isfinite(end) or start < 0 or end < 0 or (end and end <= start):
-            raise ValueError("Use a nonnegative start and an end after start (0 means file end)")
-        with self.connect() as db:
-            db.execute("BEGIN IMMEDIATE")
-            row = db.execute("SELECT revision FROM selections WHERE node=?", (node,)).fetchone()
-            revision = row[0] if row else 0
+        if set(content) - {"asset", "text"}:
+            raise ValueError("Only material content is persistent; trim belongs to the current session")
+        if "text" in content and (not isinstance(content["text"], str) or "asset" in content):
+            raise ValueError("Text must be an inline string")
+        with workflow_files.LOCK:
+            selections = self.selections()
+            revision = selections.get(node, {}).get("revision", 0)
             if expected is not None and revision != expected:
                 raise Conflict("Material changed while editing; reload before replacing it")
-            if content.get("asset") and not db.execute("SELECT 1 FROM materials WHERE id=?", (content["asset"],)).fetchone():
-                raise ValueError("Unknown material")
-            db.execute("INSERT OR REPLACE INTO selections VALUES(?,?,?)", (node, revision + 1, json.dumps(content)))
+            if content.get("asset"):
+                self.asset(content["asset"])
+            canvas = workflow_files.load_json(self.root / "canvas.json")
+            canvas["selections"][node] = {**content, "revision": revision + 1}
+            workflow_files.atomic_json(self.root / "canvas.json", canvas)
         return revision + 1
 
     def reserve(self, kind, suffix, prefix):
@@ -129,20 +142,18 @@ class Project:
             db.execute("INSERT INTO runs(id,target,revision,status) VALUES(?,?,?,'prepared')", (run_id, target, revision))
         return run_id
 
-    def finish_run(self, run_id, asset):
-        with self.connect() as db:
+    def finish_run(self, run_id, asset=None, text=None):
+        with workflow_files.LOCK, self.connect() as db:
             db.execute("BEGIN IMMEDIATE")
             run = db.execute("SELECT * FROM runs WHERE id=?", (run_id,)).fetchone()
             if run is None:
                 raise ValueError("Unknown material execution")
             if run["status"] == "success":
                 return bool(run["selected"])
-            row = db.execute("SELECT revision FROM selections WHERE node=?", (run["target"],)).fetchone()
-            revision = row[0] if row else 0
+            revision = self.selections().get(run["target"], {}).get("revision", 0)
             selected = revision == run["revision"]
             if selected:
-                db.execute("INSERT OR REPLACE INTO selections VALUES(?,?,?)",
-                           (run["target"], revision + 1, json.dumps({"asset": asset})))
+                self.select(run["target"], {"text": text} if text is not None else {"asset": asset}, revision)
             db.execute("UPDATE runs SET status='success',asset=?,selected=? WHERE id=?", (asset, int(selected), run_id))
         return selected
 
@@ -152,14 +163,3 @@ class Project:
         if row is None:
             raise ValueError("Unknown execution")
         return dict(row)
-
-    def text(self, text, prefix="text"):
-        asset, path = self.reserve("text", ".txt", prefix)
-        temporary = path.with_suffix(".partial")
-        try:
-            temporary.write_text(text, encoding="utf-8")
-            os.replace(temporary, path)
-        finally:
-            temporary.unlink(missing_ok=True)
-        self.register(asset, "text", {})
-        return asset

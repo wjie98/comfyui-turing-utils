@@ -46,8 +46,30 @@ try {
     app.graph.clear();
     const { addPort, entries, syncPorts } =
       await import("/extensions/comfyui-turing-utils/lib/canvas_ports.js");
-    const { bindMaterials } =
-      await import("/extensions/comfyui-turing-utils/material_workspace.js");
+    const bindMaterials = async () => {
+      const { addPort } =
+        await import("/extensions/comfyui-turing-utils/lib/canvas_ports.js");
+      const input = LiteGraph.createNode("TuringCanvasInputs"),
+        output = LiteGraph.createNode("TuringCanvasOutputs");
+      app.graph.add(input);
+      app.graph.add(output);
+      for (const n of app.graph.nodes.filter((n) =>
+        n.type.startsWith("TuringMaterial"),
+      )) {
+        const p = addPort(input, n.title, "TURING_CANVAS_POSITION", "position");
+        input.connect(
+          p.slot,
+          n,
+          n.inputs.findIndex((i) => i.name === "position"),
+        );
+        const o = addPort(output, n.title, n.outputs[0].type);
+        n.connect(
+          0,
+          output,
+          output.inputs.findIndex((i) => i.name === "port_" + o.slot),
+        );
+      }
+    };
     const source = LiteGraph.createNode("PrimitiveString"),
       stub = LiteGraph.createNode("TuringMaterialText");
     app.graph.add(source);
@@ -57,7 +79,7 @@ try {
       stub,
       stub.inputs.findIndex((i) => i.name === "value"),
     );
-    bindMaterials();
+    await bindMaterials();
     await new Promise(requestAnimationFrame);
     const input = app.graph._nodes.find((n) => n.type === "TuringCanvasInputs");
     const parameter = addPort(input, "可调文字", "STRING");
@@ -131,11 +153,11 @@ try {
     { id: a },
   );
   const first = (await request("project")).selections[a + ":" + pack.stub]
-    .asset;
+    .revision;
   await card.getByRole("button", { name: "执行到这里" }).dispatchEvent("click");
   await poll(
     async () =>
-      (await request("project")).selections[a + ":" + pack.stub]?.asset !==
+      (await request("project")).selections[a + ":" + pack.stub]?.revision !==
       first,
   );
   await card.getByRole("button", { name: "执行到这里" }).waitFor();
@@ -181,7 +203,7 @@ try {
     const stub = Object.values(p.output).find(
       (n) => n.class_type === "TuringMaterialText",
     );
-    if (!stub.inputs.asset)
+    if (stub.inputs.text !== "manual")
       throw Error("Selected material was not restored into editor");
     const endpoint = app.graph.nodes.find(
       (n) => n.type === "TuringCanvasInputs",
@@ -210,8 +232,8 @@ try {
     "hello material",
   );
   assert.equal(
-    project.selections[a + ":" + pack.stub].asset,
-    opened.selections[a + ":" + pack.stub].asset,
+    project.selections[a + ":" + pack.stub].text,
+    opened.selections[a + ":" + pack.stub].text,
   );
   await editor.close();
   if (process.env.MATERIAL_VIDEO_FIXTURE) {
@@ -227,9 +249,36 @@ try {
       app.graph.clear();
       const n = LiteGraph.createNode("TuringMaterialVideo");
       app.graph.add(n);
-      const { bindMaterials } =
-        await import("/extensions/comfyui-turing-utils/material_workspace.js");
-      bindMaterials();
+      const bindMaterials = async () => {
+        const { addPort } =
+          await import("/extensions/comfyui-turing-utils/lib/canvas_ports.js");
+        const input = LiteGraph.createNode("TuringCanvasInputs"),
+          output = LiteGraph.createNode("TuringCanvasOutputs");
+        app.graph.add(input);
+        app.graph.add(output);
+        for (const n of app.graph.nodes.filter((n) =>
+          n.type.startsWith("TuringMaterial"),
+        )) {
+          const p = addPort(
+            input,
+            n.title,
+            "TURING_CANVAS_POSITION",
+            "position",
+          );
+          input.connect(
+            p.slot,
+            n,
+            n.inputs.findIndex((i) => i.name === "position"),
+          );
+          const o = addPort(output, n.title, n.outputs[0].type);
+          n.connect(
+            0,
+            output,
+            output.inputs.findIndex((i) => i.name === "port_" + o.slot),
+          );
+        }
+      };
+      await bindMaterials();
       return await app.graphToPrompt();
     });
     const videoName = "video-" + name;
@@ -320,8 +369,35 @@ try {
     await page.unroute("**/turing/workspace/project");
     const h3 = await native.evaluate(async () => {
       const { app } = await import("/scripts/app.js");
-      const { bindMaterials } =
-        await import("/extensions/comfyui-turing-utils/material_workspace.js");
+      const bindMaterials = async () => {
+        const { addPort } =
+          await import("/extensions/comfyui-turing-utils/lib/canvas_ports.js");
+        const input = LiteGraph.createNode("TuringCanvasInputs"),
+          output = LiteGraph.createNode("TuringCanvasOutputs");
+        app.graph.add(input);
+        app.graph.add(output);
+        for (const n of app.graph.nodes.filter((n) =>
+          n.type.startsWith("TuringMaterial"),
+        )) {
+          const p = addPort(
+            input,
+            n.title,
+            "TURING_CANVAS_POSITION",
+            "position",
+          );
+          input.connect(
+            p.slot,
+            n,
+            n.inputs.findIndex((i) => i.name === "position"),
+          );
+          const o = addPort(output, n.title, n.outputs[0].type);
+          n.connect(
+            0,
+            output,
+            output.inputs.findIndex((i) => i.name === "port_" + o.slot),
+          );
+        }
+      };
       const { entries, syncPorts, addPort } =
         await import("/extensions/comfyui-turing-utils/lib/canvas_ports.js");
       app.graph.clear();
@@ -329,7 +405,7 @@ try {
         b = LiteGraph.createNode("TuringMaterialText");
       app.graph.add(a);
       app.graph.add(b);
-      bindMaterials();
+      await bindMaterials();
       const out = app.graph.nodes.find((n) => n.type === "TuringCanvasOutputs");
       const before = (await app.graphToPrompt()).output[out.id].inputs;
       const old = entries(out);
@@ -366,12 +442,13 @@ try {
       const restored = (await app.graphToPrompt()).output[input.id].inputs;
       if (JSON.stringify(incoming) !== JSON.stringify(restored))
         throw Error("Endpoint reload changed links");
-      await app.loadGraphData(await (await fetch('/turing/workspace/h3-template')).json());
-      bindMaterials();
+      await app.loadGraphData(
+        await (await fetch("/turing/workspace/new-template")).json(),
+      );
       return await app.graphToPrompt();
     });
     await request("template/save", {
-      name: "h3-" + name,
+      name: "basic-" + name,
       workflow: h3.workflow,
       prompt: h3.output,
     });
@@ -390,7 +467,7 @@ try {
       textPersistence: true,
       editorRoundTrip: true,
       videoAndThousandCards: Boolean(process.env.MATERIAL_VIDEO_FIXTURE),
-      h3Template: Boolean(process.env.MATERIAL_VIDEO_FIXTURE),
+      basicTemplate: Boolean(process.env.MATERIAL_VIDEO_FIXTURE),
     }),
   );
 } catch (error) {

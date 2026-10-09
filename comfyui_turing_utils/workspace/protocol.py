@@ -3,7 +3,7 @@
 MATERIAL_TYPES = {
     "text": ("STRING",),
     "image": ("IMAGE",),
-    "video": ("IMAGE", "AUDIO"),
+    "video": ("VIDEO",),
     "audio": ("AUDIO",),
 }
 MATERIALS = {"TuringMaterial" + kind.title(): kind for kind in MATERIAL_TYPES}

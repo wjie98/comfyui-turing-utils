@@ -18,6 +18,7 @@ from .compiler import MATERIALS, compile_segment
 from .nodes import fresh_type
 from .store import Conflict, Project, inside
 from . import workflow_files
+from .templates import material_template
 
 
 def probe(path, kind):
@@ -66,9 +67,9 @@ def install_routes():
     async def page(request):
         return web.FileResponse(ui / "index.html")
 
-    @endpoint("get", "/h3-template")
-    async def h3_template(request):
-        return web.FileResponse(Path(__file__).resolve().parents[2] / "examples" / "h3_material_card.json")
+    @endpoint("get", "/new-template")
+    async def new_template(request):
+        return web.json_response(material_template()[0])
 
     @endpoint("get", "/protocol")
     async def protocol(request):
@@ -89,6 +90,30 @@ def install_routes():
     def library(request):
         return Path(server.user_manager.get_request_user_filepath(request, "canvas_cards", create_dir=False))
 
+    @endpoint("post", "/projects")
+    async def projects(request):
+        data = await request.json()
+        root = Path(folder_paths.get_output_directory()).resolve()
+        relative = data.get("path", "")
+        parent = inside(root, relative) if relative else root
+        def listing():
+            return [{"name":p.name, "path":p.relative_to(root).as_posix(), "project":(p/"canvas.json").is_file()}
+                    for p in sorted(parent.iterdir()) if p.is_dir() and not p.is_symlink() and not p.name.startswith(".")]
+        return web.json_response({"items":await asyncio.to_thread(listing), "path":relative})
+
+    def template_path(request, name):
+        root = library(request)
+        path = inside(root, name)
+        if path.parent != root.resolve() or path.suffix != ".json":
+            raise ValueError("Use a single .json filename for a card template")
+        return path
+
+    @endpoint("post", "/template/open")
+    async def open_template(request):
+        data = await request.json()
+        raw = await asyncio.to_thread(template_path(request, data["name"]).read_bytes)
+        return web.json_response({"workflow":json.loads(raw), "revision":hashlib.sha256(raw).hexdigest()})
+
     @endpoint("post", "/templates")
     async def templates(request):
         root = library(request)
@@ -97,31 +122,54 @@ def install_routes():
     @endpoint("post", "/template/save")
     async def save_template(request):
         data = await request.json()
-        path = inside(library(request), data["name"])
-        if path.parent != library(request).resolve() or path.suffix != ".json":
-            raise ValueError("Use a single .json filename for a card template")
+        path = template_path(request, data["name"])
         def save_file():
             with workflow_files.LOCK:
                 if path.exists():
-                    raise Conflict("Template already exists; save with a new name")
+                    if data.get("revision") != hashlib.sha256(path.read_bytes()).hexdigest():
+                        raise Conflict("Template exists or changed; open it before replacing it")
                 workflow_files.atomic_json(path, workflow_files.pack(data["workflow"], data["prompt"]))
-        await asyncio.to_thread(save_file)
-        return web.json_response({"name":path.name})
+                return hashlib.sha256(path.read_bytes()).hexdigest()
+        revision = await asyncio.to_thread(save_file)
+        return web.json_response({"name":path.name, "revision":revision})
 
     @endpoint("post", "/card/add")
     async def add_card(request):
         data = await request.json()
-        path = inside(library(request), data["name"])
         def add():
             project = Project(data["directory"])
-            workflow=workflow_files.load_json(path)
-            identity=workflow_files.add_instance(project.root, workflow, path.stem)
+            kind = data.get("kind")
+            if kind:
+                if kind not in {"image", "video", "audio", "text"}:
+                    raise ValueError("Unknown material type")
+                source, prompt = material_template((kind,))
+                workflow, title = workflow_files.pack(source, prompt), kind.title()
+            else:
+                path = template_path(request, data["name"])
+                workflow, title = workflow_files.load_json(path), path.stem
             metadata,interface=workflow_files.unpack(workflow)
+            selections = {}
             for stub,node_id in interface["stubs"].items():
                 node=metadata["prompt"][node_id]
                 if node["class_type"] == "TuringMaterialText":
-                    asset=project.text(node["inputs"].get("text", ""),node["inputs"].get("prefix","text"))
-                    project.select(f"{identity}:{stub}",{"asset":asset})
+                    selections[stub] = {"text":node["inputs"].get("text", "")}
+                elif node["inputs"].get("file"):
+                    relative, base = folder_paths.annotated_filepath(node["inputs"]["file"])
+                    base = base or folder_paths.get_input_directory()
+                    if Path(base).resolve() not in {Path(folder_paths.get_input_directory()).resolve(),Path(folder_paths.get_output_directory()).resolve()}:
+                        raise ValueError("Material must belong to this instance's input or output")
+                    source = inside(base, relative)
+                    kind = MATERIALS[node["class_type"]]
+                    info = probe(source,kind)
+                    asset,destination = project.reserve(kind,source.suffix,source.stem)
+                    shutil.copyfile(source,destination)
+                    project.register(asset,kind,info)
+                    selections[stub] = {"asset":asset}
+            identity=workflow_files.add_instance(project.root, workflow, title)
+            for stub,selection in selections.items():
+                project.select(f"{identity}:{stub}",selection)
+            if "x" in data and "y" in data:
+                project.patch(project.document()["revision"], [{"type":"position", "id":identity, "x":data["x"], "y":data["y"]}])
             return identity
         return web.json_response({"id":await asyncio.to_thread(add)})
 
@@ -172,9 +220,8 @@ def install_routes():
         data = await request.json()
         def edit():
             project = Project(data["directory"])
-            asset = project.text(data["text"], data.get("prefix", "text"))
-            revision = project.select(data["node"], {"asset": asset}, data["revision"])
-            return {"asset": asset, "revision": revision}
+            revision = project.select(data["node"], {"text": data["text"]}, data["revision"])
+            return {"text": data["text"], "revision": revision}
         return web.json_response(await asyncio.to_thread(edit))
 
     @endpoint("post", "/compile")
@@ -186,6 +233,12 @@ def install_routes():
             if document["revision"] != data["revision"]:
                 raise Conflict("Workflow changed; reload before running")
             target = data["target"]
+            for node, trim in data.get("trims", {}).items():
+                start, end = float(trim.get("start", 0)), float(trim.get("end", 0))
+                if not math.isfinite(start) or not math.isfinite(end) or start < 0 or end < 0 or (end and end <= start):
+                    raise ValueError("Invalid trim interval")
+                if node in document["selections"]:
+                    document["selections"][node].update(start=start, end=end)
             revision = document["selections"].get(target, {}).get("revision", 0)
             run_id = project.begin_run(target, revision)
             prompt = compile_segment(document["prompt"], target, document["selections"],

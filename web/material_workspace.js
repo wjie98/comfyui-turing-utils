@@ -1,15 +1,9 @@
 import { app } from "../../scripts/app.js";
 import { api } from "../../scripts/api.js";
-import {
-  INPUTS,
-  OUTPUTS,
-  POSITION,
-  addPort,
-  entries,
-  syncPorts,
-} from "./lib/canvas_ports.js";
+import { INPUTS, entries, syncPorts } from "./lib/canvas_ports.js";
 
 let editing = null;
+let templateEditing = null;
 const channel = new BroadcastChannel("turing-material-workspace");
 async function request(path, body) {
   const response = await api.fetchApi(`/turing/workspace/${path}`, {
@@ -35,87 +29,53 @@ function openWorkspace() {
   if (api.user) url.searchParams.set("user", api.user);
   window.open(url, "_blank", "noopener");
 }
-export function bindMaterials(graph = app.graph) {
-  let input = graph._nodes.find((n) => n.type === INPUTS),
-    output = graph._nodes.find((n) => n.type === OUTPUTS);
-  for (const [type, node] of [
-    [INPUTS, input],
-    [OUTPUTS, output],
-  ])
-    if (!node) {
-      const n = LiteGraph.createNode(type);
-      graph.add(n);
-      if (type === INPUTS) input = n;
-      else output = n;
-    }
-  for (const material of graph._nodes.filter((n) =>
-    n.type?.startsWith("TuringMaterial"),
-  )) {
-    const identity = material.widgets.find((w) => w.name === "stub_id");
-    if (identity && !identity.value) identity.value = crypto.randomUUID();
-    const position = material.inputs.findIndex((i) => i.name === "position");
-    if (position < 0) continue;
-    if (!material.inputs[position].link) {
-      const p = addPort(input, material.title, POSITION, "position");
-      input.connect(p.slot, material, position);
-    }
-    const exported = (material.outputs[0].links || []).some(
-      (id) => graph.links[id]?.target_id === output.id,
-    );
-    if (!exported) {
-      const p = addPort(output, material.title, material.outputs[0].type);
-      material.connect(
-        0,
-        output,
-        output.inputs.findIndex((i) => i.name === `port_${p.slot}`),
-      );
-    }
-  }
-  for (const node of graph._nodes) {
-    for (const name of node.properties.materialFields || []) {
-      const widget = node.widgets?.find((w) => w.name === name);
-      const slot = node.inputs?.findIndex((i) => i.name === name);
-      if (!widget || slot < 0 || node.inputs[slot].link != null) continue;
-      const type = node.inputs[slot].type;
-      if (!["STRING", "INT", "FLOAT", "BOOLEAN", "COMBO"].includes(type))
-        continue;
-      const port = addPort(input, `${node.title} · ${name}`, type);
-      const ps = entries(input),
-        entry = ps.find((p) => p.id === port.id);
-      entry.default = widget.value;
-      if (type === "COMBO") {
-        const values = widget.options?.values;
-        entry.options = typeof values === "function" ? values() : values;
-      }
-      syncPorts(input, ps);
-      input.connect(port.slot, node, slot);
-    }
-  }
-  const content = graph._nodes.filter((n) => n !== input && n !== output);
-  const y = content.length ? Math.min(...content.map((n) => n.pos[1])) : 0;
-  input.pos = [
-    content.length ? Math.min(...content.map((n) => n.pos[0])) - 360 : 0,
-    y,
-  ];
-  output.pos = [
-    content.length
-      ? Math.max(...content.map((n) => n.pos[0] + n.size[0])) + 100
-      : 1200,
-    y,
-  ];
-  graph.setDirtyCanvas(true, true);
-}
 async function saveTemplate() {
-  const name = prompt("卡片模板文件名（不覆盖已有文件）", "我的卡片.json");
+  const name = prompt("卡片文件名", templateEditing?.name || "我的卡片.json");
   if (!name) return;
+  const replacing = templateEditing?.name === name;
+  if (replacing && !confirm("更新卡片库中的这张卡片？已有画布实例不受影响。"))
+    return;
   const { workflow, output } = await app.graphToPrompt();
-  await request("template/save", { name, workflow, prompt: output });
+  templateEditing = await request("template/save", {
+    name,
+    workflow,
+    prompt: output,
+    revision: replacing ? templateEditing.revision : undefined,
+  });
   app.extensionManager.toast.add({
     severity: "success",
     summary: "已保存到卡片库",
     detail: name,
     life: 3000,
   });
+}
+async function editTemplate() {
+  const { items } = await request("templates", {});
+  const dialog = document.createElement("dialog");
+  const select = document.createElement("select");
+  select.append(...items.map((name) => new Option(name, name)));
+  const open = document.createElement("button");
+  open.textContent = "打开卡片";
+  open.disabled = !items.length;
+  open.onclick = async () => {
+    if (!confirm("打开卡片会替换当前编辑器内容，请先保存。继续？")) return;
+    try {
+      const data = await request("template/open", { name: select.value });
+      await app.loadGraphData(data.workflow);
+      templateEditing = { name: select.value, revision: data.revision };
+      editing = null;
+      dialog.close();
+    } catch (e) {
+      show(e);
+    }
+  };
+  const close = document.createElement("button");
+  close.textContent = "取消";
+  close.onclick = () => dialog.close();
+  dialog.append(select, open, close);
+  dialog.onclose = () => dialog.remove();
+  document.body.append(dialog);
+  dialog.showModal();
 }
 async function saveInstance() {
   if (!editing) throw Error("请从画布卡片的“编辑工作流”进入");
@@ -143,15 +103,9 @@ app.registerExtension({
       function: openWorkspace,
     },
     {
-      id: "Turing.MaterialWorkspace.Bind",
-      label: "添加端点并绑定素材桩",
-      function: () => {
-        try {
-          bindMaterials();
-        } catch (e) {
-          show(e);
-        }
-      },
+      id: "Turing.MaterialWorkspace.Edit",
+      label: "编辑 Canvas 卡片…",
+      function: () => editTemplate().catch(show),
     },
     {
       id: "Turing.MaterialWorkspace.SaveTemplate",
@@ -164,16 +118,17 @@ app.registerExtension({
       function: () => saveInstance().catch(show),
     },
     {
-      id: "Turing.MaterialWorkspace.H3",
-      label: "打开 H3 卡片模板",
+      id: "Turing.MaterialWorkspace.New",
+      label: "新建 Canvas 卡片",
       function: async () => {
-        if (!confirm("打开 H3 模板会替换当前编辑器内容，请先保存工作流。继续？")) return;
+        if (!confirm("新建卡片会替换当前编辑器内容，请先保存工作流。继续？"))
+          return;
         try {
-          const response = await api.fetchApi("/turing/workspace/h3-template");
-          if (!response.ok) throw Error("无法加载 H3 模板");
+          const response = await api.fetchApi("/turing/workspace/new-template");
+          if (!response.ok) throw Error("无法加载基础卡片");
           await app.loadGraphData(await response.json());
           editing = null;
-          bindMaterials();
+          templateEditing = null;
         } catch (e) {
           show(e);
         }
@@ -185,10 +140,10 @@ app.registerExtension({
       path: ["Turing Utils"],
       commands: [
         "Turing.MaterialWorkspace.Open",
-        "Turing.MaterialWorkspace.Bind",
+        "Turing.MaterialWorkspace.New",
+        "Turing.MaterialWorkspace.Edit",
         "Turing.MaterialWorkspace.SaveTemplate",
         "Turing.MaterialWorkspace.SaveInstance",
-        "Turing.MaterialWorkspace.H3",
       ],
     },
   ],
@@ -220,11 +175,12 @@ app.registerExtension({
             const stub = node.widgets.find((w) => w.name === "stub_id")?.value;
             const selected = data.selections?.[`${id}:${stub}`];
             const values = {
-              directory,
-              asset: selected?.asset || "",
-              start: selected?.start || 0,
-              end: selected?.end || 0,
-              include_audio: selected?.include_audio ?? true,
+              ...(selected && "text" in selected
+                ? { text: selected.text }
+                : {}),
+              ...(selected?.asset
+                ? { file: `${directory}/${selected.asset} [output]` }
+                : {}),
             };
             for (const widget of node.widgets)
               if (widget.name in values) widget.value = values[widget.name];

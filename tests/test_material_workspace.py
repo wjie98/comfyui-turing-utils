@@ -24,6 +24,8 @@ from comfyui_turing_utils.workspace.cache import install_task_cleanup
 from comfyui_turing_utils.workspace.endpoints import CanvasInputs, parse_ports
 from comfyui_turing_utils.workspace.cards import describe, flatten
 from comfyui_turing_utils.workspace import workflow_files
+from comfyui_turing_utils.workspace.templates import material_template
+import torch
 
 
 class AddText:
@@ -46,6 +48,58 @@ class AddTextV3(io.ComfyNode):
 
 
 class WorkspaceTest(unittest.TestCase):
+    def test_starter_and_basic_templates(self):
+        workflow, prompt = material_template()
+        self.assertEqual(len(workflow["nodes"]), 6)
+        self.assertEqual(len(describe(prompt)["stubs"]), 4)
+        for kind in ("text", "video", "audio", "image"):
+            workflow, prompt = material_template((kind,))
+            self.assertEqual(len(describe(prompt)["stubs"]), 1)
+            schema = PUBLIC_NODES["TuringMaterial"+kind.title()].INPUT_TYPES()
+            for removed in ("start", "end", "include_audio", "prefix", "directory", "asset"):
+                self.assertNotIn(removed, schema["required"])
+
+    def test_native_video_components_and_priority(self):
+        images = torch.zeros(3,16,16,3)
+        audio = {"waveform":torch.zeros(1,1,300), "sample_rate":3000}
+        video = PUBLIC_NODES["TuringMaterialVideo"]().read(file="missing.mp4", images=images,
+            fps=29.97, audio=audio, bit_depth=10, color_space="HDR", codec="none")[0]
+        parts = video.get_components()
+        self.assertIs(parts.images, images)
+        self.assertIs(parts.audio, audio)
+        self.assertAlmostEqual(float(parts.frame_rate),29.97)
+        self.assertEqual(video.get_bit_depth(),10)
+        self.assertEqual(video.get_color_space(),"HDR")
+
+    def test_legacy_video_can_be_repaired_and_saved(self):
+        workflow, prompt = material_template(("video",))
+        package = workflow_files.pack(workflow, prompt)
+        identity = workflow_files.add_instance(self.project.root, package, "video")
+        package["extra"][workflow_files.KEY]["version"] = 1
+        old_prompt = package["extra"][workflow_files.KEY]["prompt"]
+        output = next(n for n in old_prompt.values() if n["class_type"] == "TuringCanvasOutputs")
+        ports = json.loads(output["inputs"]["ports"])
+        ports[0]["type"] = "IMAGE"
+        output["inputs"]["ports"] = json.dumps(ports)
+        workflow_files.atomic_json(workflow_files.card_path(self.project.root, identity), package)
+        opened = workflow_files.read_instance(self.project.root, identity)
+        workflow_files.save_instance(self.project.root, identity, workflow, prompt, opened["revision"])
+        repaired = workflow_files.read_instance(self.project.root, identity)["workflow"]
+        self.assertEqual(workflow_files.unpack(repaired)[0]["version"], 2)
+
+    def test_empty_text_and_legacy_text_migration(self):
+        self.project.select("empty", {"text":""})
+        self.assertEqual(self.project.selections()["empty"]["text"], "")
+        legacy = Project("legacy")
+        asset, path = legacy.reserve("text", ".txt", "old")
+        path.write_text("legacy content", encoding="utf-8")
+        legacy.register(asset,"text",{})
+        with legacy.connect() as db:
+            db.execute("INSERT INTO selections VALUES(?,?,?)",("old",2,json.dumps({"asset":asset,"start":1})))
+        self.assertEqual(legacy.selections()["old"],{"text":"legacy content","revision":2})
+        self.assertTrue(path.exists())
+        self.assertEqual(workflow_files.load_json(legacy.root/"canvas.json")["selections"]["old"]["text"],"legacy content")
+
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
@@ -55,8 +109,7 @@ class WorkspaceTest(unittest.TestCase):
         self.mapping = mock.patch.dict(nodes.NODE_CLASS_MAPPINGS, {
             **PUBLIC_NODES, **INTERNAL_NODES, "WorkspaceTest": AddText, "WorkspaceTestV3": AddTextV3})
         self.mapping.start(); self.addCleanup(self.mapping.stop)
-        self.asset = self.project.text("hello")
-        self.project.select("1", {"asset": self.asset})
+        self.project.select("1", {"text": "hello"})
         self.prompt = {
             "0": {"class_type": "WorkspaceTest", "inputs": {"text": "must not run"}},
             "1": {"class_type": "TuringMaterialText", "inputs": {"value": ["0", 0]}},
@@ -76,7 +129,7 @@ class WorkspaceTest(unittest.TestCase):
         self.assertEqual(compiled["3"]["class_type"], "_TuringMaterialWriteText")
 
     def test_feedback_reads_previous_material(self):
-        self.project.select("3", {"asset": self.asset})
+        self.project.select("3", {"text": "hello"})
         self.prompt["2"]["inputs"]["text"] = ["3", 0]
         compiled = self.compile()
         source = compiled["2"]["inputs"]["text"][0]
@@ -93,7 +146,7 @@ class WorkspaceTest(unittest.TestCase):
 
     def test_invalid_trim_preserves_selection(self):
         with self.assertRaises(ValueError):
-            self.project.select("1", {"asset": self.asset, "start": 3, "end": 2})
+            self.project.select("1", {"text": "hello", "start": 3, "end": 2})
         self.assertEqual(self.project.document()["selections"]["1"]["revision"], 1)
 
     def test_real_validation(self):
@@ -133,12 +186,11 @@ class WorkspaceTest(unittest.TestCase):
 
     def test_conflicting_result_stays_in_history(self):
         run = self.project.begin_run("3", 0)
-        self.project.select("3", {"asset": self.asset})
-        generated = self.project.text("generated")
-        self.assertFalse(self.project.finish_run(run, generated))
-        self.assertEqual(self.project.document()["selections"]["3"]["asset"], self.asset)
-        self.assertFalse(self.project.finish_run(run, generated))
-        self.assertEqual(len(self.project.history("text")), 2)
+        self.project.select("3", {"text": "manual"})
+        self.assertFalse(self.project.finish_run(run, text="generated"))
+        self.assertEqual(self.project.document()["selections"]["3"]["text"], "manual")
+        self.assertFalse(self.project.finish_run(run, text="generated"))
+        self.assertEqual(len(self.project.history("text")), 0)
 
     def test_document_compare_and_swap(self):
         self.project.patch(0, [])
@@ -146,7 +198,7 @@ class WorkspaceTest(unittest.TestCase):
             self.project.patch(0, [])
 
     def test_missing_material_and_cycle(self):
-        with self.assertRaisesRegex(ValueError, "no selected"):
+        with self.assertRaisesRegex(ValueError, "no saved"):
             compile_segment(self.prompt, "3", {}, "test", "run", 0, fresh_type)
         self.prompt["2"]["inputs"]["text"] = ["2", 0]
         with self.assertRaisesRegex(ValueError, "cycle"):
@@ -161,7 +213,9 @@ class WorkspaceTest(unittest.TestCase):
         run = self.project.begin_run("3", 0)
         result = INTERNAL_NODES["_TuringMaterialWriteText"]().write("test", "3", run, 0, "prompt", "new")
         self.assertTrue(result["ui"]["material"][0]["selected"])
-        self.assertEqual(self.project.path(result["result"][0]).read_text(), "new")
+        self.assertEqual(result["result"][0], "new")
+        self.assertEqual(self.project.selections()["3"]["text"], "new")
+        self.assertFalse((self.project.root / "materials/text").exists())
 
     def test_real_executor_reuses_model_and_recomputes_processing(self):
         for cache_type in (execution.CacheType.CLASSIC, execution.CacheType.LRU, execution.CacheType.RAM_PRESSURE):
@@ -206,7 +260,8 @@ class WorkspaceTest(unittest.TestCase):
                 self.assertIsNone(executor.caches.objects.get_local("compute"))
                 self.assertIsNotNone(executor.caches.outputs.get_local("load"))
             self.assertEqual(counts, {"load": 1, "compute": 2})
-            self.assertEqual(len(self.project.history("text")), history_before + 2)
+            self.assertEqual(len(self.project.history("text")), history_before)
+            self.assertEqual(self.project.selections()["3"]["text"], "model!")
             if cache_type != execution.CacheType.CLASSIC:
                 self.assertTrue(any(entry.outputs == [["unrelated!"]] for entry in executor.caches.outputs.cache.values()))
             counts["fail"] = True

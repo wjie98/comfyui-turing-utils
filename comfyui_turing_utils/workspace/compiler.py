@@ -49,6 +49,11 @@ def compile_segment(prompt, target, selections, directory, run_id, revision, fre
             return output_key
         if kind and not destination:
             selected = selections.get(key, {})
+            if kind == "text":
+                if "text" not in selected:
+                    raise ValueError(f"Text material {key} has no saved content")
+                compiled[output_key] = {"class_type": "_TuringMaterialReadText", "inputs": {"text": selected["text"], "run_id": run_id}}
+                return output_key
             if not selected.get("asset"):
                 raise ValueError(f"Material {key} has no selected result")
             compiled[output_key] = {"class_type": "_TuringMaterialRead" + kind.title(), "inputs": {
@@ -62,7 +67,9 @@ def compile_segment(prompt, target, selections, directory, run_id, revision, fre
         visiting.add(key)
         inputs = copy.deepcopy(node.get("inputs", {}))
         if destination:
-            inputs = {k: v for k, v in inputs.items() if k in {"value", "audio", "fps"}}
+            if kind == "video" and "images" in inputs:
+                inputs["value"] = inputs.pop("images")
+            inputs = {k: v for k, v in inputs.items() if k in {"value", "audio", "fps", "bit_depth", "color_space", "codec"}}
             if "value" not in inputs or not is_link(inputs["value"]):
                 raise ValueError("This material has no connected computation input")
         for value in inputs.values():

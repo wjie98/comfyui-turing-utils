@@ -115,7 +115,7 @@ button:disabled {
   margin-left: auto;
 }
 .material.text {
-  --kind-color: #d8b85c;
+  --kind-color: #b493df;
 }
 .material.image {
   --kind-color: #77b895;
@@ -124,7 +124,29 @@ button:disabled {
   --kind-color: #739ede;
 }
 .material.audio {
-  --kind-color: #c78bcd;
+  --kind-color: #dfaa68;
+}
+.material {
+  border-left: 4px solid var(--kind-color);
+}
+.material h4 {
+  color: var(--kind-color);
+}
+.picker {
+  width: min(520px, 90vw);
+  border-radius: 10px;
+}
+.picker > input {
+  width: 100%;
+  margin: 10px 0;
+}
+.picker-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-height: 55vh;
+  overflow: auto;
+  margin-top: 12px;
 }
 .preview {
   height: 180px;
