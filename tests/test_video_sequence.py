@@ -24,6 +24,21 @@ from comfyui_turing_utils.nodes import video_sequence as nodes  # noqa: E402
 
 
 class VideoSequenceTest(unittest.TestCase):
+    def test_concat_broadcasts_only_single_mask_and_preserves_per_frame_masks(self):
+        frames = torch.zeros(3, 8, 12, 3)
+        masks = torch.zeros(3, 8, 12)
+        for index in range(3):
+            masks[index, 2:5, 1 + index * 3:3 + index * 3] = 1
+        for mode in ("concat", "replace"):
+            repeated = nodes.VideoContinuationConcat.execute(
+                body_images=frames, body_mask=masks[:1], mode=mode,
+            ).result[1]
+            torch.testing.assert_close(repeated, masks[:1].expand_as(masks))
+            tracked = nodes.VideoContinuationConcat.execute(
+                body_images=frames, body_mask=masks, mode=mode,
+            ).result[1]
+            torch.testing.assert_close(tracked, masks)
+
     def test_schemas_use_stable_ids_and_no_preview_outputs(self):
         expected = {
             nodes.LoadIndexedVideoSegment: "TuringUtilsLoadIndexedVideoSegment",
@@ -74,7 +89,7 @@ class VideoSequenceTest(unittest.TestCase):
         self.assertEqual(noise_inputs["transition_frames"].default, 4)
         self.assertTrue(noise_inputs["images"].optional)
         self.assertNotIn("noise_frames", noise_inputs)
-        self.assertTrue(noise_inputs["end_strength"].advanced)
+        self.assertFalse(noise_inputs["end_strength"].advanced)
         self.assertFalse(noise_inputs["transition_frames"].advanced)
         self.assertEqual(concat_schema.outputs[-1].display_name, "trim_info")
         self.assertEqual(nodes.TrimVideoContinuationPrefix.define_schema().inputs[-1].id, "trim_info")

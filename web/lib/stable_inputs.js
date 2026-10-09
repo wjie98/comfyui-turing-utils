@@ -1,7 +1,12 @@
-// These JSON fields are both editable controls and named connection targets.
-// Use ordinary STRING sockets, not widget-backed sockets: legacy frontend
+// These fields are both editable controls and named connection targets.
+// Use ordinary typed sockets, not widget-backed sockets: legacy frontend
 // conversion hooks otherwise hide the text editor when a link is attached.
 // Keep the editor separately, without recreating sockets or changing indices.
+export const stableRowNames = {
+  TuringUtilsSeCTrackVisualConcept: ["positive_coords", "negative_coords"],
+  TuringUtilsVideoMaskGuidedCrop: ["width", "height", "context_scale", "missing_mode", "smooth_window", "mask_threshold"],
+};
+
 export function stableInputRows(node, names) {
   const originals = new Map();
   for (const widget of node.widgets ?? []) {

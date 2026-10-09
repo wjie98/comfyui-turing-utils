@@ -504,7 +504,7 @@ class MultimodalPromptChat(io.ComfyNode):
             search_aliases=["LLM", "chat", "prompt enhance", "vision", "multimodal"],
             inputs=[
                 io.String.Input("prompt", multiline=True, dynamic_prompts=True, default=""),
-                io.String.Input("system_prompt", multiline=True, dynamic_prompts=True, default=DEFAULT_SYSTEM_PROMPT, advanced=True),
+                io.String.Input("system_prompt", multiline=True, dynamic_prompts=True, default=DEFAULT_SYSTEM_PROMPT),
                 io.String.Input(
                     "base_url",
                     default="https://api.openai.com",

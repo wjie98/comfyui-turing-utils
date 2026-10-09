@@ -460,10 +460,10 @@ class MaskToVisualPrompts(io.ComfyNode):
             inputs=[
                 io.Image.Input("image"),
                 io.Mask.Input("mask"),
-                io.Float.Input("mask_threshold", default=0.5, min=0.001, max=1.0, step=0.01, advanced=True),
-                io.Int.Input("positive_point_count", default=3, min=1, max=32, step=1, advanced=True),
-                io.Int.Input("negative_point_count", default=4, min=0, max=32, step=1, advanced=True),
-                io.Float.Input("bbox_padding", default=0.05, min=0.0, max=1.0, step=0.01, advanced=True, tooltip="Padding on each side as a fraction of the tight mask bounding-box size."),
+                io.Float.Input("mask_threshold", default=0.5, min=0.001, max=1.0, step=0.01),
+                io.Int.Input("positive_point_count", default=3, min=1, max=32, step=1),
+                io.Int.Input("negative_point_count", default=4, min=0, max=32, step=1),
+                io.Float.Input("bbox_padding", default=0.05, min=0.0, max=1.0, step=0.01, tooltip="Padding on each side as a fraction of the tight mask bounding-box size."),
             ],
             outputs=[
                 io.Image.Output("preview"),

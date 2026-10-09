@@ -124,7 +124,6 @@ class BerniniContextWindowsCore:
                         "default": 1,
                         "min": 1,
                         "max": 32,
-                        "advanced": True,
                         "tooltip": "The stride of the context window; only applicable to uniform schedules.",
                     },
                 ),
@@ -132,7 +131,6 @@ class BerniniContextWindowsCore:
                     "BOOLEAN",
                     {
                         "default": False,
-                        "advanced": True,
                         "tooltip": "Whether to close the context window loop; only applicable to looped schedules.",
                     },
                 ),
@@ -147,7 +145,6 @@ class BerniniContextWindowsCore:
                     "BOOLEAN",
                     {
                         "default": True,
-                        "advanced": True,
                         "tooltip": "Whether to apply FreeNoise noise shuffling, improves window blending.",
                     },
                 ),

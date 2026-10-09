@@ -755,7 +755,7 @@ class SaveIndexedVideoSegment(io.ComfyNode):
                 io.Int.Input("segment_index", default=0, min=0, max=999999, step=1),
                 io.Float.Input("frame_rate", default=24.0, min=0.01, max=1000.0, step=0.01),
                 io.Boolean.Input("overwrite", default=False),
-                io.Float.Input("crf", default=19.0, min=0.0, max=51.0, step=1.0, advanced=True),
+                io.Float.Input("crf", default=19.0, min=0.0, max=51.0, step=1.0),
                 io.Audio.Input("audio", optional=True),
             ],
             outputs=[io.String.Output(display_name="filename")],
@@ -835,7 +835,6 @@ class MergeIndexedVideoSegments(io.ComfyNode):
                     min=32,
                     max=512,
                     step=1,
-                    advanced=True,
                 ),
             ],
             outputs=[
@@ -902,7 +901,7 @@ class VideoPrefixContextNoise(io.ComfyNode):
                     max=0xffffffffffffffff,
                     control_after_generate=True,
                 ),
-                io.Float.Input("end_strength", default=0.10, min=0.0, max=1.0, step=0.01, advanced=True),
+                io.Float.Input("end_strength", default=0.10, min=0.0, max=1.0, step=0.01),
                 io.Int.Input(
                     "transition_frames",
                     default=4,
@@ -915,17 +914,16 @@ class VideoPrefixContextNoise(io.ComfyNode):
                     "pattern",
                     options=["poc_chroma_blocks", "gaussian_rgb", "uniform_rgb"],
                     default="poc_chroma_blocks",
-                    advanced=True,
                 ),
                 io.DynamicCombo.Input(
                     "grid_mode",
                     options=[
                         io.DynamicCombo.Option("poc_36x64", []),
                         io.DynamicCombo.Option("block_size", [
-                            io.Int.Input("block_size", default=16, min=1, max=256, step=1, optional=True, advanced=True),
+                            io.Int.Input("block_size", default=16, min=1, max=256, step=1, optional=True),
                         ]),
                     ],
-                    extra_dict={"advanced": True},
+                    extra_dict={"advanced": False},
                 ),
             ],
             outputs=[io.Image.Output(display_name="images")],
@@ -981,10 +979,10 @@ class VideoContinuationConcat(io.ComfyNode):
             ),
             inputs=[
                 io.Image.Input("prefix_images", optional=True),
-                io.Mask.Input("prefix_mask", optional=True, tooltip="Video/image redraw mask for the prefix; this is not an audio mask."),
+                io.Mask.Input("prefix_mask", optional=True, tooltip="Prefix redraw mask, not an audio mask. One mask repeats over every prefix frame; a batch must match prefix_images frame count. This node does not track motion."),
                 io.Audio.Input("prefix_audio", optional=True, tooltip="Optional prefix waveform content. Audio preservation is controlled later by the H3 audio latent noise mask."),
                 io.Image.Input("body_images", optional=True, tooltip="Required generated or source body frames."),
-                io.Mask.Input("body_mask", optional=True, tooltip="Video/image redraw mask for the body; this is not an audio mask."),
+                io.Mask.Input("body_mask", optional=True, tooltip="Body redraw mask, not an audio mask. One mask repeats over every body frame; a batch must match body_images frame count. Use per-frame tracked masks for moving objects."),
                 io.Audio.Input("body_audio", optional=True, tooltip="Optional body waveform content. Leave empty when H3 should generate the body audio."),
                 io.Float.Input("frame_rate", default=24.0, min=0.01, max=1000.0, step=0.01),
                 io.Combo.Input(

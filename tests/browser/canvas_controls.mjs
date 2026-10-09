@@ -34,6 +34,12 @@ try {
     check(sec.getLayoutWidgets().every(w => !w.advanced), 'Classic canvas leaked advanced controls: ' + type);
     sec.showAdvanced = true;
     const layout = sec.getLayoutWidgets();
+    if (type !== "TuringUtilsMultimodalPromptChat") {
+      check((sec.widgets ?? []).every(w => !w.advanced && !w.options?.advanced), 'Unexpected advanced parameter: ' + type);
+      check(JSON.stringify(layout.map(w => w.name)) === JSON.stringify((sec.widgets ?? []).filter(w => sec.isWidgetVisible(w)).map(w => w.name)), 'Ordinary node display reordered: ' + type);
+    } else {
+      check(!sec.widgets.find(w => w.name === 'system_prompt').advanced, 'System prompt incorrectly advanced');
+    }
     let advanced = false;
     for (const w of layout) {
       check(!advanced || !!w.advanced, "SeC advanced controls precede ordinary controls");
@@ -52,6 +58,7 @@ try {
         const firstAdvanced = visible.findIndex(w => w.advanced);
         check(firstAdvanced < 0 || visible.slice(firstAdvanced).every(w => w.advanced), `Dynamic advanced ordering: ${type}/${name}/${option.key}`);
         const names = sec.widgets.map(w => w.name);
+        if (type !== "TuringUtilsMultimodalPromptChat") check(visible.every(w => !w.advanced), 'Dynamic branch unexpectedly advanced: ' + type);
         if (type === "TuringUtilsMultimodalPromptChat" && name === "image_format") {
           const quality = sec.widgets.find(w => w.name === "image_format.jpeg_quality");
           check(option.key === "jpeg" ? quality?.advanced : !quality, "JPEG child visibility/advanced state incorrect");

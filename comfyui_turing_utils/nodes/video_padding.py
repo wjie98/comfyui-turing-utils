@@ -58,7 +58,7 @@ class VideoFramesPadding(io.ComfyNode):
             inputs=[
                 io.Image.Input("image", optional=True),
                 io.Combo.Input("type", options=list(VIDEO_MASK_SPECS), default="minimax"),
-                io.Int.Input("target_frame_count", default=0, min=0, max=16385, advanced=True,
+                io.Int.Input("target_frame_count", default=0, min=0, max=16385,
                              tooltip="0 rounds up. Wan/Hunyuan: 4*n+1; LTX: 8*n+1; Mochi: 6*n+1 (minimum 7); H3: 17*n+5."),
                 io.Mask.Input("mask", optional=True),
             ],

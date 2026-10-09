@@ -52,7 +52,7 @@ class MultimodalPromptChatTest(unittest.TestCase):
         self.assertNotIn("options", inputs)
         self.assertTrue(inputs["disable_thinking"].advanced)
         self.assertTrue(inputs["disable_thinking"].optional)
-        self.assertTrue(inputs["system_prompt"].advanced)
+        self.assertFalse(inputs["system_prompt"].advanced)
         self.assertTrue(all(item.optional for item in schema.inputs[11:]))
 
     def test_inline_encoding_only_exposes_jpeg_quality_for_jpeg(self):

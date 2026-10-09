@@ -29,7 +29,6 @@ class ConvRotDiffusionModelLoader:
                     "BOOLEAN",
                     {
                         "default": False,
-                        "advanced": True,
                         "tooltip": (
                             "False follows each layer's activation format. "
                             "True forces INT8 GEMM activations."
@@ -96,7 +95,6 @@ class ConvRotCLIPLoader:
                     "BOOLEAN",
                     {
                         "default": False,
-                        "advanced": True,
                         "tooltip": (
                             "False follows each layer's activation format. "
                             "True forces INT8 GEMM activations."
@@ -105,7 +103,8 @@ class ConvRotCLIPLoader:
                 ),
             },
             "optional": (
-                {"device": official_optional["device"]}
+                {"device": (official_optional["device"][0],
+                            {**official_optional["device"][1], "advanced": False})}
                 if "device" in official_optional
                 else {}
             ),

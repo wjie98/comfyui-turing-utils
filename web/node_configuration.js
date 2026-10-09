@@ -1,7 +1,7 @@
 import { app } from "../../scripts/app.js";
 import { migrateNoiseGrid } from "./lib/node_migrations.js";
 import { advancedLast, h3SettingsLayout, isInternalNode, hideInternalNode } from "./lib/widget_layout.js";
-import { stableInputRows } from "./lib/stable_inputs.js";
+import { stableInputRows, stableRowNames } from "./lib/stable_inputs.js";
 
 app.registerExtension({
   name: "TuringUtils.NodeConfiguration",
@@ -15,8 +15,7 @@ app.registerExtension({
   },
   nodeCreated(node) {
     if (!node.comfyClass?.startsWith("TuringUtils") && !node.comfyClass?.startsWith("TuringCanvas")) return;
-    const restoreInputs = node.comfyClass === "TuringUtilsSeCTrackVisualConcept"
-      ? stableInputRows(node, ["positive_coords", "negative_coords"]) : () => {};
+    const restoreInputs = stableInputRows(node, stableRowNames[node.comfyClass] ?? []);
     // The legacy canvas reads widget.advanced; Nodes 2.0 reads options.advanced.
     // Bridge the schema flag, keeping the frontend's own toggle and persistence.
     const sync = () => {
@@ -37,7 +36,7 @@ app.registerExtension({
         const visible = globalThis.LiteGraph?.vueNodesMode ? widgets : widgets.filter(w => this.isWidgetVisible(w));
         if (this.comfyClass === "TuringCanvasH3Settings") return h3SettingsLayout(visible);
         // Sort the display only: widgets_values must retain its serialized order.
-        return this.comfyClass?.startsWith("TuringUtils")
+        return this.comfyClass === "TuringUtilsMultimodalPromptChat"
           ? advancedLast(visible)
           : visible;
       };

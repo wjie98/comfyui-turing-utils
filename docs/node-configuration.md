@@ -1,5 +1,29 @@
 # Node configuration and presets
 
+## Current ordinary-node policy (supersedes earlier simplification notes)
+
+Only Multimodal Prompt Chat's former Options fields are advanced. Its
+`system_prompt` is ordinary. All other ordinary public nodes expose their
+parameters directly, including inherited ConvRot CLIP device settings.
+DynamicCombo branches remain mode-dependent, not advanced sections.
+
+The frontend no longer sorts ordinary nodes by advanced status, except Chat.
+Schema input order, persisted widget order, socket IDs, defaults and computation
+are unchanged by this restoration. Fused SeC/upscaler nodes retain their loader
+fields followed by their existing apply inputs; retired entry points are not
+reintroduced. Legacy flat noise-grid migration remains in place.
+
+Canvas is outside this change: its Attention schema explicitly requests the
+previous advanced grouping. SeC/Crop stable connected controls remain a separate
+compatibility concern, not an advanced-parameter feature.
+
+Restoration checklist: simple loaders/VAE/upscaler, media/ROI/mask prompts,
+padding/segment output/prefix noise, SeC, Bernini and ordinary Attention all use
+their existing definition order without advanced filtering. Chat retains its
+ordinary parameter order and appends the former Options in their existing order
+(JPEG quality stays inside the JPEG branch). No positional-value migration is
+needed because definitions were not reordered.
+
 ## Completed follow-up 1–5
 
 1. Real frontend 1.53.6 browser validation covers Sol/SLA switching, prefix

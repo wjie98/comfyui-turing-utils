@@ -22,7 +22,6 @@ class MiniMaxH3VideoVAEDecode:
                     ["sdpa", "sage", "w8a8", "native"],
                     {
                         "default": "w8a8",
-                        "advanced": True,
                         "tooltip": "Decoder attention only. Native preserves the upstream attention forward and backend selection; eligible linear operators still use Turing Utils. On Turing, BF16 SDPA inputs compute in FP16 to avoid the math fallback. W8A8 does not change VAE weight quantization.",
                     },
                 ),

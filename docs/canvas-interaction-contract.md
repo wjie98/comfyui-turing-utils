@@ -105,8 +105,9 @@ applying results. Clearing a material releases its preview source and timeline.
 History lists invalidate on import/generation, not idle polling. Preserve stable
 serialized widget/socket order when changing display order (see `widget_layout.js`).
 
-Ordinary Turing nodes display common controls before advanced controls without
-reordering their serialized widgets. Dynamic children synchronize advanced flags
+Only ordinary Multimodal Prompt Chat folds its former Options fields; other
+ordinary Turing nodes keep definition order and expose all active parameters.
+Canvas retains its separate grouping. Dynamic children synchronize advanced flags
 at layout time, not just node creation. Internal execution nodes remain registered
 for API execution, but `turing.internal` filters the search/library and a permanent
 `skip_list` hides the native context-menu entry even with ComfyUI developer mode
@@ -143,6 +144,11 @@ SeC positive/negative editors are deliberately not widget-backed input sockets:
 legacy widget conversion otherwise hides the editor upon connection. Ordinary
 STRING ports retain their names/indices; the separate editor is disabled while
 linked and re-enabled on disconnect. API links take precedence over local text.
+Video Mask Guided Crop uses the same stable-row helper for all six scalar/combo
+controls, including width/height. These are ordinary visible parameters, not
+advanced settings. Preserve the original INT/FLOAT/COMBO socket type and link
+index; connecting a value must not remove its control or shift adjacent rows.
+`tests/browser/crop_connections.mjs` covers the classic-canvas connection path.
 
 The automated classic-canvas pass is not a claim of compatibility with every
 historical frontend or third-party widget extension. Verify the user's installed

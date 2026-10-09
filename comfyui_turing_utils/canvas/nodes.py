@@ -50,7 +50,7 @@ class CanvasH3Settings(CanvasCard):
                 io.Combo.Input("attention", options=["w8a8", "sage", "sdpa"], advanced=True),
                 io.DynamicCombo.Input("strategy", options=[
                     io.DynamicCombo.Option("disabled", []),
-                    *AttentionStrategy.define_schema().inputs[1].options,
+                    *AttentionStrategy.define_schema(advanced=True).inputs[1].options,
                 ]),
                 io.Combo.Input("sampler_name", options=comfy.samplers.KSampler.SAMPLERS, default="euler"),
                 io.Combo.Input("scheduler", options=comfy.samplers.KSampler.SCHEDULERS, default="simple"),

@@ -787,7 +787,6 @@ class ConvRotCLIPLoaderTest(unittest.TestCase):
                 "BOOLEAN",
                 {
                     "default": False,
-                    "advanced": True,
                     "tooltip": (
                         "False follows each layer's activation format. "
                         "True forces INT8 GEMM activations."
@@ -824,7 +823,9 @@ class ConvRotCLIPLoaderTest(unittest.TestCase):
 
         self.assertIs(inputs["required"]["clip_name"][0], official_names)
         self.assertIs(inputs["required"]["type"][0], official_types)
-        self.assertIs(inputs["optional"]["device"], official_device)
+        self.assertIs(inputs["optional"]["device"][0], official_device[0])
+        self.assertFalse(inputs["optional"]["device"][1]["advanced"])
+        self.assertTrue(official_device[1]["advanced"])
         filter_names.assert_not_called()
 
     def test_node_maps_new_official_clip_type_to_enum(self):

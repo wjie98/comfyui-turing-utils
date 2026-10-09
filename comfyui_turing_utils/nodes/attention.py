@@ -254,14 +254,14 @@ _ATTENTION_STRATEGIES = {
 _COMMON_CONTROLS = {"routing_threshold", "sparsity_ratio", "predictor_name", "keep_ratio"}
 
 
-def _strategy_inputs(schema):
+def _strategy_inputs(schema, *, advanced=False):
     specs = {**schema["required"], **schema.get("optional", {})}
 
     def widget(name):
         kind, *metadata = specs[name]
         options = dict(metadata[0]) if metadata else {}
         options.pop("round", None)
-        options["advanced"] = name not in _COMMON_CONTROLS
+        options["advanced"] = advanced and name not in _COMMON_CONTROLS
         options["optional"] = name in schema.get("optional", {})
         if isinstance(kind, list):
             return io.Combo.Input(name, options=kind, **options)
@@ -281,7 +281,7 @@ def _strategy_inputs(schema):
                     io.DynamicCombo.Option("none", []),
                     io.DynamicCombo.Option("manual", [widget("manual_prefix_tokens")]),
                 ],
-                extra_dict={"advanced": True},
+                extra_dict={"advanced": advanced},
                 tooltip=specs[name][1]["tooltip"],
             ))
         else:
@@ -291,7 +291,7 @@ def _strategy_inputs(schema):
 
 class AttentionStrategy(io.ComfyNode):
     @classmethod
-    def define_schema(cls):
+    def define_schema(cls, *, advanced=False):
         return io.Schema(
             node_id="TuringUtilsAttentionStrategy",
             display_name="Configure Attention Strategy",
@@ -300,12 +300,12 @@ class AttentionStrategy(io.ComfyNode):
                 "Select one attention strategy; these modes replace one another, not stack. "
                 "Dense attention inherits the loader's backend. Sol is model-generic; "
                 "SLA needs compatible trained weights; Veda requires MiniMax H3. "
-                "Veda requires a predictor bundle. Advanced inputs expose scheduling and reference protection."
+                "Veda requires a predictor bundle. Inputs expose scheduling and reference protection."
             ),
             inputs=[
                 io.Model.Input("model"),
                 io.DynamicCombo.Input("strategy", options=[
-                    io.DynamicCombo.Option(name, _strategy_inputs(node()))
+                    io.DynamicCombo.Option(name, _strategy_inputs(node(), advanced=advanced))
                     for name, node in _ATTENTION_INPUTS.items()
                 ]),
             ],

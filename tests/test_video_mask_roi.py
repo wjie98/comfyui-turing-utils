@@ -40,6 +40,7 @@ class VideoMaskRoiTest(unittest.TestCase):
         crop = VideoMaskGuidedCrop.define_schema()
         stitch = VideoMaskGuidedStitch.define_schema()
         self.assertEqual(crop.node_id, "TuringUtilsVideoMaskGuidedCrop")
+        self.assertFalse(any(item.advanced for item in crop.inputs))
         self.assertEqual(stitch.node_id, "TuringUtilsVideoMaskGuidedStitch")
         self.assertEqual([item.id for item in crop.outputs], ["images", "masks", "crop_info"])
         self.assertEqual(crop.outputs[-1].io_type, stitch.inputs[3].io_type)
@@ -49,6 +50,29 @@ class VideoMaskRoiTest(unittest.TestCase):
             "cropped_masks",
             "crop_info",
         ])
+
+    def test_moving_masks_are_cropped_per_frame_and_align_with_images(self):
+        masks = torch.zeros(3, 40, 100)
+        for index, x in enumerate((10, 35, 65)):
+            masks[index, 12:24, x:x + 12] = 1
+        # Change the interior without changing the third frame's bounding box.
+        masks[2, 16:20, 69:73] = 0
+        images = masks.unsqueeze(-1).repeat(1, 1, 1, 3)
+        for smoothing in (1, 5):
+            crops, cropped_masks, info = _crop(
+                images, masks, context_scale=2.0, smooth_window=smoothing,
+            )
+            torch.testing.assert_close(crops[..., 0], cropped_masks)
+            self.assertNotEqual(info["boxes"][0], info["boxes"][2])
+            self.assertFalse(torch.allclose(cropped_masks[0], cropped_masks[2]))
+        # A translating shape becomes stationary in the moving crop, without
+        # duplication: frame-specific shape changes above still survive.
+        _, cropped_masks, _ = _crop(images, masks, context_scale=2.0)
+        torch.testing.assert_close(cropped_masks[0], cropped_masks[1], atol=2e-6, rtol=1e-5)
+
+    def test_single_frame_mask_is_not_broadcast_over_video(self):
+        with self.assertRaisesRegex(ValueError, "same frame count"):
+            _crop(torch.zeros(3, 40, 100, 3), torch.ones(1, 40, 100))
 
     def test_crop_uses_requested_ratio_and_moves_inside_source_frame(self):
         images = torch.ones(1, 40, 80, 3)

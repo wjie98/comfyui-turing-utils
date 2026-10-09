@@ -581,8 +581,8 @@ class VideoMaskGuidedCrop(io.ComfyNode):
                 io.Int.Input("height", default=768, min=1, max=16384, step=8, tooltip="Output crop height and crop-box aspect denominator."),
                 io.Float.Input("context_scale", default=2.5, min=1.0, max=10.0, step=0.05, tooltip="Expand the smallest target-aspect box containing the mask by this factor."),
                 io.Combo.Input("missing_mode", options=["interpolate", "hold"], default="interpolate", tooltip="Interpolate bounded gaps and hold edge gaps, or always hold the last valid crop."),
-                io.Int.Input("smooth_window", default=5, min=1, max=101, step=2, advanced=True, tooltip="Gaussian temporal smoothing window for crop centre and logarithmic size. 1 disables smoothing."),
-                io.Float.Input("mask_threshold", default=0.5, min=0.001, max=1.0, step=0.01, advanced=True, tooltip="Mask values at or above this level define each frame's observed region."),
+                io.Int.Input("smooth_window", default=5, min=1, max=101, step=2, tooltip="Gaussian temporal smoothing window for crop centre and logarithmic size. 1 disables smoothing."),
+                io.Float.Input("mask_threshold", default=0.5, min=0.001, max=1.0, step=0.01, tooltip="Mask values at or above this level define each frame's observed region."),
             ],
             outputs=[
                 io.Image.Output("images"),
@@ -733,7 +733,6 @@ class VideoPadForOutpaint(io.ComfyNode):
                     options=["edge", "neutral_gray", "black"],
                     default="edge",
                     tooltip="Pixels outside the original are edge-extended, neutral gray, or black before repainting.",
-                    advanced=True,
                 ),
             ],
             outputs=[

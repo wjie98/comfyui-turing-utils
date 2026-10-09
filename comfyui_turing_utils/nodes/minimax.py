@@ -135,7 +135,6 @@ class MiniMaxH3LatentUpscale(io.ComfyNode):
         schema.is_dev_only = False
         schema.category = "Turing Utils/MiniMax H3"
         schema.inputs = _H3UpscaleLoader.define_schema().inputs + schema.inputs[1:]
-        next(item for item in schema.inputs if item.id == "precision").advanced = True
         return schema
 
     @classmethod

@@ -115,7 +115,6 @@ class _SeCApply(io.ComfyNode):
                     min=-1,
                     max=1_000_000,
                     step=1,
-                    advanced=True,
                     tooltip="-1 tracks every reachable frame in the selected direction.",
                 ),
                 io.Int.Input(
@@ -124,7 +123,6 @@ class _SeCApply(io.ComfyNode):
                     min=1,
                     max=20,
                     step=1,
-                    advanced=True,
                     tooltip=(
                         "Maximum semantic keyframes retained for scene-change recovery. Larger values "
                         "can improve concept recovery but also increase MLLM activation memory."
@@ -172,7 +170,6 @@ class SeCTrackVisualConcept(io.ComfyNode):
         schema.is_dev_only = False
         schema.category = "Turing Utils/Mask"
         schema.inputs = _SeCLoader.define_schema().inputs + schema.inputs[1:]
-        next(item for item in schema.inputs if item.id == "attention").advanced = True
         return schema
 
     @classmethod

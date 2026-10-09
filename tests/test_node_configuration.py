@@ -21,6 +21,39 @@ def finalized(node, values):
 
 
 class NodeConfigurationTest(unittest.TestCase):
+    def test_only_chat_options_are_advanced_in_public_ordinary_nodes(self):
+        from comfyui_turing_utils.registration import NODE_CLASS_MAPPINGS
+        from comfyui_turing_utils.nodes.multimodal_chat import _chat_option_inputs
+        expected = {item.id for item in _chat_option_inputs()}
+        found = set()
+        def walk(inputs):
+            for group in ("required", "optional"):
+                for key, spec in inputs.get(group, {}).items():
+                    metadata = spec[1] if len(spec) > 1 else {}
+                    yield key, metadata
+                    if spec[0] == "COMFY_DYNAMICCOMBO_V3":
+                        for option in metadata["options"]:
+                            yield from walk(option["inputs"])
+        for name, node in NODE_CLASS_MAPPINGS.items():
+            if not name.startswith("TuringUtils") or name == "TuringUtilsStagePath":
+                continue
+            for key, metadata in walk(node.INPUT_TYPES()):
+                if name == "TuringUtilsMultimodalPromptChat":
+                    self.assertEqual(bool(metadata.get("advanced")), key in expected, key)
+                    if metadata.get("advanced"):
+                        found.add(key)
+                else:
+                    self.assertFalse(metadata.get("advanced"), (name, key))
+        self.assertEqual(found, expected)
+
+    def test_canvas_attention_keeps_its_existing_advanced_controls(self):
+        from comfyui_turing_utils.canvas.nodes import CanvasH3Settings
+        strategy = next(i for i in CanvasH3Settings.define_schema().inputs if i.id == "strategy")
+        for option in strategy.options:
+            for item in option.inputs:
+                if item.id == "dense_prefix_steps":
+                    self.assertTrue(item.advanced)
+
     def test_public_categories_are_flat_and_internal_nodes_hidden(self):
         from comfyui_turing_utils.registration import NODE_CLASS_MAPPINGS
         categories = set()
@@ -51,13 +84,13 @@ class NodeConfigurationTest(unittest.TestCase):
             with self.subTest(strategy=option.key):
                 fields = {item.id: item for item in option.inputs}
                 if "dense_prefix_steps" in fields:
-                    self.assertTrue(fields["dense_prefix_steps"].advanced)
+                    self.assertFalse(fields["dense_prefix_steps"].advanced)
                 if "prefix_policy" in fields:
-                    self.assertTrue(fields["prefix_policy"].as_dict()["advanced"])
+                    self.assertFalse(fields["prefix_policy"].as_dict()["advanced"])
         veda = next(option for option in strategies if option.key == "veda")
         fields = {item.id: item for item in veda.inputs}
         self.assertFalse(fields["keep_ratio"].advanced)
-        self.assertTrue(fields["predictor_precision"].advanced)
+        self.assertFalse(fields["predictor_precision"].advanced)
 
     def test_prefix_parameters_only_exist_in_their_active_mode(self):
         for strategy in ("sol", "sla"):
