@@ -100,7 +100,7 @@ try {
     const values=JSON.stringify(chat.serialize().widgets_values);
     for(const shown of [false,true,false]) {
       chat.showAdvanced=shown;chat.arrange();
-      const visible=chat.getLayoutWidgets().filter(w=>chat.isWidgetVisible(w));
+      const visible=chat.getLayoutWidgets();
       for(const w of chat.widgets) {
         if(w.advanced)check(visible.includes(w)===shown,`Chat advanced visibility: ${w.name}`);
       }

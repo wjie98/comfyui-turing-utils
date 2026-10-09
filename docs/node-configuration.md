@@ -12,11 +12,15 @@ in that order immediately before bounding_box. Use native force_input rather
 than JavaScript widget hiding; their JSON point format is unchanged.
 
 Only Multimodal Prompt Chat's former Options parameters are advanced;
-system_prompt remains ordinary. web/chat_advanced.js only copies the native
-options.advanced flag to widget.advanced because the tested classic frontend
-1.53.6 uses different properties when constructing and displaying widgets.
-It does not sort, hide, resize or disable widgets. Remove this bridge when the
-supported native frontend handles that flag itself.
+system_prompt remains ordinary. web/chat_advanced.js opts Chat into the small
+enableAdvancedLayout helper in web/lib/advanced_layout.js. On classic frontend
+1.53.6, construction sets options.advanced but drawing reads widget.advanced;
+native layout also includes advanced widgets even while drawing omits them.
+The helper synchronizes flags and excludes folded advanced widgets from layout.
+It never mutates widget.hidden, input slots, values, order or node size. The
+native toggle, sizing, serialization and rendering remain in charge. Installation
+is idempotent and per-node, not a global prototype patch. Remove this bridge when
+the supported native frontend handles both flags and folded layout consistently.
 
 There is no old-workflow migration or detached-socket repair layer. Workflows
 saved with previous custom layouts may need affected nodes recreated. Do not
@@ -69,6 +73,11 @@ against native registration of the same schema: order, widget/socket geometry,
 DynamicCombo modes, connections, resizing and serialized reloads. Crop and SeC
 also have dedicated link and disabled-editor tests. Chat checks the native
 advanced toggle. Run these on the classic canvas, not only Nodes 2.0.
+
+tests/browser/chat_advanced_layout.mjs additionally compares actual widget
+positions, allocated heights and free resize space with native hidden-widget
+layout across sizes, native toggles, JPEG/PNG branches and serialized reloads.
+Testing draw visibility alone does not catch invisible widgets reserving space.
 
 Material browser tests cover workflow templates, endpoint edits, nested
 subgraphs, persistence and bounded playback. Tests must check actual links and
