@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import {test} from 'node:test';
-import {advancedLast, h3SettingsLayout, isInternalNode, hideInternalNode} from '../web/lib/widget_layout.js';
+import {advancedLast, isInternalNode, hideInternalNode} from '../web/lib/widget_layout.js';
 
 test('advanced controls move visually without changing saved parameter order', () => {
   const widgets = [{name:'model'}, {name:'attention',advanced:true}, {name:'points'}, {name:'memory',advanced:true}];
@@ -11,15 +11,9 @@ test('advanced controls move visually without changing saved parameter order', (
 });
 
 test('internal nodes remain hidden when developer mode resets palette flags', () => {
-  for (const name of ['_TuringUtilsSeCApply', '_TuringCanvasRead', 'TuringUtilsStagePath']) assert.ok(isInternalNode(name));
+  for (const name of ['_TuringUtilsSeCApply', '_TuringMaterialReadVideo', 'TuringUtilsStagePath']) assert.ok(isInternalNode(name));
   for (const name of ['TuringUtilsMultimodalPromptChat', 'TuringUtilsMiniMaxH3LatentUpscale', 'OtherPluginInternal']) assert.ok(!isInternalNode(name));
   const type = {}; hideInternalNode(type);
   type.skip_list = false;
   assert.equal(type.skip_list, true);
-});
-
-test('H3 shifts follow LoRA rows without changing persisted order', () => {
-  const widgets = [{name:'loras'}, {name:'add',canvasLoraRow:true}, {name:'sampler'}, {name:'shift_video'}, {name:'shift_audio'}];
-  assert.deepEqual(h3SettingsLayout(widgets).map(w=>w.name), ['loras','add','shift_video','shift_audio','sampler']);
-  assert.equal(widgets[2].name, 'sampler');
 });

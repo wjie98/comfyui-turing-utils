@@ -212,11 +212,13 @@ class PackageArchitectureTest(unittest.TestCase):
                 "_TuringUtilsSeCLoader",
                 "TuringUtilsSeCTrackVisualConcept",
                 "_TuringUtilsSeCApply",
-                "TuringCanvasSettings", "TuringCanvasImage", "TuringCanvasVideo",
-                "TuringCanvasAudio", "TuringCanvasH3", "TuringCanvasH3Settings",
-                "_TuringCanvasRead", "_TuringCanvasPrepare", "_TuringCanvasPublish",
-                "_TuringCanvasRunNoise",
-                "_TuringCanvasSigmaRefiner",
+                "TuringMaterialText", "TuringMaterialImage", "TuringMaterialVideo", "TuringMaterialAudio",
+                "TuringCanvasInputs", "TuringCanvasOutputs",
+                "_TuringMaterialReadText", "_TuringMaterialWriteText",
+                "_TuringMaterialReadImage", "_TuringMaterialWriteImage",
+                "_TuringMaterialReadVideo", "_TuringMaterialWriteVideo",
+                "_TuringMaterialReadAudio", "_TuringMaterialWriteAudio",
+                "_TuringMaterialH3Prepare", "_TuringMaterialH3Finish", "_TuringMaterialH3SigmaRefiner",
             ),
         )
 

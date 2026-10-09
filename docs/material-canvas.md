@@ -1,119 +1,87 @@
-# Material Canvas (experimental)
+# Material Workspace
 
-Six cards live under `Turing Utils / Canvas`. Ports carry project-relative material
-filenames, not ordinary IMAGE/AUDIO tensors. Mixed workflows are rejected.
+素材画布是 Turing Utils 菜单打开的独立页面。每张卡片是普通 ComfyUI 工作流的独立副本，
+不是顶层 subgraph，不接管普通编辑器、搜索或全局执行按钮。经典 LiteGraph 可用。
+旧 Canvas 入口已删除；旧素材文件不迁移、不删除。
 
-## Cards
+## 创建与使用
 
-- **Canvas Root**: one per project; work/cache directories, browser upload or
-  server input-directory copy, maximum decoded material megapixels (default 4). The directory
-  picker browses this server instance's output, not the browser computer.
-- **Canvas H3 Settings**: global models, editable LoRA stack, sampler/scheduler/base steps,
-  default-on low-noise Refiner, shifts, attention,
-  and Chat configuration (system prompt, URL, model and API-key environment name).
-  Attention strategy directly reuses Configure Attention Strategy: disabled,
-  Sol, SLA or Veda, with the same dynamic advanced controls and model requirements.
-- **Canvas Image / Video / Audio**: import or drag files into the project; select
-  existing project material by filename without copying again. Video supports
-  a 24 FPS decode timeline, start/end seconds and draggable time-range controls;
-  audio has the same time selection. End 0 means to the end. Image/video MP 0
-  inherits Root. Video include_audio defaults on; switching off suppresses audio.
-- **Canvas H3 Generate**: first/last, dynamic image/video/audio references,
-  optional prefix and target videos. Duration replaces frame count; aspect ratio
-  and megapixels update 32-aligned width/height, and manual dimensions update
-  ratio/MP. MP follows Resolution Selector's 1024² convention.
-  No mask, mode, seed or upscale controls.
-  The button between prompts explicitly generates the model prompt. Generation
-  uses nonblank model prompt, otherwise user prompt. Generate is at the bottom.
-  Each run uses a new internal seed recorded in result metadata.
+1. 在普通工作流添加 Text / Image / Video / Audio Material。计算结果接桩的 value，
+   视频可另接 audio；桩输出连接下游普通节点。
+2. 菜单“添加端点并绑定素材桩”创建 Canvas Inputs / Outputs 并绑定当前层素材桩。
+   也可手工连线：Inputs 的 position 输出接桩的 position；桩的数据输出接 Outputs。
+   每个桩必须同时绑定两端，输出端点只接受桩输出。嵌套桩通过原生子图端口连出。
+3. Inputs 的“编辑端点与排序”可添加普通参数/数据端口。右侧连被控制节点，
+   左侧可接内部测试值；未连接时使用默认值。拖动把手排序，端口身份不变。
+   position 与参数的混合顺序决定卡片内容，Outputs 的顺序单独决定输出顺序。
+4. “保存为 Canvas 卡片”写入卡片库；同名模板不会静默覆盖。
+5. 打开素材画布，选项目目录、模板，点击“添加卡片副本”。
+6. 导入素材、编辑文本或选历史；点击目标桩“执行到这里”只计算上一个已保存桩到此处的片段。
+   跨卡片连接：点来源输出圆点，再点目标“连接输入”；已连接参数置灰。
+7. “编辑工作流”在新标签页打开实例。修改后用“保存回 Canvas 卡片”回写，
+   不影响模板和其他实例。当前素材、裁切范围、参数会回填到编辑器。
 
-## Target, prefix and sampling
+普通队列中端点透传。素材桩 asset 非空时读取文件，不求值 value 分支；清空 asset 后可测试
+计算分支并透传结果。空文本桩使用 text。普通队列测试不自动发布素材；持久化由画布操作完成。
 
-`denoise` uses native BasicScheduler/KSampler semantics, not sigma scaling.
-1 fully redraws; partial denoise takes the tail of a longer schedule; 0 skips
-sampling and DiT/CLIP execution. Target still passes through VAE encoding/decoding,
-so zero is not pixel-lossless file copying. Refiner adds one step by cosine
-redistribution of the existing <=0.7 sigma tail, if such a nonterminal tail exists.
-Base 4/8 steps normally become 5/9; there are no manual sigma presets.
+“添加 H3 卡片工作流”提供普通节点示例：用户提示词 → Chat → 模型提示词，以及 H3 → 视频桩。
+复用加载、Attention、参考条件、采样、视频准备与收尾，默认开启低噪 Refiner，不包含二采。
+模型提示词为空时回退用户提示词。完整模型/LoRA/Chat 配置和参考素材接线仍在内部原生节点上。
 
-Target supplies the encoded body and its selected frame count. Without target,
-the body uses empty latent content and the requested count. Prefix is additional
-protected context, including its soundtrack when present. Existing video padding,
-mask mapping and audio-prefix protection are reused. Results exclude prefix and
-repeated padding frames. Target audio is preserved by default; absent body audio
-is generated.
-
-Video selection preserves the source time axis instead of speeding up audio.
-Pictures are normalized to H3's 24 FPS timeline at decoding. Maximum material pixels are applied
-during reads without changing stored originals. H3 reference encoders may resize
-further. The integrated preview timeline plays only the selected time range.
-Generate also exposes output trim: downstream decoding uses the selected range,
-while the complete generated historical file stays unchanged.
-
-## Files and history
+## 文件归属
 
 ```text
-work/
-  canvas.json
-  parameters.json
-  project.json
-  cache.json
+user/<ComfyUI 用户>/canvas_cards/<模板名>.json
+output/<项目目录>/
+  canvas.json                         # 卡片位置、连接、项目版本
+  cards/<实例 UUID>/workflow.json     # 原生工作流副本
+  workspace.sqlite3                   # 素材索引、选中版本、执行记录
   materials/
-    images/portrait.png
-    images/portrait.png.json
-    videos/source.mp4
-    audio/voice.wav
-  generations/
-    shot_a/shot_a_000001.mp4
-    shot_a/shot_a_000001.mp4.json
+    text/<prefix>_<id>.txt
+    image/<prefix>_<id>.png
+    video/<prefix>_<id>.mp4
+    audio/<prefix>_<id>.wav
 ```
 
-Import preserves filenames; collisions append a number without overwriting.
-filename_prefix chooses the generation folder and basename. History lists only
-completed results with that prefix. Sidecars record inputs, prompts, effective
-seed and model/sampler settings, excluding Chat configuration and secrets.
-References are relative, so the whole project can move within its owning output.
+项目目录相对于本实例 output，不占用普通 workflows 目录。素材不覆盖已有文件。
+原生 workflow 的 extra.turing_card 存版本化端点协议、官方 graphToPrompt 的 API 快照和参数覆盖。
+外部编辑导致源码哈希不匹配时禁止执行；打开卡片并“保存回”即可重建快照。
+坏卡片单独显示错误，不阻塞其他卡片。保存回写检查文件版本，删除已连接端点前须先断开。
+原生编辑器常规“保存”属于 ComfyUI 工作流管理，不等于“保存回 Canvas 卡片”。
 
-Work directories stay under this instance's output, caches under .cache,
-local-copy sources under input. No sharing across instances or automatic cleanup.
-This layout replaces the experimental UUID layout: old files are not deleted or
-silently migrated. Start a new project and explicitly import old results.
+素材身份是实例 UUID + stub_id，不依赖原生节点编号/子图路径。移动和嵌套应保留 stub_id；
+复制后重复 ID 会报错，不能把不同素材当同一个桩。模板中的 API key 建议使用 Chat 已有的
+$ENV_NAME 语义，不保存明文密钥。
 
-## Execution and UI
+## 执行与缓存
 
-Material changes mark downstream results pending. Changing models/prompts/settings
-does not invalidate existing results. Explicit Generate always starts a new run.
-Success selects the new output; failure retains the previous result.
+目标桩反向追溯遇到已保存桩即停止。缺少上游素材时报错，不偷偷运行其他生成卡片。
+持久化边界允许反馈环，纯计算环拒绝。推理使用原生 /prompt、校验、队列和 WebSocket，
+没有第二套推理引擎。模型配置变化不使已保存素材失效。
 
-Global execution is disabled: use each card's Generate button. Restore parameters
-on H3 loads its last successful run; other cards restore the last explicitly saved
-project checkpoint. Neither operation changes links or executes inference.
-Right-corner badges show pending, missing,
-running or failed; ordinary material cards have no badge.
+普通中间节点用独立强制重算适配类；模型加载、LoRA、Attention 链保留正常缓存，
+相同配置可跨卡片复用。SeC/Upscaler 复用已有共享加载机制。任务结束（包括失败）只清理本次
+中间结果和节点对象，不全局 reset、不额外复制权重。正常缓存淘汰、显存卸载、手动释放、
+进程重启仍生效，不承诺永久驻留。选择性清理集中在 workspace/cache.py，是版本敏感的
+执行器适配；官方 CacheProvider 暂无选择性删除本地缓存接口。失败仅记录错误，不全局清理。
 
-Idle fixed polling is removed. Changes debounce state refresh; running tasks
-still check completion. State responses omit historical snapshots. Images use
-cached 512px JPEG thumbnails. Video first loads its thumbnail and fetches the full
-stream only on playback. Full playback still uses source-video bandwidth.
-Uploads stream to disk; proxy limits still apply and uploads are not resumable.
-Failed uploads attempt a server input-directory copy (local_path, or basename),
-checking size. Remote browser files cannot be copied without a server-side source.
+成功自动选新文件，失败保留旧结果；运行期间手工改选时，新结果进历史但不覆盖手工选择。
+文本草稿不依赖 DOM，短延迟或离开输入框时保存；旧响应不能覆盖新版本。
+历史按文件名分页，生成历史按 prefix 筛选。视频 24 FPS、默认上限 4 MP；秒数裁切作用于下游
+读取，不改写原文件。上传失败可指定本实例 input 内路径复制，不能猜测客户端磁盘路径。
 
-Image/video/audio socket colors differ. Display numbering starts at 1 while
-internal zero-based port IDs remain stable. Video-reference connections carry
-pictures only; connect the same video output to an audio input for soundtrack conditioning.
-Prefix/target consume both enabled modalities. Audio-only connections reject
-missing or disabled soundtracks.
+## 性能和验证边界
 
-The work-directory text field remains editable; its adjacent folder button opens
-one reusable asynchronous browser. Empty-directory deletion checks the complete
-tree and refuses files/links; it never deletes material or project metadata.
-Browsing/state refresh no longer creates project directories.
+网格索引只挂载视口附近卡片，缩小后只挂载标题。视频默认最多 512px 封面，点击前无媒体源；
+同页一个播放器，移出视口、切换项目、隐藏页面后释放。HTTP Range 播放，无自动循环。
+元数据仍随项目加载；无限指没有固定画布边界，不代表无限内存或任意规模性能保证。
 
-Named parameter persistence and schema versions are described in
-[the interaction contract](canvas-interaction-contract.md). That document is the
-checklist for future Canvas cards and compatibility changes.
+浏览器回归覆盖经典界面、两层原生子图、重排、实例隔离、局部执行、文本保存及编辑回写，
+以及 H3 示例模板导出、点击前不请求视频、Range 播放和 1000 张卡片的视口挂载数量。
+这些检查不等于真实大项目的帧率或低带宽性能基准。
+frontend 1.53.6 将“已有子图整体再包一层”可触发原生序列化错误；在子图内部建立下一层的路径
+可用。插件不修补核心转换代码，缺少桩连线时拒绝保存。
+第三方动态节点、真实 H3 权重质量、远程低带宽响应仍需单独验证。
+本版无专用 LoRA 面板或拖拽时间轴，使用内部原生节点和秒数裁切，不重复实现。
 
-Model-backed generation still requires manual validation with the intended weights.
-Tests cover storage, compilation, CPU media round trips and mocked VAE boundaries;
-they do not establish generation quality or large-canvas frame-rate guarantees.
+维护约束见[交互契约](canvas-interaction-contract.md)。

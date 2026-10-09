@@ -1,6 +1,6 @@
 # Turing Utils 节点清单
 
-当前开发工作树有 **44 个公开节点、10 个隐藏内部执行节点**（含 Canvas 内部 Sigma Refiner）。
+当前开发工作树有 **44 个公开节点、16 个隐藏内部执行节点**（不含按需注册的素材计算适配类）。
 右键菜单只使用 `Turing Utils/分类` 一层子目录，搜索仍可按节点名定位。
 
 ## 完整公开清单
@@ -15,7 +15,7 @@
 | Bernini | 2 | Bernini Context Windows；Bernini Inpaint Condition |
 | Krea2 | 1 | Krea2 Identity Edit Conditioning |
 | Workflow | 3 | Is Input Present；Lazy If / Else；Stage Barrier |
-| Canvas | 6 | Canvas Root；Canvas H3 Settings；Canvas Image；Canvas Video；Canvas Audio；Canvas H3 Generate |
+| Materials | 6 | Text Material；Image Material；Video Material；Audio Material；Canvas Inputs；Canvas Outputs |
 
 H3 音频保护节点放在 Video，与延续拼接、截断工具相邻。
 Configure Attention Strategy 放在 Models；Sol/SLA/Veda 通过 DynamicCombo 选择，
@@ -44,9 +44,9 @@ Configure Attention Strategy 放在 Models；Sol/SLA/Veda 通过 DynamicCombo �
 SeC 的 positive/negative coords 使用固定可见行：连接后只禁用文本编辑，
 保留插口和布局位置；断开后恢复本地值编辑。输入值仍取自上游连线，
 置灰框里的本地值不是上游运行结果的预览。此规则不重建输入插口。
-画布另外使用五个隐藏执行单元，用于素材读取、H3 准备、发布、强制单次采样和低噪 Sigma Refiner；Attention 直接调用通用 Configure Attention Strategy。
-画布独立标签不与普通节点兼容；详见[画布使用说明](material-canvas.md)。
-它们没有菜单分类，不是建议用户连接的节点；开启开发节点显示后可能可见。
+素材画布另外使用八个读写单元、三个 H3 准备/收尾/Refiner 单元，以及按需计算适配类。
+素材节点使用普通 ComfyUI 类型，带双端点的独立工作流复制为卡片，内部可有子图；详见[画布使用说明](material-canvas.md)。
+内部单元不出现在搜索与菜单中，不是用户入口。
 加载/应用使用新的私有 ID，旧加载入口不再注册。
 
 多个 SeC 或 Upscaler 应用节点若模型加载参数相同，提交时共享同一个加载节点，

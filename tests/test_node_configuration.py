@@ -46,14 +46,6 @@ class NodeConfigurationTest(unittest.TestCase):
                     self.assertFalse(metadata.get("advanced"), (name, key))
         self.assertEqual(found, expected)
 
-    def test_canvas_attention_keeps_its_existing_advanced_controls(self):
-        from comfyui_turing_utils.canvas.nodes import CanvasH3Settings
-        strategy = next(i for i in CanvasH3Settings.define_schema().inputs if i.id == "strategy")
-        for option in strategy.options:
-            for item in option.inputs:
-                if item.id == "dense_prefix_steps":
-                    self.assertTrue(item.advanced)
-
     def test_public_categories_are_flat_and_internal_nodes_hidden(self):
         from comfyui_turing_utils.registration import NODE_CLASS_MAPPINGS
         categories = set()
@@ -69,8 +61,8 @@ class NodeConfigurationTest(unittest.TestCase):
                 self.assertEqual(len(category.split("/")), 2, name)
                 self.assertTrue(category.startswith("Turing Utils/"), name)
                 categories.add(category.split("/")[1])
-        self.assertEqual((public, internal), (44, 10))
-        self.assertEqual(categories, {"Models", "Prompt", "Video", "Mask", "MiniMax H3", "Bernini", "Krea2", "Workflow", "Canvas"})
+        self.assertEqual((public, internal), (44, 16))
+        self.assertEqual(categories, {"Models", "Prompt", "Video", "Mask", "MiniMax H3", "Bernini", "Krea2", "Workflow", "Materials"})
         self.assertEqual(AttentionStrategy.GET_SCHEMA().category, "Turing Utils/Models")
         for name in ("TuringUtilsSeCModelLoader", "TuringUtilsSeCTrackVisualConceptApply",
                      "TuringUtilsMiniMaxH3LatentUpscaleModelLoader", "TuringUtilsMiniMaxH3LatentUpscaleApply"):

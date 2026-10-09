@@ -1,54 +1,44 @@
-"""Hidden execution graph stages. They reuse existing model and VAE contracts."""
+"""H3 preparation used by the editable material-workspace example."""
 
-import json
-from fractions import Fraction
-
-import numpy as np
 import torch
 import torch.nn.functional as F
-from comfy_api.latest import InputImpl, Types
+import comfy.utils
 from comfy_extras.nodes_minimax_h3 import EmptyMiniMaxH3LatentAV
 from comfy_extras.nodes_audio import VAEEncodeAudio
 from comfy_extras.nodes_lt import LTXVConcatAVLatent
-
 from ..nodes.latent import SetVideoLatentNoiseMask
 from ..nodes.minimax_vae import MiniMaxH3VideoVAEEncode
 from ..nodes.video_padding import VideoFramesPadding, padded_frame_count
 from ..nodes.video_sequence import VideoContinuationConcat, H3SetAudioPrefixNoiseMask
-from .media import read_material
-from .store import Project
-
-
-class ReadAsset:
-    CATEGORY = ""
-    FUNCTION = "read"
-    RETURN_TYPES = ("IMAGE", "AUDIO", "MASK")
-    @classmethod
-    def INPUT_TYPES(cls):
-        return {"required": {"directory": ("STRING",), "reference": ("STRING",),
-            "width": ("INT", {"default": 0}), "height": ("INT", {"default": 0})}}
-
-    def read(self, directory, reference, width=0, height=0):
-        return read_material(Project(directory), json.loads(reference), width, height)
 
 
 class PrepareH3:
+    DEV_ONLY = True
     CATEGORY = ""
     FUNCTION = "prepare"
     RETURN_TYPES = ("LATENT", "INT", "INT", "AUDIO")
     @classmethod
     def INPUT_TYPES(cls):
-        return {"required": {"settings": ("STRING",), "vae": ("VAE",), "audio_vae": ("VAE",)},
+        return {"required": {"width": ("INT", {"default":864,"min":32,"step":32}),
+                             "height": ("INT", {"default":480,"min":32,"step":32}),
+                             "duration": ("FLOAT", {"default":5,"min":0.01,"step":0.1}),
+                             "preserve_audio": ("BOOLEAN", {"default":True}),
+                             "vae": ("VAE",), "audio_vae": ("VAE",)},
                 "optional": {"images": ("IMAGE",), "mask": ("MASK",), "audio": ("AUDIO",),
                              "prefix_images": ("IMAGE",), "prefix_audio": ("AUDIO",)}}
 
-    def prepare(self, settings, vae, audio_vae, images=None, mask=None, audio=None, prefix_images=None, prefix_audio=None):
-        cfg = json.loads(settings)
-        width, height, count = cfg["width"], cfg["height"], cfg["frames"]
+    def prepare(self, width, height, duration, preserve_audio, vae, audio_vae, images=None, mask=None, audio=None, prefix_images=None, prefix_audio=None):
+        count = max(1, round(duration * 24))
+        width, height = max(32, round(width / 32) * 32), max(32, round(height / 32) * 32)
+        def resize(value):
+            if value is None or value.shape[1:3] == (height, width):
+                return value
+            return comfy.utils.common_upscale(value.movedim(-1, 1), width, height, "bicubic", "center").movedim(1, -1)
+        images, prefix_images = resize(images), resize(prefix_images)
         mode, prefix = ("edit" if images is not None else "reference"), 0
         empty_body = images is None
         trim_info = None
-        body_audio_present = audio is not None and cfg.get("preserve_audio", True)
+        body_audio_present = audio is not None and preserve_audio
         if prefix_images is not None:
             if images is None:
                 images = prefix_images[-1:].repeat(count, 1, 1, 1)
@@ -81,7 +71,7 @@ class PrepareH3:
         empty_video, empty_audio = empty["samples"].unbind()
         if mode == "reference":
             video = {"samples": empty_video}
-        preserved = audio if cfg.get("preserve_audio", True) or prefix_audio is not None else None
+        preserved = audio if preserve_audio or prefix_audio is not None else None
         if preserved is not None:
             waveform = preserved["waveform"]
             samples = round((5 + 17 * max(0, (length - 5 + 16) // 17)) * preserved["sample_rate"] / 24)
@@ -98,60 +88,21 @@ class PrepareH3:
         return latent, count, prefix, preserved
 
 
-class Publish:
-    CATEGORY = ""
-    FUNCTION = "publish"
-    OUTPUT_NODE = True
-    RETURN_TYPES = ("STRING",)
-    @classmethod
-    def INPUT_TYPES(cls):
-        return {"required": {"directory": ("STRING",), "task": ("STRING",),
-            "signature": ("STRING",), "snapshot": ("STRING",), "run_id": ("STRING",)},
-            "optional": {"images": ("IMAGE",), "audio": ("AUDIO",), "original_audio": ("AUDIO",),
-                         "mask": ("MASK",), "length": ("INT",), "prefix": ("INT",)}}
-
-    def publish(self, directory, task, signature, snapshot, run_id, images=None,
-                audio=None, original_audio=None, mask=None, length=0, prefix=0):
-        project = Project(directory)
-        cfg = json.loads(snapshot)
-        if mask is not None:
-            asset_id, path = project.reserve(".npy")
-            with path.open("wb") as file:
-                np.save(file, mask.detach().cpu().numpy(), allow_pickle=False)
-            kind = "mask"
-        else:
-            images = images[prefix:length or None]
-            audio = original_audio if original_audio is not None else audio
-            if audio is not None:
-                rate = audio["sample_rate"]
-                waveform = audio["waveform"][..., round(prefix * rate / 24):round((prefix + len(images)) * rate / 24)]
-                expected = round(len(images) * rate / 24)
-                waveform = F.pad(waveform, (0, max(0, expected - waveform.shape[-1])))
-                audio = {**audio, "waveform": waveform}
-            asset_id, path = project.reserve(".mp4", prefix=cfg.get("values", {}).get("filename_prefix", "h3"))
-            video = InputImpl.VideoFromComponents(Types.VideoComponents(images=images, audio=audio,
-                frame_rate=Fraction(24)), bit_depth=8, color_space="sRGB")
-            video.save_to(str(path), format=Types.VideoContainer.MP4, codec=Types.VideoCodec.H264, crf=19)
-            kind = "video"
-        metadata = {"inputs": cfg["materials"], "snapshot": cfg, "signature": signature}
-        if kind == "video":
-            metadata.update(duration=len(images) / 24, audio=audio is not None,
-                            width=images.shape[2], height=images.shape[1], fps=24)
-        project.register(asset_id, path, kind, path.name, metadata)
-        project.publish(task, asset_id, signature, cfg)
-        return {"ui": {"canvas_result": [{"task": task, "asset": asset_id}]}, "result": (asset_id,)}
 
 
 class SigmaRefiner:
+    DEV_ONLY = True
     CATEGORY = ""
     FUNCTION = "refine"
     RETURN_TYPES = ("SIGMAS",)
 
     @classmethod
     def INPUT_TYPES(cls):
-        return {"required": {"sigmas": ("SIGMAS",)}}
+        return {"required": {"sigmas": ("SIGMAS",), "enabled": ("BOOLEAN", {"default": True})}}
 
-    def refine(self, sigmas):
+    def refine(self, sigmas, enabled=True):
+        if not enabled:
+            return (sigmas,)
         # H3SigmaRefiner defaults: +1 step, <=0.7 tail, cosine, end at zero.
         values = sigmas.tolist()
         index = next((i for i, value in enumerate(values) if value <= 0.7), len(values))
@@ -164,20 +115,24 @@ class SigmaRefiner:
         return (torch.cat((sigmas[:index], tail)),)
 
 
-class RunNoise:
+class FinishH3:
+    DEV_ONLY = True
     CATEGORY = ""
-    FUNCTION = "run"
-    RETURN_TYPES = ("NOISE",)
+    FUNCTION = "finish"
+    RETURN_TYPES = ("IMAGE", "AUDIO")
+
     @classmethod
     def INPUT_TYPES(cls):
-        return {"required": {"noise": ("NOISE",), "run_id": ("STRING",)}}
+        return {"required": {"images": ("IMAGE",), "length": ("INT",), "prefix": ("INT",)},
+                "optional": {"audio": ("AUDIO",), "original_audio": ("AUDIO",)}}
 
-    def run(self, noise, run_id):
-        return (noise,)
-
-
-INTERNAL_NODES = {"_TuringCanvasRead": ReadAsset, "_TuringCanvasPrepare": PrepareH3,
-                  "_TuringCanvasPublish": Publish, "_TuringCanvasRunNoise": RunNoise,
-                  "_TuringCanvasSigmaRefiner": SigmaRefiner}
-for _node in INTERNAL_NODES.values():
-    _node.DEV_ONLY = True
+    def finish(self, images, length, prefix, audio=None, original_audio=None):
+        images = images[prefix:length or None]
+        audio = original_audio if original_audio is not None else audio
+        if audio is not None:
+            rate = audio["sample_rate"]
+            waveform = audio["waveform"][..., round(prefix * rate / 24):round((prefix + len(images)) * rate / 24)]
+            expected = round(len(images) * rate / 24)
+            waveform = F.pad(waveform, (0, max(0, expected - waveform.shape[-1])))
+            audio = {**audio, "waveform": waveform}
+        return images, audio

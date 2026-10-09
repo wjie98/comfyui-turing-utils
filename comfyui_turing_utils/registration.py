@@ -142,12 +142,17 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "_TuringUtilsSeCApply": "SeC Track Visual Concept (Internal Apply)",
 }
 
-from .canvas.nodes import PUBLIC_NODES as CANVAS_NODES
-from .canvas.execution import INTERNAL_NODES as CANVAS_INTERNAL_NODES
-from .canvas.routes import install_canvas_routes
+from .workspace.nodes import PUBLIC_NODES as MATERIAL_NODES
+from .workspace.nodes import INTERNAL_NODES as MATERIAL_INTERNAL_NODES
+from .workspace.routes import install_routes
+from .workspace.cache import install_task_cleanup
 
-NODE_CLASS_MAPPINGS.update(CANVAS_NODES)
-NODE_CLASS_MAPPINGS.update(CANVAS_INTERNAL_NODES)
-for _name in CANVAS_INTERNAL_NODES:
-    NODE_DISPLAY_NAME_MAPPINGS[_name] = f"Canvas {_name.removeprefix('_TuringCanvas')} (Internal)"
-install_canvas_routes()
+NODE_CLASS_MAPPINGS.update(MATERIAL_NODES)
+NODE_CLASS_MAPPINGS.update(MATERIAL_INTERNAL_NODES)
+for _name in MATERIAL_INTERNAL_NODES:
+    NODE_DISPLAY_NAME_MAPPINGS[_name] = f"Material {_name.removeprefix('_TuringMaterial')} (Internal)"
+for _name in MATERIAL_NODES:
+    NODE_DISPLAY_NAME_MAPPINGS[_name] = f"{_name.removeprefix('TuringMaterial')} Material"
+install_routes()
+install_task_cleanup()
+NODE_DISPLAY_NAME_MAPPINGS.update({"TuringCanvasInputs": "Canvas Inputs", "TuringCanvasOutputs": "Canvas Outputs"})

@@ -1,174 +1,65 @@
-# Canvas interaction contract
+# Canvas card contract
 
-Canvas is a material editor over existing Turing Utils / ComfyUI nodes, not a
-second inference engine. Current schema version is 3.
+## Ownership
 
-## Ownership and controls
+- workspace/endpoints.py and web/lib/canvas_ports.js: dynamic ports, stable IDs and ordering.
+- workspace/cards.py: validate endpoints and substitute inputs; native ComfyUI flattens subgraphs.
+- workspace/workflow_files.py: independent instance files, revisions, namespacing and external connections.
+- workspace/store.py: immutable material files, SQLite selections and runs.
+- workspace/compiler.py: execution cut at saved boundaries; preserve model preparation caching.
+- workspace/cache.py: version-sensitive task-end eviction of owned intermediates only.
+- workspace/nodes.py: material boundaries and private fresh/read/write adapters.
+- workspace/routes.py: storage and preview API, not another executor.
+- workspace/ui: independent virtualized page; no LiteGraph / Nodes 2.0 dependency.
+- web/material_workspace.js: native commands and official graph import/export.
+- web/lib/material_h3_template.js: ordinary editable example, not a model implementation.
 
-| Card | Controls and purpose | Existing implementation to reuse |
-| --- | --- | --- |
-| Root | work/cache location, default 4 MP material limit; save/open project | ComfyUI instance directories and native string editing |
-| H3 Settings | model files, LoRAs, dense backend, optional attention strategy, sampling and Chat configuration | ConvRot DiT/CLIP, Configure Attention Strategy, sigma shift, multimodal Chat |
-| Image | project filename, import, per-material MP limit (0 inherits Root) | immutable original plus bounded decode |
-| Video | project filename, time in/out, MP limit, include audio | 24 FPS timeline with synchronous audio cropping |
-| Audio | project filename, time in/out | same selection timeline as Video |
-| H3 Generate | user/model prompts, aspect/MP/width/height, duration, denoise, output prefix, target-audio preservation | Resolution Selector, frame padding, H3 references, VAE, latent masks, AV concat, scheduler/sampler |
+## Files and stable identities
 
-Global queue never executes Canvas. Generate explicitly queues only the selected
-card. Generation-parameter edits do not change a published output; successful generation
-selects a new file, failure leaves the old result selected. Restore parameters
-never queues work, rewires links, changes project location or switches output.
-H3 restores its last successful generation parameters; settings/material cards
-restore their last explicitly saved project parameters.
+canvas.json format 2 owns card positions and connections. Each instance owns cards/<id>/workflow.json.
+Its extra.turing_card.version = 1 holds a derived API prompt, interface, source hash and input overrides.
+Unknown versions fail explicitly. Library files live in the ComfyUI user's canvas_cards directory.
+Import copies a template; editing an instance cannot edit the template or another instance.
 
-## Material and modality contract
+Exactly one Canvas Inputs and Canvas Outputs must remain after official flattening.
+Ports have id, zero-based slot, name, type, kind (value or position), optional default/options.
+Slots are contiguous. IDs survive reorder; UI order is not identity.
+Inputs marker links bind every material once. Outputs only accepts material outputs, with matching
+type/slot. Every material must be exported. Position markers never become computation data.
+Project material keys are <instance UUID>:<stub_id>, never native execution paths.
+Do not change material type under a stable ID. Disconnect ports before deleting or retyping them.
 
-Image, video and audio have distinct Canvas-only socket types and colors. A video
-file is a container: video references consume pictures only; audio references
-consume soundtrack only. Prefix/target consume both unless include_audio is off.
-Missing/disabled audio is an actionable error on an audio-only connection, not
-invented silence. Prefix remains temporary context and is excluded from output.
-Original files are immutable. Time range and decode limits travel with references.
-Generate has the same output selection as imported video: adjusting its trim range
-changes downstream material signatures without re-running inference or rewriting
-the complete historical file. A single video output connects to video or audio
-inputs via ComfyUI MultiType; it carries both modalities only for prefix/target.
-Display numbering starts at 1; existing zero-based port IDs remain stable.
+## Execution and edits
 
-## Sampling, LoRA and import
+External binding > card override > internal endpoint test input > endpoint default.
+Overrides disconnect internal test inputs when opened in the editor.
+Recipe changes do not invalidate saved materials or auto-run downstream cards.
+A material's connected value is an explicit local action. Upstream saved boundaries become readers.
+Use native queue/validation/execution; no custom action language or second inference engine.
 
-H3 Settings exposes sampler, scheduler, base steps and a default-on Refiner.
-BasicScheduler handles partial denoise before refinement. The refiner redistributes
-the existing tail beginning at the first sigma <=0.7 using cosine interpolation,
-adding one sample point. No nonterminal sigma <=0.7 means no refinement; denoise=0
-skips all sampling. No manual sigma field or presets. This follows the default
-[H3SigmaRefiner algorithm](https://github.com/yichengup/ComfyUI-YCNodes-MiniMax-H3/blob/main/py/h3_sigma_refiner.py),
-not a second pass or upscaler; visual benefit still requires model validation.
+File hashes protect save-back, project revisions protect edits, selection revisions protect manual
+changes from delayed generation. Validate batches before writing. Each file replacement is atomic;
+multi-file power-loss recovery is not transactional. Stale workflows stay openable but cannot run.
 
-LoRA rows have enabled/name/strength/remove controls and retain their order.
-Their JSON is storage-only; disabled and zero-strength rows are omitted from the
-private execution graph. Labels use owner namespaces (ConvRot Loader, Attention
-Strategy, H3 Sigma Shift, Sampling, Prompt Chat) without renaming persisted keys.
+Do not globally clear caches, pin model tensors or retain an extra model cache.
+Preserve normal preparation signatures/offload behavior. Cleanup must not mask execution errors.
+Test Classic, LRU and RAM-pressure modes.
 
-Browser imports try streamed upload first, then server input-directory copy using
-explicit local_path or the browser basename, with a size check. This cannot recover
-a browser computer's path remotely; both failures are reported. Entering an
-explicit local_path and pressing import directly copies that server file.
+## UI rules
 
-## Interaction and performance
+- Classic LiteGraph is required; do not rely only on Nodes 2.0 widgets.
+- Use native commands, graphToPrompt, loadGraphData, queue and media APIs.
+- Snapshot link membership before moving slots; new LiteGraph derives it from current indices.
+- Reuse ordinary model/LoRA/Attention/Chat nodes rather than duplicate global settings.
+- Drafts outlive virtualized DOM; merge asynchronous selections by revision.
+- Bound previews, mount only nearby cards, titles only when zoomed out.
+- No video/audio source before play; one player, no loop, release on unmount/page hide.
+- Filename/prefix history; code cleanup never removes user material files.
 
-Use native widgets and callbacks first, small DOM controls only for media/time
-selection. Never hijack string-field clicks. Directory browsing reuses one dialog
-and lists one level asynchronously. Empty-tree deletion rejects all files,
-symlinks and special entries; use rmdir only, never recursive file deletion.
-No idle polling or full-media downloads for previews. Range controls update local
-state while dragging; commit one refresh on release. Directory/probe work stays
-off the server event loop. Do not add independent model-weight caches.
-The media decoder stays native; a small custom timeline provides in/out handles,
-playhead and selection-only playback. Previews grow with node size; no idle animation
-loop, base64 video or full-media decode is introduced. Original playback still
-costs source bandwidth. H3 and imported assets share this implementation.
+## Verification
 
-Resolution presets use the official 1024²-pixels-per-MP convention and 32-pixel
-alignment. Explicit width/height are canonical; manual edits update ratio and MP.
-Duration is seconds at 24 FPS, with model frame padding internal and trimmed away.
-
-## Evolution
-
-### Reusable frontend controls
-
-`web/canvas/ui.js` owns native choice menus, request lifetime guards and bounded
-preview sizing. Use these helpers for new cards rather than per-node HTML
-selectors or resize-delta accumulation. The preview layout minimum is constant;
-node resize and restored dimensions are clamped, with a maximum preview height
-of 900 pixels and node width of 1600 pixels.
-
-LoRA rows are Canvas widgets beside ordinary controls, not floating DOM overlays.
-The shared `power_lora_widget.js` adapter follows rgthree Power LoRA's native
-row layout and pointer interaction (MIT attribution is shipped beside it).
-Use a left enable toggle, filename picker, right strength arrows/value, and a
-row context menu for removal/reordering. Arrow step is 0.05; direct entry accepts
-any finite float. Hidden JSON storage must have `hidden` set, not merely its
-`type` changed. Draw width, outer widget hit width and per-control hit rectangles
-must agree after every resize; never trust a stale supplied widget width.
-Their picker stays in screen space, independent of graph zoom, and is constrained
-to the viewport. Click strength to enter a finite float (negative and >1 are valid);
-the +/- controls are small increments, not a 0–1 slider. Video/audio sigma shifts
-are ordinary controls directly below the LoRA stack, with display-only ordering.
-Only the JSON storage widget is persisted; visual rows are rebuilt from it.
-Material/history selectors use native combo widgets and project-relative filenames.
-History listing must not create project directories. Selection errors retain the
-previous successful output. Pending selections prevent generation until settled.
-
-Async UI work must validate node identity, project and request revision before
-applying results. Clearing a material releases its preview source and timeline.
-History lists invalidate on import/generation, not idle polling. Preserve stable
-serialized widget/socket order when changing display order (see `widget_layout.js`).
-
-Only ordinary Multimodal Prompt Chat folds its former Options fields; other
-ordinary Turing nodes keep definition order and expose all active parameters.
-Canvas retains its separate grouping. Dynamic children synchronize advanced flags
-at layout time, not just node creation. Internal execution nodes remain registered
-for API execution, but `turing.internal` filters the search/library and a permanent
-`skip_list` hides the native context-menu entry even with ComfyUI developer mode
-enabled. Internal schema titles and display mappings must explicitly say Internal;
-public fused nodes must override any inherited internal title.
-
-`tests/browser/canvas_controls.mjs` checks native control contracts, LoRA persistence,
-layout and repeated preview resize against a running development server. It requires
-external Playwright/Chromium (PLAYWRIGHT_MODULE and CHROMIUM_PATH); do not install
-browser dependencies into production. Widget-handler tests are not a replacement
-for manual dragging/clicking in an active ComfyUI workflow tab.
-
-### Frontend compatibility gate
-
-Classic LiteGraph canvas is a required path for **all** public nodes, not only
-Canvas cards. Never require users to enable Nodes 2.0. New controls must work
-with the classic widget, socket, serialization and DOM-widget lifecycle; Nodes
-2.0 is an additional compatibility path, not a substitute for these tests.
-Keep `widget.advanced` and `widget.options.advanced` synchronized. Sort display
-layout only, never serialized widget values or connection indices. Do not depend
-on Vue-only node components to expose an essential control.
-
-Current audit entry points:
-
-| Extension | Classic-canvas responsibility | Regression |
-| --- | --- | --- |
-| `node_configuration.js` / `lib/widget_layout.js` | advanced flags, dynamic parameter order, hidden internal entries | all public ordinary types and DynamicCombo branches in `canvas_controls.mjs` |
-| `lib/stable_inputs.js` | SeC coordinate editors remain separate from named STRING sockets | `sec_connections.mjs`: both links, API serialization, legacy conversion, reload/reconnect |
-| `keyframe_outputs.js`, `stage_barrier_outputs.js` | dynamic outputs use shared LiteGraph APIs, not Vue rendering | source audit and node/schema tests; target-version manual link/resize check remains required |
-| `canvas/canvas.js`, `controls.js`, `ui.js` | native selectors/buttons, material ports, bounded DOM previews | Canvas card creation, history selectors, resize/reload and idle request checks |
-| `canvas/settings.js`, `power_lora_widget.js` | native LoRA row drawing and hit testing | `power_lora_interaction.mjs`: DOM pointer events through canvas listener after repeated resize/redraw with stale width |
-
-SeC positive/negative editors are deliberately not widget-backed input sockets:
-legacy widget conversion otherwise hides the editor upon connection. Ordinary
-STRING ports retain their names/indices; the separate editor is disabled while
-linked and re-enabled on disconnect. API links take precedence over local text.
-Video Mask Guided Crop uses the same stable-row helper for all six scalar/combo
-controls, including width/height. These are ordinary visible parameters, not
-advanced settings. Preserve the original INT/FLOAT/COMBO socket type and link
-index; connecting a value must not remove its control or shift adjacent rows.
-`tests/browser/crop_connections.mjs` covers the classic-canvas connection path.
-
-The automated classic-canvas pass is not a claim of compatibility with every
-historical frontend or third-party widget extension. Verify the user's installed
-frontend when reproducing a remaining issue. Subgraph embedding and Nodes 2.0
-require their own interaction checks; node-level serialization alone does not
-prove either rendering path. Keep these limits explicit in release handoffs.
-
-Persist schema version and named widget values, never rely on positional widget
-arrays for new saves. Maintain explicit migration for supported older schemas;
-Version 3 removes import_mode/manual sigmas and folds old audio-output links into
-video output 0, preserving destination modality. Removed sigma values are not used.
-reject future versions instead of silently reinterpreting data. Legacy frames,
-Sol and time-selection values are normalized at the Canvas boundary. Existing
-v1 video sampling/resize options are carried in hidden compatibility metadata;
-editing a time range replaces its old frame-sampling options, editing the MP
-limit replaces old custom dimensions. No new controls expose those old options.
-Do not
-rename persisted socket IDs just to change labels. New cards must document their
-material types, modality selection, parameter ownership, restore checkpoint,
-existing-node reuse, and version migration, with contract and UI tests.
-
-Do not delete or silently rewrite old material files. UUID-era projects preceding
-the filename layout still require explicit import, as documented previously.
+Use ops/test-dev.sh, node-layout JS tests and tests/browser/material_workspace.mjs in development.
+The browser harness uses Playwright/Chromium. MATERIAL_VIDEO_FIXTURE enables cold/play/Range and
+1000-card virtualization checks. Keep synthetic artifacts inside the development instance.
+Event dispatch tests handlers, not physical pointer accuracy on every client.
+Real-model quality, target GPUs and remote low-bandwidth responsiveness require separate measurements.
