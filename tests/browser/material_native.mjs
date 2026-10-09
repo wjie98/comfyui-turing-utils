@@ -244,6 +244,20 @@ try {
       await fetch("/turing/workspace/new-template")
     ).json();
     await m.openTab(starter, `port-test-${Date.now()}.json`);
+    const checkLabels = (node) => {
+      for (const port of entries(node)) {
+        const output = node.outputs[port.slot];
+        if (output.renderingLabel !== port.name)
+          throw Error(`${node.type} output label differs from ${port.name}`);
+        const input = node.inputs.find((s) => s._portId === port.id);
+        if (input && input.renderingLabel !== port.name)
+          throw Error(`${node.type} input label differs from ${port.name}`);
+      }
+    };
+    const endpoints = app.graph._nodes.filter((n) =>
+      ["TuringCanvasInputs", "TuringCanvasOutputs"].includes(n.type),
+    );
+    endpoints.forEach(checkLabels);
     const endpoint = app.graph._nodes.find(
       (n) => n.type === "TuringCanvasInputs",
     );
@@ -342,12 +356,39 @@ try {
       entries(endpoint).find((p) => p.id === a.id).name !== "Renamed"
     )
       throw Error("Native double-click did not rename the port");
+    endpoints.forEach(checkLabels);
+    const saved = app.graph.serialize();
+    for (const node of saved.nodes.filter((n) =>
+      ["TuringCanvasInputs", "TuringCanvasOutputs"].includes(n.type),
+    )) {
+      // Serialized slots can retain translated names from the old schema.
+      for (const slot of [...node.inputs, ...node.outputs]) {
+        slot.localized_name = "*";
+        slot.label = "stale label";
+      }
+    }
+    await app.loadGraphData(saved);
+    const restored = app.graph._nodes.filter((n) =>
+      ["TuringCanvasInputs", "TuringCanvasOutputs"].includes(n.type),
+    );
+    restored.forEach(checkLabels);
+    const linked = await app.graphToPrompt();
+    if (
+      linked.output[String(endpoint.id)].inputs[
+        `port_${ordered.find((p) => p.id === a.id).slot}`
+      ][0] !== String(first.id) ||
+      linked.output[String(text.id)].inputs.text[1] !==
+        ordered.find((p) => p.id === a.id).slot
+    )
+      throw Error("Label synchronization changed links on reload");
     return {
       dragReorder: true,
       pairedPorts: true,
       materialTypeGuard: true,
       cancelDrag: true,
       doubleClickRename: true,
+      endpointLabels: true,
+      restoredLabels: true,
     };
   });
   console.log(JSON.stringify(interactions));

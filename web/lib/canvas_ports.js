@@ -75,6 +75,7 @@ export function syncPorts(node, ports) {
     const s = node.outputs[i],
       p = ports[i];
     s.name = p.name;
+    s.label = p.name;
     s.type = p.kind === "position" ? POSITION : p.type;
     for (const link of outputLinks.get(s._portId) || []) link.origin_slot = i;
   }
