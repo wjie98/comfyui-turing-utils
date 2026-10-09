@@ -7,6 +7,10 @@ serialization, search and menus. Backend schemas are the single source of
 parameter definitions. Do not patch these to implement our own visual conventions.
 DynamicCombo remains appropriate for genuinely mode-dependent input branches.
 
+SeC positive_coords and negative_coords are optional socket-only STRING inputs,
+in that order immediately before bounding_box. Use native force_input rather
+than JavaScript widget hiding; their JSON point format is unchanged.
+
 Only Multimodal Prompt Chat's former Options parameters are advanced;
 system_prompt remains ordinary. web/chat_advanced.js only copies the native
 options.advanced flag to widget.advanced because the tested classic frontend

@@ -69,12 +69,14 @@ class _SeCApply(io.ComfyNode):
                     "positive_coords",
                     default="",
                     optional=True,
+                    force_input=True,
                     tooltip='JSON point list such as [{"x": 120, "y": 240}].',
                 ),
                 io.String.Input(
                     "negative_coords",
                     default="",
                     optional=True,
+                    force_input=True,
                     tooltip='JSON exclusion-point list such as [{"x": 80, "y": 200}].',
                 ),
                 io.BoundingBox.Input(
