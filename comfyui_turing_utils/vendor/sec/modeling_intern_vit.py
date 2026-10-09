@@ -29,7 +29,9 @@ try:
 except (ImportError, OSError):
     has_flash_attn = False
 
-logger = logging.get_logger(__name__)
+from ...log import get_logger
+
+logger = get_logger("sec.backend")
 
 
 class InternRMSNorm(nn.Module):
@@ -51,12 +53,12 @@ try:
 
     InternRMSNorm = FusedRMSNorm  # noqa
 
-    logger.info('Discovered apex.normalization.FusedRMSNorm - will use it instead of InternRMSNorm')
+    logger.debug('Discovered apex.normalization.FusedRMSNorm - will use it instead of InternRMSNorm')
 except ImportError:
     # using the normal InternRMSNorm
     pass
 except Exception:
-    logger.warning('discovered apex but it failed to load, falling back to InternRMSNorm')
+    logger.warning_once('discovered apex but it failed to load, falling back to InternRMSNorm')
     pass
 
 
@@ -126,7 +128,7 @@ class InternAttention(nn.Module):
         self.attention_backend = requested_backend
         self.use_flash_attn = requested_backend.startswith('flash_attention') and has_flash_attn
         if requested_backend.startswith('flash_attention') and not has_flash_attn:
-            logger.warning('Flash Attention is unavailable; InternViT is using SDPA.')
+            logger.warning_once('Flash Attention is unavailable; InternViT is using SDPA.')
             self.attention_backend = 'sdpa'
         self.head_dim = self.embed_dim // self.num_heads
         if self.head_dim * self.num_heads != self.embed_dim:

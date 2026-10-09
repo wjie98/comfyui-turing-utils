@@ -1292,7 +1292,7 @@ def register_backend() -> bool:
     if not operations:
         return False
     registry.register(BACKEND_NAME, SimpleNamespace(**implementations), operations)
-    LOG.info(
+    LOG.debug(
         "Registered scoped sm75+ operator backend: name=%s operators=%s global_priority=unchanged",
         BACKEND_NAME,
         ",".join(sorted(operations)),

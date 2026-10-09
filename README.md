@@ -563,17 +563,15 @@ that must leave 4 GiB to Windows and the compositor, launch ComfyUI with
 `--reserve-vram 4`. The default `auto` mode then treats 12 GiB as a hard
 inference ceiling even while the desktop is temporarily idle.
 
-The policy can be diagnosed or overridden with these environment variables:
+The runtime exposes one activation policy setting:
 
 ```text
 COMFYUI_TURING_UTILS_H3_ACTIVATION_MODE=auto|throughput|balanced
-COMFYUI_TURING_UTILS_H3_QKV_CHUNK_ROWS=16384
-COMFYUI_TURING_UTILS_H3_MLP_CHUNK_ROWS=16384
-COMFYUI_TURING_UTILS_H3_HEAD_GROUP=14
-COMFYUI_TURING_UTILS_H3_FFN_CHUNK_CHANNELS=2048
 ```
 
-Overrides are diagnostic controls; `auto` is the production default. QKV
+`auto` is the default. Row/head/channel limits are selected automatically;
+explicit overrides exist only as internal policy-function arguments for tests
+and benchmarks, not environment variables. QKV
 streaming is available through bundled W8A8, Sol-W8A8, and SLA-W8A8 prepared
 attention. Kernel 0.32 precomputes the adaptive K anchor from the same nine
 global sequence locations and reuses it while writing every row tile directly
@@ -690,14 +688,14 @@ fused preprocessing launch, and W8A8 releases raw V after V quantization. The
 D128 preprocessing CTA uses at most about 21.1 KiB static shared memory; D64
 uses about 10.6 KiB.
 
-Internal CUDA phase timing is disabled by default and allocates no events. For
-a bounded diagnostic run, set `COMFYUI_TURING_UTILS_PROFILE_CALLS` to the
-number of calls per operation/shape bucket to collect. Kernel 0.32 records up
-to four attention/MLP buckets by default, including weight-wait phases and
-deferred sparse-route counters; change the bound with
-`COMFYUI_TURING_UTILS_PROFILE_BUCKETS`. Kernel 0.31
+Diagnostics use `COMFYUI_TURING_UTILS_PROFILE=0/1/2`: off (default),
+one-line span summaries, or detailed profiling. Restart after changing it.
+Level 0 creates no diagnostic CUDA events or synchronization. Level 2 samples
+two calls in each of at most four attention/MLP buckets, including weight-wait
+phases and deferred sparse-route counters. See [diagnostics](docs/diagnostics.md)
+for the complete environment-variable and logging contract. Kernel 0.31
 also embeds the wheel's exact CUDA architecture set and, while this profiler is
-enabled, reports the specialization CUDA selected for dense/Sol attention.
+enabled at level 2, reports the specialization CUDA selected for dense/Sol attention.
 With DynamicVRAM, the report reuses the existing outer sampler fence instead
 of synchronizing after an inner attention call, so profiling does not break
 the asynchronous weight-prefetch pipeline.

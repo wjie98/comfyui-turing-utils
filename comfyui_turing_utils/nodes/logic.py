@@ -186,7 +186,7 @@ class StageBarrier(io.ComfyNode):
             raise ValueError("Stage Barrier stage must be greater than or equal to zero")
 
         outputs = [values.get(f"value_{index}") for index in range(_STAGE_BARRIER_VALUES)]
-        LOG.info("Stage Barrier reached: stage=%d values=%d", stage, len(values))
+        LOG.debug("Stage Barrier reached: stage=%d values=%d", stage, len(values))
         return io.NodeOutput(*outputs)
 
 
@@ -223,5 +223,5 @@ class StagePath(io.ComfyNode):
         stage = int(stage)
         if stage < 0:
             raise ValueError("Stage Path stage must be greater than or equal to zero")
-        LOG.info("Stage Barrier path reached: stage=%d", stage)
+        LOG.debug("Stage Barrier path reached: stage=%d", stage)
         return io.NodeOutput(value)

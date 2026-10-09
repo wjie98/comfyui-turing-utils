@@ -210,7 +210,7 @@ def compile_stage_barriers_on_prompt(json_data: Any) -> Any:
 
     result = dict(json_data)
     result["prompt"] = compiled
-    LOG.info(
+    LOG.debug(
         "Compiled Stage Barrier hubs into %d independent lazy-compatible paths",
         route_count,
     )
@@ -241,7 +241,7 @@ def install_stage_barrier_prompt_compiler() -> bool:
 
     prompt_server.add_on_prompt_handler(compile_stage_barriers_on_prompt)
     setattr(prompt_server, _PROMPT_HANDLER_MARKER, True)
-    LOG.info("Enabled lazy-compatible Stage Barrier route compilation")
+    LOG.debug("Enabled lazy-compatible Stage Barrier route compilation")
     return True
 
 

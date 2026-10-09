@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import os
 import time
 from collections import Counter
 from collections.abc import Callable
@@ -15,35 +14,10 @@ from .kernel_api import (
     attention_runtime_profile_schema,
     kernel_version,
 )
-from .log import get_logger
+from .log import get_logger, profile_level
 
 
 LOG = get_logger("profile")
-
-
-def _profile_call_limit() -> int:
-    value = os.environ.get("COMFYUI_TURING_UTILS_PROFILE_CALLS", "0").strip()
-    try:
-        return max(int(value), 0)
-    except ValueError:
-        LOG.warning(
-            "Ignoring invalid COMFYUI_TURING_UTILS_PROFILE_CALLS=%r; expected a non-negative integer",
-            value,
-        )
-        return 0
-
-
-def _profile_bucket_limit() -> int:
-    value = os.environ.get("COMFYUI_TURING_UTILS_PROFILE_BUCKETS", "4").strip()
-    try:
-        return max(int(value), 1)
-    except ValueError:
-        LOG.warning(
-            "Ignoring invalid COMFYUI_TURING_UTILS_PROFILE_BUCKETS=%r; "
-            "expected a positive integer",
-            value,
-        )
-        return 4
 
 
 def _runtime_profile_metadata() -> dict[str, str | int | bool]:
@@ -292,7 +266,7 @@ class CudaPhaseProfiler:
                 totals[phase] += start.elapsed_time(end)
                 counts[phase] += 1
             total = sum(totals.values())
-            LOG.warning(
+            LOG.info(
                 "cuda_phases bucket=%s calls=%d recorded_cuda=%.3f ms "
                 "device=%s device_sm=%s kernel=%s compiled_attention=[%s] "
                 "native_arch=%s profile_schema=%s",
@@ -307,7 +281,7 @@ class CudaPhaseProfiler:
                 runtime["profile_schema"],
             )
             for phase, elapsed in totals.most_common():
-                LOG.warning(
+                LOG.info(
                     "  %-32s calls=%4d total=%10.3f ms avg=%8.3f ms %6.2f%%",
                     phase,
                     counts[phase],
@@ -316,7 +290,7 @@ class CudaPhaseProfiler:
                     elapsed * 100.0 / total if total else 0.0,
                 )
             if bucket.samples:
-                LOG.warning(
+                LOG.info(
                     "  counters: %s",
                     " ".join(
                         f"{name}={value}" for name, value in sorted(bucket.samples.items())
@@ -326,7 +300,7 @@ class CudaPhaseProfiler:
                 tensor_totals = Counter()
                 for name, value, scale in bucket.tensor_samples:
                     tensor_totals[name] += float(value.item()) * scale
-                LOG.warning(
+                LOG.info(
                     "  deferred_counters: %s",
                     " ".join(
                         f"{name}={value:.6g}"
@@ -348,11 +322,6 @@ class CudaPhaseProfiler:
         self.pending_report = any(bucket.pending for bucket in self._buckets.values())
         self.reported = True
         return True
-
-
-def _timeline_enabled() -> bool:
-    value = os.environ.get("COMFYUI_TURING_UTILS_TIMELINE", "0").strip().lower()
-    return value not in ("", "0", "false", "off", "no")
 
 
 @dataclass(slots=True)
@@ -420,7 +389,18 @@ class WorkflowTimeline:
         counters = " ".join(
             f"{name}={value}" for name, value in sorted(window.counters.items())
         )
-        LOG.warning(
+        if profile_level() < 2:
+            LOG.info("%s: wall=%.2fs CUDA=%.2fs peak=%.2f GiB",
+                     window.label, wall_ms / 1000, cuda_ms / 1000, peak_allocated / 1024**3)
+        else:
+            self._report_detail(window, wall_ms, cuda_ms, residual_ms, allocated_end, reserved_end, peak_allocated, counters)
+        if self._active is window:
+            self._active = None
+        return True
+
+    @staticmethod
+    def _report_detail(window, wall_ms, cuda_ms, residual_ms, allocated_end, reserved_end, peak_allocated, counters):
+        LOG.info(
             "timeline span=%d label=%s wall=%.3f ms cuda=%.3f ms "
             "host_or_transfer=%.3f ms allocated=%.1f->%.1f MiB "
             "peak=%.1f MiB reserved=%.1f->%.1f MiB%s",
@@ -436,9 +416,6 @@ class WorkflowTimeline:
             reserved_end / (1024.0 * 1024.0),
             f" counters=[{counters}]" if counters else "",
         )
-        if self._active is window:
-            self._active = None
-        return True
 
     def call(
         self,
@@ -463,8 +440,8 @@ class WorkflowTimeline:
 
 
 CUDA_PHASE_PROFILER = CudaPhaseProfiler(
-    _profile_call_limit(),
-    _profile_bucket_limit(),
+    2 if profile_level() == 2 else 0,
+    4,
 )
-WORKFLOW_TIMELINE = WorkflowTimeline(_timeline_enabled())
+WORKFLOW_TIMELINE = WorkflowTimeline(profile_level() > 0)
 __all__ = ["CUDA_PHASE_PROFILER", "WORKFLOW_TIMELINE"]

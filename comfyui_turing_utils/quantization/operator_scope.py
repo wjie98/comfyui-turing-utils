@@ -49,7 +49,7 @@ def install_model_operator_scope(model) -> bool:
         MODEL_WRAPPER_KEY,
         make_model_operator_wrapper(),
     )
-    LOG.info(
+    LOG.debug(
         "Installed operator policy: target=diffusion priority=turing_utils,kitchen"
     )
     return True
@@ -82,7 +82,7 @@ def install_clip_operator_scope(clip) -> bool:
 
     patcher.add_object_patch("encode_token_weights", encode_token_weights)
     patcher.set_attachments(CLIP_ATTACHMENT_KEY, True)
-    LOG.info("Installed operator policy: target=clip priority=turing_utils,kitchen")
+    LOG.debug("Installed operator policy: target=clip priority=turing_utils,kitchen")
     return True
 
 

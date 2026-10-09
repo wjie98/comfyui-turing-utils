@@ -302,7 +302,7 @@ def ensure_dynamic_vram_headroom(
     if freed > 0:
         WORKFLOW_TIMELINE.sample("dynamic_vram_reclaims")
         WORKFLOW_TIMELINE.sample("dynamic_vram_released_mib", freed / MIB)
-        LOG.info(
+        LOG.debug(
             "MiniMax H3 DynamicVRAM headroom: op=%s rows=%d requested=%.1f MiB "
             "released=%.1f MiB %s",
             operation,

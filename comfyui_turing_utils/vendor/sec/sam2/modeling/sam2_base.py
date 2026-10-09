@@ -5,6 +5,7 @@
 # LICENSE file in the root directory of this source tree.
 
 import torch
+from .....log import get_logger
 import torch.distributed
 import torch.nn.functional as F
 
@@ -184,7 +185,7 @@ class SAM2Base(torch.nn.Module):
         # Model compilation
         if compile_image_encoder:
             # Compile the forward function (not the full module) to allow loading checkpoints.
-            print(
+            get_logger("sec.backend").debug(
                 "Image encoder compilation is enabled. First forward pass will be slow."
             )
             self.image_encoder.forward = torch.compile(

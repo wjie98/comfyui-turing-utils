@@ -79,7 +79,7 @@ def install_dynamic_vram_sample_fence(model, device: torch.device) -> bool:
     # event timings.  Never insert another fence after an inner attention call:
     # doing so would break ComfyUI's asynchronous weight prefetch pipeline.
     CUDA_PHASE_PROFILER.defer_to_sampler_boundary()
-    LOG.info("Enabled DynamicVRAM sampler-boundary CUDA fence")
+    LOG.debug("Enabled DynamicVRAM sampler-boundary CUDA fence")
     return True
 
 

@@ -60,12 +60,11 @@ inline void configure_dynamic_shared_memory(
 inline bool attention_kernel_profile_enabled()
 {
   static const bool enabled = []() {
-    const char *raw = std::getenv("COMFYUI_TURING_UTILS_PROFILE_CALLS");
+    const char *raw = std::getenv("COMFYUI_TURING_UTILS_PROFILE");
     if (raw == nullptr || *raw == '\0')
       return false;
-    char *end = nullptr;
-    const long calls = std::strtol(raw, &end, 10);
-    return end != raw && calls > 0;
+    // Resource queries are reserved for explicit detail mode.
+    return raw[0] == '2' && raw[1] == '\0';
   }();
   return enabled;
 }

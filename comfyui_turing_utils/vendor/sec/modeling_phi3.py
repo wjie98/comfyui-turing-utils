@@ -942,7 +942,7 @@ class Phi3PreTrainedModel(PreTrainedModel):
     def __init__(self, config: Phi3Config):
         if not has_flash_attn:
             config._attn_implementation = 'eager'
-            print('Warning: Flash attention is not available, using eager attention instead.')
+            logger.warning_once('Flash attention is not available, using eager attention instead.')
         super().__init__(config)
 
     def _init_weights(self, module):

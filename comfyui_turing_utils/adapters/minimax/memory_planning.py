@@ -366,7 +366,7 @@ def _install_memory_planning(model, base_model, diffusion_model) -> bool:
     )
     if not installed:
         return False
-    LOG.info(
+    LOG.debug(
         "Enabled MiniMax packed-sequence VRAM planning: W8 outputs=[%s] "
         "fixed_workspaces=[%s MiB] activation_profile=%s",
         ",".join(map(str, outputs)) or "none",

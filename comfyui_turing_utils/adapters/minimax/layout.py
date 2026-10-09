@@ -536,7 +536,7 @@ def ensure_minimax_attention_layout_provider(model) -> LayoutProviderStatus:
         )
 
     setattr(base_model, RUNTIME_PROVIDER_ATTR, True)
-    LOG.info(
+    LOG.debug(
         "Enabled loader-independent MiniMax H3 attention layout provider on %d blocks",
         len(blocks),
     )

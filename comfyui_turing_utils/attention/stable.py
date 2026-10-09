@@ -566,7 +566,7 @@ def _bundled_fallback(
     fallback_kwargs: dict,
 ):
     if reason not in _LOGGED_TURING_FALLBACKS:
-        LOG.warning(
+        LOG.warning_once(
             "Bundled Turing Sage is falling back to ComfyUI attention (%s); "
             "this message is emitted once per reason",
             reason,
@@ -648,7 +648,7 @@ def turing_sage_attention(
             else "Bundled Turing Sage active: device=%s dtype=%s layout=%s "
             "Q=%s K=%s V=%s heads=%d"
         )
-        LOG.info(
+        LOG.debug(
             message,
             q.device,
             input_dtype,
@@ -662,7 +662,7 @@ def turing_sage_attention(
 
     if input_dtype == torch.float32:
         if not _LOGGED_FP32_COMPAT:
-            LOG.info(
+            LOG.debug(
                 "Turing attention FP32 compatibility uses BF16 Q/K/V storage and restores FP32 output"
             )
             _LOGGED_FP32_COMPAT = True

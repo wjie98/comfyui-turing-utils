@@ -154,7 +154,8 @@ def configure(model, *, predictor_name: str, predictor_precision: str = "w8a8",
         dense_prefix_layers = len(blocks)
     implementation = ("veda:rotated_int8_qk_int8_pv" if predictor_precision == "w8a8"
                       else "veda:int8_qk_float_pv")
-    LOG.info("Veda configured: predictor=%s precision=%s attention=%s keep(target/reference)=%.4f/%.4f plan=%s; scheduling=auto",
+    LOG.info("Attention: Veda · keep=%.2f · predictor=%s", keep_ratio, predictor_precision)
+    LOG.debug("Veda configured: predictor=%s precision=%s attention=%s keep(target/reference)=%.4f/%.4f plan=%s; scheduling=auto",
              predictor_name, predictor_precision, implementation, keep_ratio, reference_keep_ratio, plan_policy)
     schedule = SparseSchedule(dense_prefix_steps=dense_prefix_steps,
                               dense_suffix_steps=dense_suffix_steps,

@@ -62,7 +62,7 @@ def _sparse_dense_baseline(
     **kwargs,
 ) -> torch.Tensor:
     if reason not in _LOGGED_SPARSE_DENSE_REASONS:
-        LOG.info("Sparse attention uses the selected dense backend for %s", reason)
+        LOG.debug("Sparse attention uses the selected dense backend for %s", reason)
         _LOGGED_SPARSE_DENSE_REASONS.add(reason)
     return fallback(q, k, v, heads, **kwargs)
 
@@ -734,7 +734,7 @@ def turing_sol_sparse_attention(
         bool(use_w8a8),
     )
     if kernel_key not in _LOGGED_SPARSE_KERNELS:
-        LOG.info(
+        LOG.debug(
             "Bundled Sol sparse attention active: dtype=%s Q=%s K=%s "
             "min_sequence=%d prefix_policy=%s dense_query_ranges=%s exact_kv_ranges=%s "
             "selected_qk=int8 score_domain=int8_consistent threshold=%.2f "
@@ -838,7 +838,7 @@ def turing_sol_sparse_attention(
                     )
                     first_layer = min(entry[2] for entry in entries)
                     last_layer = max(entry[2] for entry in entries)
-                    LOG.warning(
+                    LOG.info(
                         "[Turing sparse debug] step=%s/%s layers=%d-%d calls=%d "
                         "selected=%d/%d density[min/mean/max]=%.4f/%.4f/%.4f "
                         "Q=%d Qsparse=%d K=%d Hq=%d Hkv=%d threshold=%.2f "
@@ -865,7 +865,7 @@ def turing_sol_sparse_attention(
                     del debug_route_state[aggregate_key]
             else:
                 selected_blocks = int(selected_device.item())
-                LOG.warning(
+                LOG.info(
                     "[Turing sparse debug] Q=%d Qsparse=%d K=%d Hq=%d Hkv=%d selected=%d/%d "
                     "density=%.4f threshold=%.2f protected_q=%d local=1 "
                     "residual=%s step=%s/%s layer=%s/%s",
@@ -886,7 +886,7 @@ def turing_sol_sparse_attention(
                     layer_count,
                 )
         except (ImportError, OSError, RuntimeError, ValueError) as error:
-            LOG.warning("[Turing sparse debug] route density unavailable: %s", error)
+            LOG.warning_once("[Turing sparse debug] route density unavailable: %s", error)
         if not aggregate_route_stats:
             route_keys.add(kernel_key)
     else:
@@ -963,7 +963,7 @@ def turing_sla_sparse_attention(
         bool(use_w8a8),
     )
     if kernel_key not in _LOGGED_SPARSE_KERNELS:
-        LOG.info(
+        LOG.debug(
             "Bundled SLA sparse attention active: dtype=%s Q=%d K=%d "
             "topology=128x64 sparsity_ratio=%.2f smooth_k=True "
             "dense_query_ranges=%s exact_kv_ranges=%s pv=%s",
@@ -993,7 +993,7 @@ def turing_sla_sparse_attention(
         return result
     output, selected, possible = result
     selected_blocks = int(selected.item())
-    LOG.warning(
+    LOG.warning_once(
         "[Turing SLA debug] Q=%d K=%d selected=%d/%d density=%.4f "
         "target_sparsity=%.2f protected_q=%d",
         call.query_tokens,

@@ -126,7 +126,7 @@ def _prepare_h3_semantic_encoder(clip, tokens) -> None:
         )
     final_free = int(model_management.get_free_memory(device))
     if before < load_target or after_load < headroom:
-        LOG.info(
+        LOG.debug(
             "H3 semantic encoder VRAM guard: target=%.2f GiB "
             "free_before=%.2f GiB free_after=%.2f GiB",
             headroom / _GIB,

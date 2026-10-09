@@ -191,6 +191,27 @@ class WorkflowTimelineTest(unittest.TestCase):
         event.assert_not_called()
         synchronize.assert_not_called()
 
+    def test_summary_timeline_is_one_info_line(self):
+        timeline = WorkflowTimeline(True)
+        window = mock.Mock()
+        window.wall_start = 10.0
+        window.cuda_start.elapsed_time.return_value = 12.5
+        window.label = "sampler"
+        window.counters = {}
+        with (
+            mock.patch.object(profiling, "profile_level", return_value=1),
+            mock.patch.object(profiling.time, "perf_counter", return_value=10.020),
+            mock.patch.object(profiling.torch.cuda, "memory_allocated", return_value=0),
+            mock.patch.object(profiling.torch.cuda, "memory_reserved", return_value=0),
+            mock.patch.object(profiling.torch.cuda, "max_memory_allocated", return_value=1024**3),
+            self.assertLogs("comfyui-turing-utils", level="INFO") as logs,
+        ):
+            self.assertTrue(timeline.finish_after_synchronize(window))
+        self.assertEqual(len(logs.records), 1)
+        self.assertEqual(logs.records[0].levelname, "INFO")
+        self.assertIn("sampler: wall=0.02s CUDA=0.01s peak=1.00 GiB", logs.output[0])
+        self.assertNotIn("counters", logs.output[0])
+
     def test_enabled_timeline_records_one_bounded_cuda_window(self):
         timeline = WorkflowTimeline(True)
         start = mock.Mock()
@@ -225,7 +246,8 @@ class WorkflowTimelineTest(unittest.TestCase):
             mock.patch.object(
                 profiling.time, "perf_counter", side_effect=(10.0, 10.020)
             ),
-            self.assertLogs("comfyui-turing-utils", level="WARNING") as logs,
+            mock.patch.object(profiling, "profile_level", return_value=2),
+            self.assertLogs("comfyui-turing-utils", level="INFO") as logs,
         ):
             output = timeline.call(
                 "latent_upscale", torch.device("cuda", 0), function

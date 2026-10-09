@@ -50,7 +50,7 @@ def install_attention_strategy(
     if layout_status.required:
         transformer_options[ATTENTION_LAYOUT_REQUIREMENT_KEY] = layout_status.model_kind
         if not layout_status.installed:
-            LOG.warning(
+            LOG.warning_once(
                 "%s %s attention will stay dense because its runtime layout "
                 "provider could not be installed: %s",
                 layout_status.model_kind,
@@ -77,7 +77,7 @@ def install_attention_strategy(
             transformer_options[ATTENTION_EXECUTOR_KEY] = prepared_executor
         site_status = ensure_prepared_attention_sites(patched, patched.load_device)
         if site_status.matched and site_status.reason is not None:
-            LOG.info(
+            LOG.debug(
                 "%s prepared-attention fusion was not installed: %s",
                 site_status.model_kind,
                 site_status.reason,

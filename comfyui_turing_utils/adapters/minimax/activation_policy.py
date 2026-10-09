@@ -28,9 +28,6 @@ from .memory_state import (
 )
 from .memory_state import ensure_dynamic_vram_headroom as _ensure_headroom
 from .policy_config import activation_mode as _mode
-from .policy_config import override_chunk_rows as _override_chunk_rows
-from .policy_config import override_ffn_channels as _override_ffn_channels
-from .policy_config import override_head_group as _override_head_group
 
 
 LOG = get_logger("minimax.policy")
@@ -338,6 +335,7 @@ def decide_activation_chunks(
     hidden_size: int,
     expanded_size: int,
     heads: int | None = None,
+    chunk_rows_override: int | None = None,  # Benchmark-only; runtime leaves automatic.
     runtime_plan: ActivationRuntimePlan | None = None,
     base_model=None,
 ) -> ActivationDecision:
@@ -408,7 +406,7 @@ def decide_activation_chunks(
         raise ValueError(f"unknown H3 activation operation: {operation}")
 
     full_peak = persistent + rows * per_row
-    override = _override_chunk_rows(operation)
+    override = chunk_rows_override
     saturation_limited = bool(
         mode == "auto"
         and override is None
@@ -467,8 +465,8 @@ def decide_activation_chunks(
         selection,
         reserve // (256 * _MIB),
     )
-    if _should_log(runtime_plan, key):
-        LOG.info(
+    if LOG.isEnabledFor(10) and _should_log(runtime_plan, key):
+        LOG.debug(
             "MiniMax H3 activation policy: op=%s mode=%s tier=%d rows=%d path=%s "
             "chunk_rows=%d selection=%s available=%.2f GiB reserve=%.2f GiB "
             "planned_available=%.2f GiB weight_prefetch=%.2f GiB "
@@ -504,6 +502,7 @@ def decide_attention_heads(
     logical_key_rows: int | None = None,
     residual_subblocks: int = 0,
     extra_workspace_per_head: int = 0,
+    head_group_limit: int | None = None,  # Benchmark-only.
 ) -> AttentionDecision:
     """Choose a whole-head group without changing global sequence attention."""
     rows = int(x.shape[0])
@@ -564,7 +563,7 @@ def decide_attention_heads(
     ]
     if not groups:
         groups = [heads]
-    override = _override_head_group()
+    override = head_group_limit
     if override is not None:
         groups = [group for group in groups if group <= override] or [groups[-1]]
 
@@ -637,8 +636,8 @@ def decide_attention_heads(
         cache_input,
         reserve // (256 * _MIB),
     )
-    if _should_log(runtime_plan, key):
-        LOG.info(
+    if LOG.isEnabledFor(10) and _should_log(runtime_plan, key):
+        LOG.debug(
             "MiniMax H3 attention policy: mode=%s tier=%d rows=%d heads=%d "
             "head_group=%d saturation_group=%d input_cache=%s available=%.2f GiB "
             "reserve=%.2f GiB planned_available=%.2f GiB weight_prefetch=%.2f GiB "
@@ -666,6 +665,7 @@ def decide_ffn_channels(
     expanded_size: int,
     chunk_rows: int,
     half_width: bool = False,
+    channel_override: int | None = None,  # Benchmark-only.
     runtime_plan: ActivationRuntimePlan | None = None,
     base_model=None,
 ) -> FFNChannelDecision:
@@ -694,7 +694,7 @@ def decide_ffn_channels(
     persistent = rows * hidden * int(x.element_size())
     # Full fc1 BF16, fused INT8 activation, and the BF16 output tile.
     unsharded = persistent + tile_rows * (expanded_size * 5 + hidden * 2)
-    override = _override_ffn_channels()
+    override = channel_override
     if override is None and (mode == "throughput" or unsharded <= working):
         chunk_channels = 0
         estimated = unsharded
@@ -767,8 +767,8 @@ def decide_ffn_channels(
         chunk_channels,
         reserve // (256 * _MIB),
     )
-    if _should_log(runtime_plan, key):
-        LOG.info(
+    if LOG.isEnabledFor(10) and _should_log(runtime_plan, key):
+        LOG.debug(
             "MiniMax H3 FFN policy: mode=%s tier=%d rows=%d row_chunk=%d "
             "channel_chunk=%d available=%.2f GiB reserve=%.2f GiB "
             "planned_available=%.2f GiB weight_prefetch=%.2f GiB "

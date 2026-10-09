@@ -498,7 +498,7 @@ def ensure_wan_attention_layout_provider(model) -> LayoutProviderStatus:
             _FORWARD_ORIG_PATCH_KEY,
             _make_layout_forward(diffusion_model, current, publisher),
         )
-    LOG.info("Enabled loader-independent %s attention layout provider", layout_kind)
+    LOG.debug("Enabled loader-independent %s attention layout provider", layout_kind)
     return LayoutProviderStatus(layout_kind, True)
 
 

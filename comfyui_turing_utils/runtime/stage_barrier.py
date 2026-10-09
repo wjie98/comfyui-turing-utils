@@ -273,7 +273,7 @@ class BarrierPlanner:
             for phase, count in sorted(phase_counts.items())
         )
         if not self._logged_initial_plan or dynamic_refresh:
-            LOG.info(
+            LOG.debug(
                 "Stage Barrier plan%s: barriers=%d phases=[%s]",
                 " refreshed" if dynamic_refresh else "",
                 len(assigned),
@@ -452,11 +452,11 @@ async def _wait_for_active_barrier_phase(execution_list) -> None:
         )
         if allowed or execution_list.externalBlocks <= 0:
             if waited:
-                LOG.info("Stage Barrier rendezvous resumed after async work")
+                LOG.debug("Stage Barrier rendezvous resumed after async work")
             return
 
         if not waited:
-            LOG.info(
+            LOG.debug(
                 "Stage Barrier is waiting for an async ancestor instead of "
                 "advancing unrelated work"
             )
@@ -518,7 +518,7 @@ def install_stage_barrier_scheduler() -> bool:
         )
         ExecutionList.stage_node_execution = stage_aware_stage_node_execution
 
-    LOG.info("Enabled dependency-first Stage Barrier scheduling")
+    LOG.debug("Enabled dependency-first Stage Barrier scheduling")
     return True
 
 

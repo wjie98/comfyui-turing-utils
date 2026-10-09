@@ -106,7 +106,7 @@ class TuringAttentionContractTest(unittest.TestCase):
             mock.patch("attention.is_supported_turing_device", return_value=True),
             mock.patch("torch.cuda.current_device", return_value=0),
             mock.patch("attention._sageattn", side_effect=lambda q, *args, **kwargs: q),
-            self.assertLogs("comfyui-turing-utils", level="INFO") as captured,
+            self.assertLogs("comfyui-turing-utils", level="DEBUG") as captured,
         ):
             turing_attention.turing_sage_attention(
                 mock.Mock(),
@@ -358,7 +358,7 @@ class TuringAttentionContractTest(unittest.TestCase):
                 "attention._sol_sparse_sageattn",
                 side_effect=[(q, torch.tensor([1024]), 16384), q],
             ) as sparse,
-            self.assertLogs("comfyui-turing-utils", level="WARNING") as captured,
+            self.assertLogs("comfyui-turing-utils", level="INFO") as captured,
         ):
             for _ in range(2):
                 output = turing_attention.turing_sol_sparse_attention(
@@ -394,7 +394,7 @@ class TuringAttentionContractTest(unittest.TestCase):
                     (q, torch.tensor([2048]), 16384),
                 ],
             ) as sparse,
-            self.assertLogs("comfyui-turing-utils", level="WARNING") as captured,
+            self.assertLogs("comfyui-turing-utils", level="INFO") as captured,
         ):
             for layer_index in (2, 3):
                 output = turing_attention.turing_sol_sparse_attention(

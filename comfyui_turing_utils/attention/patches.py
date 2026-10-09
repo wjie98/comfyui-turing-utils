@@ -1160,7 +1160,7 @@ def make_sparse_attention_override(
                 .cpu()
                 .tolist()
             )
-            LOG.warning(
+            LOG.info(
                 "[Turing sparse debug] step=%s/%s layers=%d-%d calls=%d "
                 "selected=%d/%d density[min/mean/max]=%.4f/%.4f/%.4f "
                 "Q=%d Qsparse=%d K=%d Hq=%d Hkv=%d threshold=%.2f "
@@ -1188,7 +1188,7 @@ def make_sparse_attention_override(
             return
 
         selected_blocks = int(selected_device.item())
-        LOG.warning(
+        LOG.info(
             "[Turing sparse debug] Q=%d Qsparse=%d K=%d Hq=%d Hkv=%d "
             "selected=%d/%d density=%.4f threshold=%.2f protected_q=%d "
             "local=1 residual=%s step=%s/%s layer=%s/%s",
@@ -1410,7 +1410,7 @@ def make_sparse_attention_override(
         if debug_route_density and dense_schedule:
             debug_key = f"schedule:{schedule_state.get('step')}"
             if debug_key not in debug_dense_reasons:
-                LOG.warning(
+                LOG.info(
                     "[Sol sparse debug] dense backend selected by schedule: "
                     "step=%s/%s prefix_steps=%s suffix_steps=%s",
                     schedule_state.get("step"),
@@ -1423,7 +1423,7 @@ def make_sparse_attention_override(
             layer_index, layer_count = _attention_layer_metadata(transformer_options)
             debug_key = f"layer:{layer_index}"
             if debug_key not in debug_dense_reasons:
-                LOG.warning(
+                LOG.info(
                     "[Sol sparse debug] dense backend selected for protected layer %s/%s",
                     layer_index,
                     layer_count,
@@ -1709,7 +1709,7 @@ def make_sla_attention_override(
         )
         if debug_key not in debug_route_keys:
             selected_blocks = int(selected.item())
-            LOG.warning(
+            LOG.info(
                 "[Turing SLA debug] step=%s layer=%s Q=%d K=%d "
                 "selected=%d/%d density=%.4f target_sparsity=%.2f "
                 "protected_q=%d",
@@ -2106,7 +2106,8 @@ def apply_sparse_attention_patch(
         "turing_utils_dense_implementation",
         "selected_dense_backend",
     )
-    LOG.info(
+    LOG.info("Attention: Sol · threshold=%.2f · dense=%s", routing_threshold, runtime.dense_backend)
+    LOG.debug(
         "Sol sparse attention patch enabled: threshold=%.2f "
         "prefix_policy=%s manual_prefix=%d local_radius=1 "
         "skipped_residual=%s sparse_reference=(image=%s,video=%s,audio=%s) "
@@ -2178,7 +2179,8 @@ def apply_sla_attention_patch(
         runtime_config=runtime,
     )
     patched = patched.model
-    LOG.info(
+    LOG.info("Attention: SLA · sparsity=%.2f · dense=%s", sparsity_ratio, runtime.dense_backend)
+    LOG.debug(
         "SLA sparse attention patch enabled: sparsity_ratio=%.2f "
         "topology=128x64 smooth_k=True prefix_policy=%s manual_prefix=%d "
         "sparse_reference=(image=%s,video=%s,audio=%s) "
@@ -2233,12 +2235,12 @@ def apply_attention_backend(
         if isinstance(target_device, torch.device):
             site_status = ensure_prepared_attention_sites(model, target_device)
             if site_status.matched and site_status.reason is not None:
-                LOG.info(
+                LOG.debug(
                     "%s prepared-attention fusion was not installed: %s",
                     site_status.model_kind,
                     site_status.reason,
                 )
-    LOG.info(
+    LOG.debug(
         "Turing Utils attention runtime: dense=%s via %s requested=%s native=%s",
         selected,
         implementation,

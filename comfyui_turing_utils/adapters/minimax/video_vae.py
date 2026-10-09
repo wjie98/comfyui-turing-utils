@@ -293,7 +293,7 @@ def _decoder_overrides(decoder, attention, device):
 def decode_video(vae, latent, attention="w8a8"):
     model = require_h3_video_vae(vae)
     tile_total = _decode_tile_total(model, latent)
-    LOG.info(
+    LOG.debug(
         "H3 VAE decode: native ComfyUI lifecycle, attention=%s; "
         "tile progress counts completed logical tiles, planned_total=%s",
         attention,

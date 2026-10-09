@@ -197,7 +197,7 @@ class _RuntimeDispatchAudit:
         if calls < self.expected[phase]:
             return
 
-        log = LOG.warning if self.counts[phase]["fallback"] else LOG.info
+        log = LOG.warning if self.counts[phase]["fallback"] else LOG.debug
         log(
             "MiniMax fused runtime dispatch: phase=%s fused=%d fallback=%d "
             "dtypes=[%s] shapes=[%s] reasons=[%s]",
@@ -232,7 +232,7 @@ def _audit_fc2(blocks: Sequence[torch.nn.Module]) -> int:
         for linear in linears
     ]
     eligible = sum(kind != "other" for kind in kinds)
-    LOG.info(
+    LOG.debug(
         "MiniMax fused fc2 dispatch: blocks=%d eligible=%d formats=[%s]",
         len(linears),
         eligible,
@@ -2165,11 +2165,11 @@ def apply_minimax_adapter(model, device: torch.device) -> int:
             block_fusions += 1
 
     if block_fusions:
-        LOG.info("Enabled MiniMax segmented RMSNorm+AdaLN on %d CUDA blocks", block_fusions)
+        LOG.debug("Enabled MiniMax segmented RMSNorm+AdaLN on %d CUDA blocks", block_fusions)
     if mlp_fusions:
-        LOG.info("Enabled MiniMax fused/streamed ConvRot SwiGLU on %d MLP layers", mlp_fusions)
+        LOG.debug("Enabled MiniMax fused/streamed ConvRot SwiGLU on %d MLP layers", mlp_fusions)
     if attention_fusions:
-        LOG.info(
+        LOG.debug(
             "Enabled MiniMax fused Q/K RMSNorm+RoPE+INT8 preprocessing on %d attention layers",
             attention_fusions,
         )

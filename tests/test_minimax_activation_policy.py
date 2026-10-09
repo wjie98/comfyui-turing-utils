@@ -70,24 +70,17 @@ class MiniMaxActivationPolicyTest(unittest.TestCase):
             clear=False,
         )
         self.environment.start()
-        for name in (
-            "COMFYUI_TURING_UTILS_H3_QKV_CHUNK_ROWS",
-            "COMFYUI_TURING_UTILS_H3_MLP_CHUNK_ROWS",
-            "COMFYUI_TURING_UTILS_H3_ACTIVATION_CHUNK_ROWS",
-            "COMFYUI_TURING_UTILS_H3_HEAD_GROUP",
-            "COMFYUI_TURING_UTILS_H3_FFN_CHUNK_CHANNELS",
-        ):
-            os.environ.pop(name, None)
 
     def tearDown(self):
         self.environment.stop()
 
     @staticmethod
-    def _decision(rows: int, operation: str):
+    def _decision(rows: int, operation: str, **kwargs):
         expanded = 7168 if operation == "qkv" else 14336
         return activation_policy.decide_activation_chunks(
             _FakeActivation(rows),
             operation=operation,
+            **kwargs,
             hidden_size=5376,
             expanded_size=expanded,
         )
@@ -892,13 +885,10 @@ class MiniMaxActivationPolicyTest(unittest.TestCase):
                 "_runtime_memory",
                 return_value=(20 * _GIB, 0, 22 * _GIB),
             ),
-            mock.patch.dict(
-                os.environ,
-                {"COMFYUI_TURING_UTILS_H3_HEAD_GROUP": "20"},
-            ),
         ):
             decision = activation_policy.decide_attention_heads(
                 _FakeActivation(10_000),
+                head_group_limit=20,
                 heads=56,
                 head_dim=128,
                 compact_qk=False,
@@ -927,15 +917,12 @@ class MiniMaxActivationPolicyTest(unittest.TestCase):
                 "_runtime_memory",
                 return_value=(10 * _GIB, 4 * _GIB, 12 * _GIB),
             ),
-            mock.patch.dict(
-                os.environ,
-                {"COMFYUI_TURING_UTILS_H3_FFN_CHUNK_CHANNELS": "2300"},
-            ),
         ):
             forced = activation_policy.decide_ffn_channels(
                 _FakeActivation(135_000),
                 expanded_size=14_336,
                 chunk_rows=0,
+                channel_override=2300,
             )
         self.assertTrue(forced.sharded)
         self.assertEqual(forced.chunk_channels, 2_048)
@@ -1000,11 +987,10 @@ class MiniMaxActivationPolicyTest(unittest.TestCase):
                 os.environ,
                 {
                     "COMFYUI_TURING_UTILS_H3_ACTIVATION_MODE": "auto",
-                    "COMFYUI_TURING_UTILS_H3_QKV_CHUNK_ROWS": "8192",
                 },
             ),
         ):
-            self.assertEqual(self._decision(111_630, "qkv").chunk_rows, 8192)
+            self.assertEqual(self._decision(111_630, "qkv", chunk_rows_override=8192).chunk_rows, 8192)
 
     def test_streamed_mlp_casts_each_weight_once(self):
         torch.manual_seed(7)

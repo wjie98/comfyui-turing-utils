@@ -437,8 +437,10 @@ when every block is exact. The route words are explicitly scalarized into four
 registers per lane; the resource gate verifies zero local/stack spill after
 enabling the transform.
 
-Optional phase timing is process-local and disabled unless
-`COMFYUI_TURING_UTILS_PROFILE_CALLS` is a positive integer. The disabled path
+Optional diagnostics are process-local: `COMFYUI_TURING_UTILS_PROFILE=0`
+disables them (default), `1` reports concise span summaries, and `2` adds
+bounded phase timing, resource details and SeC diagnostics. Restart to change
+the level. The disabled path
 creates no CUDA events and performs no synchronization.
 On DynamicVRAM, reaching the call limit only marks the report pending. Event
 timings are read after the existing outer sampler fence, avoiding a mid-model
@@ -446,21 +448,24 @@ synchronization that would otherwise interrupt asynchronous weight prefetch.
 Non-DynamicVRAM execution retains the bounded end-of-window synchronization.
 
 Profiling is bucketed by operation, shape, and execution path. The default
-four buckets can capture both H3 resolutions and both attention/MLP phases in
-one run; `COMFYUI_TURING_UTILS_PROFILE_BUCKETS` changes that bound. Sparse
+four buckets with two calls each can capture multiple shapes and attention/MLP
+phases in one process. There are no separate bucket/call controls. Sparse
 selected/possible block counts stay as device scalars until the same outer
 fence, so route-density diagnostics do not add a hot-path `.item()`.
 
-`COMFYUI_TURING_UTILS_TIMELINE=1` adds an outer-sampler timeline without an
+Levels 1 and 2 add an outer-sampler timeline without an
 extra sampler synchronization: it records CUDA elapsed time, wall time, their
-host/transfer residual, allocator start/end/peak, reserved memory, and
+wall-minus-CUDA residual (not a direct transfer measurement),
+allocator start/end/peak, reserved memory, and
 DynamicVRAM reclaim counts at the already-required sampler fence. Combined
 with bounded phase profiling, this separates attention/MLP kernel time from
 weight waits and host or storage stalls across the low- and high-resolution
 samplers. It also emits named latent-upscale and visual/audio reference-encode
 spans; because these operations have no existing outer fence, timeline mode
 deliberately synchronizes around those diagnostic-only spans. The default path
-still creates no events or synchronization.
+still creates no events or synchronization. Only level 2 prints the extended
+fields; level 1 reports wall time, CUDA time and peak allocation.
+See [diagnostics](diagnostics.md) for log levels and retired settings.
 
 When channel pressure requires FFN sharding and ABI 0.33 is available, the
 runtime uses a single-pass half-width path. FC1 gate channels are written once

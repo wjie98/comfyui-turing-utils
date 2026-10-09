@@ -42,7 +42,9 @@ except:  # noqa # pylint: disable=bare-except
 
 from .configuration_internlm2 import InternLM2Config
 
-logger = logging.get_logger(__name__)
+from ...log import get_logger
+
+logger = get_logger("sec.backend")
 
 _CONFIG_FOR_DOC = 'InternLM2Config'
 
@@ -148,12 +150,12 @@ try:
 
     from apex.normalization import FusedRMSNorm
     InternLM2RMSNorm = partial(FusedRMSNorm, eps=1e-6)   # noqa
-    print('Discovered apex.normalization.FusedRMSNorm - will use it instead of InternLM2RMSNorm')
+    logger.debug('Discovered apex.normalization.FusedRMSNorm - will use it instead of InternLM2RMSNorm')
 except ImportError:
     # using the normal LlamaRMSNorm
     pass
 except Exception:
-    print('discovered apex but it failed to load, falling back to InternLM2RMSNorm')
+    logger.warning_once('discovered apex but it failed to load, falling back to InternLM2RMSNorm')
     pass
 
 
@@ -824,7 +826,7 @@ class InternLM2Model(InternLM2PreTrainedModel):
         self.config = config
         if not has_flash_attn:
             self.config.attn_implementation = 'eager'
-            print('Warning: Flash attention is not available, using eager attention instead.')
+            logger.warning_once('Flash attention is not available, using eager attention instead.')
 
         self.tok_embeddings = nn.Embedding(config.vocab_size, config.hidden_size, self.padding_idx)
 

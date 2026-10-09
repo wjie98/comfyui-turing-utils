@@ -135,7 +135,7 @@ def attend(q: torch.Tensor, k: torch.Tensor, v: torch.Tensor, *,
     plan = choice.plan
     report_key = ("reported_plan", spec.target.grid)
     if cache is None or report_key not in cache:
-        (LOG.info if choice.exact else LOG.warning)("Veda plan: %s", choice.how)
+        (LOG.debug if choice.exact else LOG.warning)("Veda plan: %s", choice.how)
         if spec.skipped:
             LOG.warning("Veda keeps unmapped references dense: %s", "; ".join(spec.skipped))
         if cache is not None:

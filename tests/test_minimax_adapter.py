@@ -237,7 +237,7 @@ class MiniMaxAdapterTest(unittest.TestCase):
     def test_runtime_audit_reports_a_complete_fused_window_once(self):
         audit = minimax_adapter._RuntimeDispatchAudit(expected_blocks=2, expected_mlps=2)
         x = torch.zeros((3, 256), dtype=torch.bfloat16)
-        with self.assertLogs("comfyui-turing-utils", level="INFO") as captured:
+        with self.assertLogs("comfyui-turing-utils", level="DEBUG") as captured:
             audit.record("block", True, x)
             audit.record("mlp", True, x)
             audit.record("block", True, x)
@@ -284,7 +284,7 @@ class MiniMaxAdapterTest(unittest.TestCase):
                 "comfyui_turing_utils.adapters.minimax.acceleration.fused_convrot_linear_input_act",
                 return_value=sentinel,
             ) as fused,
-            self.assertLogs("comfyui-turing-utils", level="INFO") as captured,
+            self.assertLogs("comfyui-turing-utils", level="DEBUG") as captured,
         ):
             output = patched(x)
 

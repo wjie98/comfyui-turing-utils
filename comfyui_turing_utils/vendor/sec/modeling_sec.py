@@ -5,7 +5,6 @@
 # --------------------------------------------------------
 # Modified by Turing Utils: direct tensor-backed video frames, bounded
 # direction-independent frame caching, and no process-global RNG mutation.
-import os
 import warnings
 from typing import Any, List, Optional, Tuple, Union
 
@@ -50,10 +49,10 @@ try:
 except (ImportError, OSError):
     has_flash_attn = False
 
-logger = logging.get_logger(__name__)
+from ...log import get_logger, profile_level
 
-# Debug logging control - disabled by default, enable with SEC_DEBUG=true environment variable
-DEBUG_SEC = os.getenv("SEC_DEBUG", "false").lower() == "true"
+logger = get_logger("sec.detail")
+
 
 
 def _is_flash_attention_failure(error):
@@ -401,12 +400,12 @@ class SeCModel(PreTrainedModel):
             input_embeds[selected] = vit_embeds.reshape(-1, C)
         except Exception as e:
             vit_embeds = vit_embeds.reshape(-1, C)
-            print(f'warning: {e}, input_embeds[selected].shape='
+            logger.warning(f'warning: {e}, input_embeds[selected].shape='
                     f'{input_embeds[selected].shape}, '
                     f'vit_embeds.shape={vit_embeds.shape}')
             n_token = selected.sum()
             if n_token > len(vit_embeds):
-                print(f"Wrong !!! {n_token} image tokens in text but only {len(vit_embeds)} vit embeds !!!")
+                logger.warning(f"Prompt mismatch: {n_token} image tokens in text but only {len(vit_embeds)} vit embeds !!!")
                 expand_ratio = n_token // len(vit_embeds) + 1
                 vit_embeds = torch.cat([vit_embeds] * expand_ratio, dim=0)
 
@@ -704,21 +703,21 @@ class SeCModel(PreTrainedModel):
             )
 
             # DEBUG: Log object_score_logits for FP8 analysis
-            obj_score = current_out["object_score_logits"].item()
-            mask_pixels = (video_res_masks[0] > 0.0).sum().item()
-            if DEBUG_SEC:
-                print(f"[MLLM-DEBUG] Frame {frame_idx}: _update_flag={_update_flag}, mask_pixels={mask_pixels}, obj_score={obj_score:.4f}, threshold_pass={obj_score > 1}")
+            if profile_level() == 2 and logger.isEnabledFor(20):
+                obj_score = current_out["object_score_logits"].item()
+                mask_pixels = (video_res_masks[0] > 0.0).sum().item()
+                logger.info(f"[MLLM-DEBUG] Frame {frame_idx}: _update_flag={_update_flag}, mask_pixels={mask_pixels}, obj_score={obj_score:.4f}, threshold_pass={obj_score > 1}")
 
             if _update_flag and (video_res_masks[0] > 0.0).sum() != 0 and current_out["object_score_logits"].item() > 1:
-                if DEBUG_SEC:
-                    print(f"[MLLM-DEBUG] Frame {frame_idx}: Memory updated (score passed threshold)")
+                if profile_level() == 2 and logger.isEnabledFor(20):
+                    logger.info(f"[MLLM-DEBUG] Frame {frame_idx}: Memory updated (score passed threshold)")
                 mllm_memory.append((
                     frame_idx,
                     (video_res_masks[0] > 0.0).cpu().numpy()
                 ))
             elif _update_flag and (video_res_masks[0] > 0.0).sum() != 0:
-                if DEBUG_SEC:
-                    print(f"[MLLM-DEBUG] Frame {frame_idx}: Memory NOT updated (score {obj_score:.4f} <= 1.0 threshold)")
+                if profile_level() == 2 and logger.isEnabledFor(20):
+                    logger.info(f"[MLLM-DEBUG] Frame {frame_idx}: Memory NOT updated (score {obj_score:.4f} <= 1.0 threshold)")
 
             if len(frame_cache) > 10:
                 # Dicts preserve insertion order.  Evicting the least recently
@@ -761,8 +760,8 @@ class SeCModel(PreTrainedModel):
             num_image_tokens = pixel_values.shape[0] * self.patch_token
             num_frames = 1
 
-        if DEBUG_SEC:
-            print(f"[MLLM-PREDICT] Input pixel_values dtype={pixel_values.dtype}, shape={pixel_values.shape}, min={pixel_values.min():.4f}, max={pixel_values.max():.4f}")
+        if profile_level() == 2 and logger.isEnabledFor(20):
+            logger.info(f"[MLLM-PREDICT] Input pixel_values dtype={pixel_values.dtype}, shape={pixel_values.shape}, min={pixel_values.min():.4f}, max={pixel_values.max():.4f}")
 
         input_dict['pixel_values'] = pixel_values
         image_token_str = f'{self.IMG_START_TOKEN}' \
@@ -791,8 +790,8 @@ class SeCModel(PreTrainedModel):
             'labels': None,
         }
 
-        if DEBUG_SEC:
-            print(f"[MLLM-PREDICT] Data pixel_values dtype={data['pixel_values'].dtype}, shape={data['pixel_values'].shape}")
+        if profile_level() == 2 and logger.isEnabledFor(20):
+            logger.info(f"[MLLM-PREDICT] Data pixel_values dtype={data['pixel_values'].dtype}, shape={data['pixel_values'].shape}")
 
         try:
             output = self.forward(data)
@@ -813,22 +812,22 @@ class SeCModel(PreTrainedModel):
             output = self.forward(data)
         seg_token_mask = ids == self.seg_token_idx
         hidden_states = output.hidden_states
-        if DEBUG_SEC:
-            print(f"[MLLM-PREDICT] Output hidden_states[-1] dtype={hidden_states[-1].dtype}, shape={hidden_states[-1].shape}")
+        if profile_level() == 2 and logger.isEnabledFor(20):
+            logger.info(f"[MLLM-PREDICT] Output hidden_states[-1] dtype={hidden_states[-1].dtype}, shape={hidden_states[-1].shape}")
 
         hidden_states = hidden_states[-1][seg_token_mask]
-        if DEBUG_SEC:
-            print(f"[MLLM-PREDICT] After seg_token_mask: dtype={hidden_states.dtype}, shape={hidden_states.shape}, has_nan={torch.isnan(hidden_states).any()}")
+        if profile_level() == 2 and logger.isEnabledFor(20):
+            logger.info(f"[MLLM-PREDICT] After seg_token_mask: dtype={hidden_states.dtype}, shape={hidden_states.shape}, has_nan={torch.isnan(hidden_states).any()}")
 
         hidden_states = self.text_hidden_fcs(hidden_states)
-        if DEBUG_SEC:
-            print(f"[MLLM-PREDICT] After text_hidden_fcs: dtype={hidden_states.dtype}, shape={hidden_states.shape}, has_nan={torch.isnan(hidden_states).any()}, min={hidden_states.min():.4f}, max={hidden_states.max():.4f}")
+        if profile_level() == 2 and logger.isEnabledFor(20):
+            logger.info(f"[MLLM-PREDICT] After text_hidden_fcs: dtype={hidden_states.dtype}, shape={hidden_states.shape}, has_nan={torch.isnan(hidden_states).any()}, min={hidden_states.min():.4f}, max={hidden_states.max():.4f}")
 
         _zero = hidden_states.mean() * 0.0
         pred_embeddings = hidden_states + _zero # [n, 256]
 
-        if DEBUG_SEC:
-            print(f"[MLLM-PREDICT] Final pred_embeddings: dtype={pred_embeddings.dtype}, shape={pred_embeddings.shape}, has_nan={torch.isnan(pred_embeddings).any()}")
+        if profile_level() == 2 and logger.isEnabledFor(20):
+            logger.info(f"[MLLM-PREDICT] Final pred_embeddings: dtype={pred_embeddings.dtype}, shape={pred_embeddings.shape}, has_nan={torch.isnan(pred_embeddings).any()}")
 
         return pred_embeddings
 
