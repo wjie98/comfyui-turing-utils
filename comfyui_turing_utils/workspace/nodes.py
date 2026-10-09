@@ -1,11 +1,13 @@
 """Material boundaries and private execution adapters using normal ComfyUI nodes."""
 
 import copy
+import hashlib
+import math
 from pathlib import Path
+import shutil
+import uuid
 
 import numpy as np
-from PIL import Image
-import torch
 import av
 import nodes
 import folder_paths
@@ -49,6 +51,7 @@ class Material:
     FUNCTION = "read"
     KIND = "text"
     RETURN_TYPES = ("STRING",)
+    OUTPUT_NODE = True
 
     @classmethod
     def INPUT_TYPES(cls):
@@ -56,9 +59,12 @@ class Material:
         optional = {"value": (cls.RETURN_TYPES[0], {"lazy": True}), "position": (POSITION, {"lazy": True})}
         inputs["stub_id"] = ("STRING", {"default": "", "hidden": True, "socketless": True})
         if cls.KIND == "text":
+            del optional["value"]
             inputs["text"] = ("STRING", {"default": "", "multiline": True})
         else:
-            inputs["file"] = ("STRING", {"default": "", "tooltip": "Input-relative file; a connected computation takes precedence."})
+            upload = "video_upload" if cls.KIND == "video" else "audio_upload" if cls.KIND == "audio" else "image_upload"
+            inputs["audio" if cls.KIND == "audio" else "file"] = ("COMBO", {upload: True, "default": "", "remote": {
+                "route": "/turing/workspace/files/" + cls.KIND}})
         if cls.KIND == "video":
             del optional["value"]
             optional["images"] = ("IMAGE", {"lazy": True})
@@ -69,26 +75,118 @@ class Material:
         return {"required": inputs, "optional": optional}
 
     def check_lazy_status(self, **kwargs):
-        return [name for name in ("value", "images", "audio") if name in kwargs and kwargs[name] is None]
+        return [name for name in ("value", "images", "audio", "text") if name in kwargs and kwargs[name] is None]
+
+    @classmethod
+    def IS_CHANGED(cls, file="", **kwargs):
+        if cls.KIND == "audio":
+            file = kwargs.get("audio", "")
+        if file and kwargs.get("value") is None and kwargs.get("images") is None:
+            stat = material_path(file).stat()
+            return (stat.st_mtime_ns, stat.st_size)
+        return None
 
     def read(self, file="", **kwargs):
-        if self.KIND == "video" and kwargs.get("images") is not None:
-            return (create_video(kwargs["images"], **kwargs),)
-        if kwargs.get("value") is not None:
-            return (kwargs["value"],)
+        if self.KIND == "audio":
+            file = kwargs.get("audio", file)
         if self.KIND == "text":
-            return (kwargs.get("text", ""),)
-        relative, root = folder_paths.annotated_filepath(file)
-        root = root or folder_paths.get_input_directory()
-        if Path(root).resolve() not in {Path(folder_paths.get_input_directory()).resolve(), Path(folder_paths.get_output_directory()).resolve()}:
-            raise ValueError("Material files must belong to this instance's input or output directory")
-        path = inside(root, relative)
-        if self.KIND == "video":
-            return (InputImpl.VideoFromFile(str(path)),)
-        if self.KIND == "image":
-            return (nodes.LoadImage().load_image(file)[0],)
-        waveform, rate = load_audio(str(path))
-        return ({"waveform": waveform.unsqueeze(0), "sample_rate": rate},)
+            text = kwargs.get("text", "")
+            return {"ui": {"material_text": [text]}, "result": (text,)}
+        if self.KIND == "video" and kwargs.get("images") is not None:
+            value = create_video(kwargs["images"], **kwargs)
+        elif kwargs.get("value") is not None:
+            value = kwargs["value"]
+        else:
+            if not file:
+                raise ValueError(f"Choose a {self.KIND} file or connect material content")
+            path = material_path(file)
+            if self.KIND == "video":
+                value = InputImpl.VideoFromFile(str(path))
+            elif self.KIND == "image":
+                value = nodes.LoadImage().load_image(file)[0]
+            else:
+                waveform, rate = load_audio(str(path))
+                value = {"waveform": waveform.unsqueeze(0), "sample_rate": rate}
+            output_root = Path(folder_paths.get_output_directory()).resolve()
+            if not path.is_relative_to(output_root):
+                stat = path.stat()
+                digest = hashlib.sha256(f"{path}:{stat.st_mtime_ns}:{stat.st_size}".encode()).hexdigest()[:12]
+                destination = inside(output_root, f"materials/{self.KIND}/{path.stem}_{digest}{path.suffix.lower()}")
+                if not destination.exists():
+                    destination.parent.mkdir(parents=True, exist_ok=True)
+                    temporary = destination.with_name(uuid.uuid4().hex + ".partial")
+                    try:
+                        shutil.copyfile(path, temporary)
+                        temporary.replace(destination)
+                    finally:
+                        temporary.unlink(missing_ok=True)
+                path = destination
+            return self.saved_result(value, path)
+        extension = {"image": ".png", "video": ".mp4", "audio": ".wav"}[self.KIND]
+        relative = f"materials/{self.KIND}/{self.KIND}_{uuid.uuid4().hex[:12]}{extension}"
+        path = inside(folder_paths.get_output_directory(), relative)
+        save_media(self.KIND, value, path, codec=kwargs.get("codec", "none"))
+        return self.saved_result(value, path)
+
+    def saved_result(self, value, path):
+        relative = path.relative_to(Path(folder_paths.get_output_directory()).resolve())
+        data = {"material_file": [relative.as_posix() + " [output]"]}
+        if self.KIND in {"image", "audio"}:
+            # Native image/audio previews can reference the saved file without
+            # encoding a second copy into ComfyUI's temporary directory.
+            data["images" if self.KIND == "image" else "audio"] = [{"filename":path.name,
+                "subfolder":relative.parent.as_posix(), "type":"output"}]
+        return {"ui": data, "result": (value,)}
+
+
+def material_path(file):
+    relative, root = folder_paths.annotated_filepath(file)
+    root = root or folder_paths.get_input_directory()
+    if Path(root).resolve() not in {Path(folder_paths.get_input_directory()).resolve(), Path(folder_paths.get_output_directory()).resolve()}:
+        raise ValueError("Material files must belong to this instance's input or output directory")
+    return inside(root, relative)
+
+
+def save_media(kind, value, path, codec="none"):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_name(path.stem + ".partial" + path.suffix)
+    try:
+        if kind == "image":
+            if len(value) != 1:
+                raise ValueError("Image material expects one image; use video material for a sequence")
+            saver = nodes.SaveImage()
+            saver.output_dir = str(path.parent)
+            result = saver.save_images(value, temporary.stem)
+            (path.parent / result["ui"]["images"][0]["filename"]).replace(temporary)
+            metadata = {"width": value.shape[2], "height": value.shape[1]}
+        elif kind == "video":
+            value.save_to(str(temporary), format=Types.VideoContainer.MP4,
+                          codec=Types.VideoCodec.AUTO if codec == "none" else Types.VideoCodec(codec), crf=19)
+            width, height = value.get_dimensions()
+            metadata = {"width": width, "height": height, "duration": value.get_duration(),
+                        "fps": float(value.get_frame_rate()), "bit_depth": value.get_bit_depth(),
+                        "color_space": value.get_color_space()}
+        else:
+            waveform = value["waveform"][0].detach().cpu().float().numpy()
+            rate = value["sample_rate"]
+            if waveform.shape[0] not in {1, 2}:
+                raise ValueError("Audio material currently supports mono or stereo")
+            layout = "mono" if waveform.shape[0] == 1 else "stereo"
+            with av.open(str(temporary), "w", format="wav") as output:
+                stream = output.add_stream("pcm_s16le", rate=rate)
+                stream.layout = layout
+                frame = av.AudioFrame.from_ndarray(np.ascontiguousarray(waveform), format="fltp", layout=layout)
+                frame.sample_rate = rate
+                for packet in stream.encode(frame):
+                    output.mux(packet)
+                for packet in stream.encode(None):
+                    output.mux(packet)
+            metadata = {"duration": waveform.shape[1] / rate}
+        metadata["bytes"] = temporary.stat().st_size
+        temporary.replace(path)
+        return metadata
+    finally:
+        temporary.unlink(missing_ok=True)
 
 
 def create_video(value, fps=30., audio=None, bit_depth="auto", color_space="sRGB", codec="none", **kwargs):
@@ -99,15 +197,26 @@ def read_selected(kind, directory, asset, start=0, end=0, include_audio=True):
     project = Project(directory)
     if project.asset(asset)["kind"] != kind:
         raise ValueError("Material kind does not match this node")
-    if kind == "text":
-        return (project.path(asset).read_text(encoding="utf-8"),)
     if end and end <= start:
         raise ValueError("End time must be after start time")
+    maximum = project.settings()["max_megapixels"]
     if kind == "video":
-        return (InputImpl.VideoFromFile(str(project.path(asset)), start_time=start, duration=end-start if end else 0),)
+        video = InputImpl.VideoFromFile(str(project.path(asset)), start_time=start, duration=end-start if end else 0)
+        width, height = video.get_dimensions()
+        if width * height > maximum * 1024 * 1024:
+            components = video.get_components()
+            scale = math.sqrt(maximum * 1024 * 1024 / (width * height))
+            # Floor dimensions so native rounding cannot exceed the pixel cap.
+            height, width = components.images.shape[1:3]
+            width, height = max(1, int(width * scale)), max(1, int(height * scale))
+            components.images = nodes.ImageScale().upscale(components.images, "area", width, height, "disabled")[0]
+            if components.alpha is not None:
+                components.alpha = nodes.ImageScale().upscale(components.alpha.unsqueeze(-1), "area", width, height, "disabled")[0].squeeze(-1)
+            video = InputImpl.VideoFromComponents(components, bit_depth=video.get_bit_depth(), color_space=video.get_color_space())
+        return (video,)
     images, audio, _ = read_material(project, {"asset": asset, "start": start,
         "duration": end - start if end else 0, "modality": "audio" if kind == "audio" else "av",
-        "include_audio": include_audio, "max_megapixels": 4})
+        "include_audio": include_audio, "max_megapixels": maximum})
     return (images, audio) if kind == "video" else (audio,) if kind == "audio" else (images,)
 
 
@@ -159,38 +268,10 @@ class Write:
         else:
             extension = {"image": ".png", "video": ".mp4", "audio": ".wav"}[self.KIND]
             asset, path = project.reserve(self.KIND, extension, prefix)
-            temporary = path.with_name(path.stem + ".partial" + extension)
-            metadata = {}
-            try:
-                if self.KIND == "image":
-                    if len(value) != 1:
-                        raise ValueError("Image material expects one image; use video material for a sequence")
-                    Image.fromarray((value[0].detach().cpu().clamp(0, 1).numpy() * 255).round().astype(np.uint8)).save(temporary)
-                    metadata = {"width": value.shape[2], "height": value.shape[1]}
-                elif self.KIND == "video":
-                    video = create_video(value, fps, audio, bit_depth, color_space, codec)
-                    video.save_to(str(temporary), format=Types.VideoContainer.MP4, codec=Types.VideoCodec.H264, crf=19)
-                    metadata = {"width": value.shape[2], "height": value.shape[1], "duration": len(value) / fps, "fps": fps, "audio": audio is not None}
-                else:
-                    waveform = value["waveform"][0].detach().cpu().float().numpy()
-                    rate = value["sample_rate"]
-                    layout = "mono" if waveform.shape[0] == 1 else "stereo"
-                    if waveform.shape[0] not in {1, 2}:
-                        raise ValueError("Audio material currently supports mono or stereo")
-                    with av.open(str(temporary), "w", format="wav") as output:
-                        stream = output.add_stream("pcm_s16le", rate=rate)
-                        stream.layout = layout
-                        frame = av.AudioFrame.from_ndarray(np.ascontiguousarray(waveform), format="fltp", layout=layout)
-                        frame.sample_rate = rate
-                        for packet in stream.encode(frame):
-                            output.mux(packet)
-                        for packet in stream.encode(None):
-                            output.mux(packet)
-                    metadata = {"duration": waveform.shape[1] / rate}
-                temporary.replace(path)
-                project.register(asset, self.KIND, metadata)
-            finally:
-                temporary.unlink(missing_ok=True)
+            if self.KIND == "video":
+                value = create_video(value, fps, audio, bit_depth, color_space, codec)
+            metadata = save_media(self.KIND, value, path, codec)
+            project.register(asset, self.KIND, metadata)
         selected = project.finish_run(run_id, asset)
         return {"ui": {"material": [{"target": target, "asset": asset, "selected": selected, "run_id": run_id}]}, "result": (asset,)}
 

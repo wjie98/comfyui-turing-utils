@@ -18,7 +18,8 @@ from comfy_execution.caching import CacheKeySetInputSignature
 from comfy_execution.graph import DynamicPrompt
 from execution import IsChangedCache, validate_prompt, _async_map_node_over_list
 from comfyui_turing_utils.workspace.compiler import compile_segment
-from comfyui_turing_utils.workspace.nodes import fresh_type, PUBLIC_NODES, INTERNAL_NODES
+from comfyui_turing_utils.workspace.nodes import fresh_type, PUBLIC_NODES, INTERNAL_NODES, material_path, read_selected
+from comfyui_turing_utils.workspace.routes import list_directory, remove_empty_directory, material_files
 from comfyui_turing_utils.workspace.store import Project, Conflict, inside
 from comfyui_turing_utils.workspace.cache import install_task_cleanup
 from comfyui_turing_utils.workspace.endpoints import CanvasInputs, parse_ports
@@ -93,15 +94,107 @@ class WorkspaceTest(unittest.TestCase):
 
     def test_native_video_components_and_priority(self):
         images = torch.zeros(3,16,16,3)
-        audio = {"waveform":torch.zeros(1,1,300), "sample_rate":3000}
+        audio = {"waveform":torch.zeros(1,1,4410), "sample_rate":44100}
         video = PUBLIC_NODES["TuringMaterialVideo"]().read(file="missing.mp4", images=images,
-            fps=29.97, audio=audio, bit_depth=10, color_space="HDR", codec="none")[0]
+            fps=29.97, audio=audio, bit_depth=10, color_space="HDR", codec="none")["result"][0]
         parts = video.get_components()
         self.assertIs(parts.images, images)
         self.assertIs(parts.audio, audio)
         self.assertAlmostEqual(float(parts.frame_rate),29.97)
         self.assertEqual(video.get_bit_depth(),10)
         self.assertEqual(video.get_color_space(),"HDR")
+
+    def test_endpoints_reject_non_material_types(self):
+        for type_ in ("MASK", "INT", "FLOAT", "BOOLEAN", "COMBO", "MODEL", "LATENT", "*"):
+            with self.subTest(type=type_):
+                ports = json.dumps([dict(id="a",slot=0,name="A",kind="value",type=type_)])
+                with self.assertRaisesRegex(ValueError, "only support"):
+                    parse_ports(ports)
+        ports = json.dumps([dict(id="a",slot=0,name="A",kind="value",type="IMAGE")])
+        self.assertTrue(CanvasInputs.VALIDATE_INPUTS(ports, {"port_0":"IMAGE"}))
+        self.assertNotEqual(CanvasInputs.VALIDATE_INPUTS(ports, {"port_0":"MASK"}), True)
+        self.assertNotEqual(CanvasInputs.VALIDATE_INPUTS(ports, {"port_1":"IMAGE"}), True)
+        with self.assertRaisesRegex(ValueError, "inline default"):
+            parse_ports(json.dumps([dict(id="a",slot=0,name="A",kind="value",type="IMAGE",default="file.png")]))
+
+    def test_text_has_one_input_and_persists_inline(self):
+        node = PUBLIC_NODES["TuringMaterialText"]
+        self.assertNotIn("value", node.INPUT_TYPES()["optional"])
+        self.assertTrue(node.OUTPUT_NODE)
+        self.assertEqual(node().read(text="inline")["result"], ("inline",))
+        self.assertFalse((Path(self.tmp.name) / "materials/text").exists())
+
+    def test_standalone_media_save_and_history(self):
+        image = torch.ones(1,16,32,3)
+        result = PUBLIC_NODES["TuringMaterialImage"]().read(value=image)
+        name = result["ui"]["material_file"][0]
+        self.assertEqual(result["ui"]["images"][0]["type"], "output")
+        self.assertTrue(material_path(name).is_file())
+        self.assertIn(name, material_files("image"))
+        loaded = PUBLIC_NODES["TuringMaterialImage"]().read(file=name)
+        self.assertEqual(loaded["result"][0].shape, image.shape)
+        self.assertEqual(len(list((Path(self.tmp.name) / "materials/image").iterdir())), 1)
+        audio = {"waveform":torch.zeros(1,2,4410),"sample_rate":44100}
+        result = PUBLIC_NODES["TuringMaterialAudio"]().read(value=audio)
+        self.assertEqual(result["ui"]["audio"][0]["type"], "output")
+        self.assertTrue(material_path(result["ui"]["material_file"][0]).is_file())
+        self.assertFalse(list(Path(self.tmp.name).rglob("*.partial*")))
+
+    def test_project_media_write_and_statistics(self):
+        run = self.project.begin_run("image", 0)
+        result = INTERNAL_NODES["_TuringMaterialWriteImage"]().write("test", "image", run, 0, "portrait", torch.ones(1,16,32,3))
+        asset = result["result"][0]
+        self.assertTrue(self.project.path(asset).is_file())
+        self.assertFalse((Path(self.tmp.name) / "materials/image").exists())
+        self.assertEqual(self.project.history("image", limit=0)[0]["name"], Path(asset).name)
+        stats = self.project.statistics()
+        self.assertEqual(stats["materials"]["image"], 1)
+        self.assertEqual(stats["materials"]["text"], 1)
+        self.assertGreater(stats["bytes"], 0)
+        self.assertEqual(INTERNAL_NODES["_TuringMaterialWriteImage"]().write("test", "image", run, 0, "portrait", torch.ones(1,16,32,3))["result"][0], asset)
+
+    def test_project_settings_pixel_limit_and_conflict(self):
+        self.assertEqual(self.project.settings()["max_megapixels"], 4.)
+        revision = self.project.save_settings({"name":"Scene","max_megapixels":.001}, 0)
+        self.assertEqual(revision, 1)
+        with self.assertRaises(Conflict):
+            self.project.save_settings({"name":"Other","max_megapixels":4.}, 0)
+        for pixels in (0, float("nan"), float("inf"), -1):
+            with self.assertRaises(ValueError):
+                self.project.save_settings({"name":"Scene","max_megapixels":pixels}, 1)
+        run = self.project.begin_run("image", 0)
+        asset = INTERNAL_NODES["_TuringMaterialWriteImage"]().write("test", "image", run, 0, "image", torch.ones(1,64,64,3))["result"][0]
+        value = read_selected("image", "test", asset)[0]
+        self.assertLessEqual(value.shape[1] * value.shape[2], .001 * 1024 * 1024)
+
+    def test_directory_listing_and_empty_tree_deletion(self):
+        folder = Path(self.tmp.name) / "empty"
+        (folder / "nested/child").mkdir(parents=True)
+        self.assertFalse(list_directory("empty")["empty"])
+        remove_empty_directory("empty")
+        self.assertFalse(folder.exists())
+        with self.assertRaises(ValueError): remove_empty_directory("test")
+        self.assertTrue((self.project.root / "canvas.json").exists())
+        for name in ("", "../", "/"):
+            with self.assertRaises(ValueError): remove_empty_directory(name)
+        (Path(self.tmp.name) / "link").symlink_to(self.project.root, target_is_directory=True)
+        with self.assertRaises(ValueError): remove_empty_directory("link")
+
+    def test_video_pixel_limit_keeps_audio_and_frame_rate(self):
+        images = torch.ones(3,50,100,3)
+        audio = {"waveform":torch.zeros(1,2,4410), "sample_rate":44100}
+        run = self.project.begin_run("video", 0)
+        asset = INTERNAL_NODES["_TuringMaterialWriteVideo"]().write(
+            "test", "video", run, 0, "video", images, audio=audio, fps=29.97)["result"][0]
+        self.project.save_settings({"name":"Scene", "max_megapixels":3000 / (1024 * 1024)}, 0)
+        value = read_selected("video", "test", asset)[0]
+        components = value.get_components()
+        self.assertLessEqual(components.images.shape[1] * components.images.shape[2], 3000)
+        self.assertEqual(len(components.images), 3)
+        self.assertAlmostEqual(float(components.frame_rate), 29.97, places=2)
+        self.assertIsNotNone(components.audio)
+        self.assertEqual(components.audio["sample_rate"], 44100)
+        self.assertEqual(value.get_color_space(), "sRGB")
 
 
     def test_empty_text_and_explicit_project_creation(self):
@@ -130,9 +223,9 @@ class WorkspaceTest(unittest.TestCase):
         self.project.select("1", {"text": "hello"})
         self.prompt = {
             "0": {"class_type": "WorkspaceTest", "inputs": {"text": "must not run"}},
-            "1": {"class_type": "TuringMaterialText", "inputs": {"value": ["0", 0]}},
+            "1": {"class_type": "TuringMaterialText", "inputs": {"text": ["0", 0]}},
             "2": {"class_type": "WorkspaceTest", "inputs": {"text": ["1", 0]}},
-            "3": {"class_type": "TuringMaterialText", "inputs": {"value": ["2", 0]}},
+            "3": {"class_type": "TuringMaterialText", "inputs": {"text": ["2", 0]}},
         }
 
     def compile(self):
@@ -262,7 +355,7 @@ class WorkspaceTest(unittest.TestCase):
         self.prompt = {
             "load": {"class_type": "UNETLoader", "inputs": {"text": "model"}},
             "compute": {"class_type": "WorkspaceCompute", "inputs": {"text": ["load", 0]}},
-            "3": {"class_type": "TuringMaterialText", "inputs": {"value": ["compute", 0]}},
+            "3": {"class_type": "TuringMaterialText", "inputs": {"text": ["compute", 0]}},
         }
         with mock.patch.dict(nodes.NODE_CLASS_MAPPINGS, {"UNETLoader": Loader, "WorkspaceCompute": Compute}):
             executor = execution.PromptExecutor(Server(), cache_type=cache_type,
@@ -321,7 +414,7 @@ class WorkspaceTest(unittest.TestCase):
                             card + ":load": {"class_type": "UNETLoader", "inputs": {"text": "model"}},
                             card + ":lora": {"class_type": "LoraLoaderModelOnly", "inputs": {"text": [card + ":load", 0], "strength": strength}},
                             card + ":compute": {"class_type": "WorkspaceTest", "inputs": {"text": [card + ":lora", 0]}},
-                            target: {"class_type": "TuringMaterialText", "inputs": {"value": [card + ":compute", 0]}},
+                            target: {"class_type": "TuringMaterialText", "inputs": {"text": [card + ":compute", 0]}},
                         }
                         revision = self.project.document()["selections"].get(target, {}).get("revision", 0)
                         run = self.project.begin_run(target, revision)
@@ -338,7 +431,7 @@ class WorkspaceTest(unittest.TestCase):
                  {"id":"position","slot":1,"name":"Result","type":"TURING_CANVAS_POSITION","kind":"position"}]
         graph = {"in":{"class_type":"TuringCanvasInputs","inputs":{"ports":json.dumps(ports)}},
                  "compute":{"class_type":"WorkspaceTest","inputs":{"text":["in",0]}},
-                 "stub":{"class_type":"TuringMaterialText","inputs":{"stub_id":"stable","position":["in",1],"value":["compute",0]}},
+                 "stub":{"class_type":"TuringMaterialText","inputs":{"stub_id":"stable","position":["in",1],"text":["compute",0]}},
                  "out":{"class_type":"TuringCanvasOutputs","inputs":{"ports":json.dumps([{**ports[0],"id":"result"}]),"port_0":["stub",0]}}}
         interface=describe(graph)
         workflow={"nodes":[],"version":0.4}

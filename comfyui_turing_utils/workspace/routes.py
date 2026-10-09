@@ -15,7 +15,7 @@ from PIL import Image, ImageOps
 from server import PromptServer
 
 from .compiler import MATERIALS, compile_segment
-from .nodes import fresh_type
+from .nodes import fresh_type, material_path
 from .store import Conflict, Project, inside
 from . import workflow_files
 from .templates import material_template
@@ -40,6 +40,61 @@ def probe(path, kind):
             stream = streams[0]
             metadata.update(width=stream.width, height=stream.height, fps=float(stream.average_rate or 24))
         return metadata
+
+
+def list_directory(relative=""):
+    root = Path(folder_paths.get_output_directory()).resolve()
+    parent = inside(root, relative) if relative else root
+    items = []
+    for path in sorted(parent.iterdir(), key=lambda p: (not p.is_dir(), p.name.casefold())):
+        if path.is_symlink() or path.name.startswith("."):
+            continue
+        items.append({"name": path.name, "path": path.relative_to(root).as_posix(),
+                      "directory": path.is_dir(), "project": path.is_dir() and (path / "canvas.json").is_file(),
+                      "bytes": path.stat().st_size if path.is_file() else 0})
+    return {"items": items, "path": relative, "empty": not any(parent.iterdir()),
+            "project": (parent / "canvas.json").is_file()}
+
+
+def remove_empty_directory(relative):
+    root = Path(folder_paths.get_output_directory()).resolve()
+    target = inside(root, relative)
+    raw = root / relative
+    if any(path.is_symlink() for path in [raw, *raw.parents] if path.is_relative_to(root)):
+        raise ValueError("Cannot delete through a symbolic link")
+    directories = []
+    def inspect(path):
+        if path.is_symlink() or not path.is_dir():
+            raise ValueError("Only an empty directory tree may be deleted")
+        for child in path.iterdir():
+            inspect(child)
+        directories.append(path)
+    inspect(target)
+    for path in directories:
+        path.rmdir()
+
+
+def material_files(kind):
+    if kind not in {"image", "video", "audio"}:
+        raise ValueError("Unknown material kind")
+    content_types = [kind, "video"] if kind == "audio" else [kind]
+    result = []
+    for root, tag in [(Path(folder_paths.get_input_directory()), "input"),
+                      (Path(folder_paths.get_output_directory()) / "materials" / kind, "output")]:
+        if not root.is_dir():
+            continue
+        for path in root.rglob("*"):
+            if path.is_symlink() or not path.is_file() or not folder_paths.filter_files_content_types([path.name], content_types):
+                continue
+            base = folder_paths.get_input_directory() if tag == "input" else folder_paths.get_output_directory()
+            relative = path.relative_to(base).as_posix()
+            try:
+                owned = material_path(relative + f" [{tag}]") == path.resolve()
+            except ValueError:
+                continue
+            if owned:
+                result.append(relative + f" [{tag}]")
+    return ["", *sorted(result)]
 
 
 def install_routes():
@@ -86,12 +141,29 @@ def install_routes():
         data = await request.json()
         return web.json_response(await asyncio.to_thread(lambda: save_layout(Project(data["directory"]), data["workflow"], data["revision"])))
 
+    @endpoint("post", "/project/settings")
+    async def project_settings(request):
+        data = await request.json()
+        revision = await asyncio.to_thread(lambda: Project(data["directory"]).save_settings(data["settings"], data["revision"]))
+        return web.json_response({"revision": revision})
+
+    @endpoint("post", "/project/statistics")
+    async def statistics(request):
+        data = await request.json()
+        return web.json_response(await asyncio.to_thread(lambda: Project(data["directory"]).statistics()))
+
     @endpoint("post", "/directory/create")
     async def create_directory(request):
         data = await request.json()
         path = inside(folder_paths.get_output_directory(), data["directory"])
         await asyncio.to_thread(path.mkdir)
         return web.json_response({"directory":data["directory"]})
+
+    @endpoint("post", "/directory/delete-empty")
+    async def delete_directory(request):
+        data = await request.json()
+        await asyncio.to_thread(remove_empty_directory, data["directory"])
+        return web.json_response({"directory": data["directory"]})
 
     @endpoint("post", "/project")
     async def project(request):
@@ -104,13 +176,11 @@ def install_routes():
     @endpoint("post", "/projects")
     async def projects(request):
         data = await request.json()
-        root = Path(folder_paths.get_output_directory()).resolve()
-        relative = data.get("path", "")
-        parent = inside(root, relative) if relative else root
-        def listing():
-            return [{"name":p.name, "path":p.relative_to(root).as_posix(), "project":(p/"canvas.json").is_file()}
-                    for p in sorted(parent.iterdir()) if p.is_dir() and not p.is_symlink() and not p.name.startswith(".")]
-        return web.json_response({"items":await asyncio.to_thread(listing), "path":relative})
+        return web.json_response(await asyncio.to_thread(list_directory, data.get("path", "")))
+
+    @endpoint("get", "/files/{kind}")
+    async def files(request):
+        return web.json_response(await asyncio.to_thread(material_files, request.match_info["kind"]))
 
     def template_path(request, name):
         root = library(request)
@@ -149,6 +219,8 @@ def install_routes():
         data = await request.json()
         def add():
             project = Project(data["directory"])
+            if "revision" in data and workflow_files.load_json(project.root / "canvas.json")["revision"] != data["revision"]:
+                raise Conflict("Project changed; reopen before adding a card")
             kind = data.get("kind")
             if kind:
                 if kind not in {"image", "video", "audio", "text"}:
@@ -163,9 +235,11 @@ def install_routes():
             for stub,node_id in interface["stubs"].items():
                 node=metadata["prompt"][node_id]
                 if node["class_type"] == "TuringMaterialText":
-                    selections[stub] = {"text":node["inputs"].get("text", "")}
-                elif node["inputs"].get("file"):
-                    relative, base = folder_paths.annotated_filepath(node["inputs"]["file"])
+                    value = node["inputs"].get("text", "")
+                    selections[stub] = {"text":value if isinstance(value, str) else ""}
+                elif node["inputs"].get("audio" if node["class_type"] == "TuringMaterialAudio" else "file"):
+                    file = node["inputs"].get("audio" if node["class_type"] == "TuringMaterialAudio" else "file")
+                    relative, base = folder_paths.annotated_filepath(file)
                     base = base or folder_paths.get_input_directory()
                     if Path(base).resolve() not in {Path(folder_paths.get_input_directory()).resolve(),Path(folder_paths.get_output_directory()).resolve()}:
                         raise ValueError("Material must belong to this instance's input or output")
@@ -179,8 +253,11 @@ def install_routes():
             identity=workflow_files.add_instance(project.root, workflow, title)
             for stub,selection in selections.items():
                 project.select(f"{identity}:{stub}",selection)
-            return identity
-        return web.json_response({"id":await asyncio.to_thread(add)})
+            return {"id": identity, "revision": workflow_files.load_json(project.root / "canvas.json")["revision"]}
+        def locked_add():
+            with workflow_files.LOCK:
+                return add()
+        return web.json_response(await asyncio.to_thread(locked_add))
 
     @endpoint("post", "/card/connect")
     async def connect_card(request):
@@ -209,7 +286,7 @@ def install_routes():
     @endpoint("post", "/history")
     async def history(request):
         data = await request.json()
-        result = await asyncio.to_thread(lambda: Project(data["directory"]).history(data["kind"], data.get("offset", 0), data.get("prefix", "")))
+        result = await asyncio.to_thread(lambda: Project(data["directory"]).history(data["kind"], data.get("offset", 0), data.get("prefix", ""), data.get("limit", 50)))
         return web.json_response({"items": result})
 
     @endpoint("post", "/patch")

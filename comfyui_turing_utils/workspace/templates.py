@@ -12,11 +12,11 @@ def material_template(kinds=("image", "video", "audio", "text")):
         node_id, type_ = i + 3, MATERIAL_TYPES[kind][0]
         incoming.append(dict(id=uuid.uuid4().hex, slot=i, name=kind.title(), kind="position", type=POSITION))
         outgoing.append(dict(id=uuid.uuid4().hex, slot=i, name=kind.title(), kind="value", type=type_))
-        values = {"stub_id":uuid.uuid4().hex, **({"text":""} if kind == "text" else {"file":""})}
+        values = {"stub_id":uuid.uuid4().hex, **({"text":""} if kind == "text" else {"audio" if kind == "audio" else "file":""})}
         if kind == "video":
             values.update(fps=30., bit_depth="auto", color_space="sRGB", codec="none")
         sockets = ([dict(name="images", type="IMAGE", link=None), dict(name="audio", type="AUDIO", link=None)]
-                   if kind == "video" else [dict(name="value", type=type_, link=None)])
+                   if kind == "video" else [dict(name="text" if kind == "text" else "value", type=type_, link=None)])
         sockets.append(dict(name="position", type=POSITION, link=i*2+1))
         nodes.append(dict(id=node_id, type="TuringMaterial"+kind.title(), title=kind.title(), pos=[380,i*320],
             size=[300,260], flags={}, order=i+1, mode=0, properties={}, widgets_values=list(values.values()),

@@ -1,6 +1,7 @@
 """Project JSON owns selected content; SQLite indexes media and execution records."""
 
 import json
+import math
 import re
 import sqlite3
 import uuid
@@ -110,6 +111,7 @@ class Project:
         path = inside(self.root, asset)
         if not path.is_file():
             raise ValueError("Material file is missing")
+        metadata = {**metadata, "bytes": path.stat().st_size}
         with self.connect() as db:
             db.execute("INSERT INTO materials(id,kind,name,metadata) VALUES(?,?,?,?)",
                        (asset, kind, path.name, json.dumps(metadata)))
@@ -128,12 +130,43 @@ class Project:
             raise ValueError("Material file is missing")
         return path
 
-    def history(self, kind, offset=0, prefix=""):
+    def history(self, kind, offset=0, prefix="", limit=50):
         with self.connect() as db:
             # instr avoids treating user prefixes as SQL LIKE patterns.
-            rows = db.execute("SELECT id,name,kind FROM materials WHERE kind=? AND instr(name,?)=1 ORDER BY created DESC,id DESC LIMIT 50 OFFSET ?",
-                              (kind, prefix, max(0, int(offset)))).fetchall()
+            rows = db.execute(
+                "SELECT id,name,kind FROM materials WHERE kind=? AND instr(name,?)=1 ORDER BY created DESC,id DESC LIMIT ? OFFSET ?",
+                (kind, prefix, -1 if limit == 0 else max(1, min(int(limit), 1000)), max(0, int(offset)))).fetchall()
         return [dict(row) for row in rows]
+
+    def settings(self):
+        with workflow_files.LOCK:
+            return {"name": self.root.name, "max_megapixels": 4.,
+                    **workflow_files.load_json(self.root / "canvas.json").get("settings", {})}
+
+    def save_settings(self, settings, revision):
+        if set(settings) != {"name", "max_megapixels"} or not isinstance(settings["name"], str) or not settings["name"].strip():
+            raise ValueError("Project needs a name and maximum megapixels")
+        pixels = settings["max_megapixels"]
+        if type(pixels) not in {int, float} or not math.isfinite(pixels) or pixels <= 0:
+            raise ValueError("Maximum megapixels must be positive and finite")
+        with workflow_files.LOCK:
+            canvas = workflow_files.load_json(self.root / "canvas.json")
+            if canvas["revision"] != revision:
+                raise Conflict("Project changed; reopen before changing settings")
+            canvas["settings"] = settings
+            canvas["revision"] += 1
+            workflow_files.atomic_json(self.root / "canvas.json", canvas)
+        return canvas["revision"]
+
+    def statistics(self):
+        with self.connect() as db:
+            media = db.execute("SELECT kind, count(*) AS count, sum(COALESCE(json_extract(metadata,'$.bytes'),0)) AS bytes FROM materials GROUP BY kind").fetchall()
+        with workflow_files.LOCK:
+            canvas = workflow_files.load_json(self.root / "canvas.json")
+        counts = {kind: 0 for kind in ("image", "video", "audio", "text")}
+        counts.update({row["kind"]: row["count"] for row in media})
+        counts["text"] = sum("text" in value for value in canvas["selections"].values())
+        return {"cards": len(canvas["cards"]), "materials": counts, "bytes": sum(row["bytes"] or 0 for row in media)}
 
     def begin_run(self, target, revision):
         run_id = str(uuid.uuid4())

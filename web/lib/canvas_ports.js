@@ -1,6 +1,7 @@
 export const INPUTS = "TuringCanvasInputs";
 export const OUTPUTS = "TuringCanvasOutputs";
 export const POSITION = "TURING_CANVAS_POSITION";
+export const MATERIAL_TYPES = new Set(["STRING", "IMAGE", "VIDEO", "AUDIO"]);
 export function entries(node) {
   return JSON.parse(node.widgets.find((w) => w.name === "ports").value || "[]");
 }
@@ -78,25 +79,41 @@ export function syncPorts(node, ports) {
     for (const link of outputLinks.get(s._portId) || []) link.origin_slot = i;
   }
   node.widgets.find((w) => w.name === "ports").value = JSON.stringify(ports);
-  node.setSize(node.computeSize());
   node._syncingPorts = false;
   appendSocket(node);
+  alignInputs(node);
+  node.setSize(node.computeSize());
   node.graph?.setDirtyCanvas(true, true);
 }
 export function appendSocket(node) {
   if (node._appendingSocket || node._syncingPorts) return;
   node._appendingSocket = true;
-  const inputs = node.comfyClass === OUTPUTS || node.type === OUTPUTS;
-  const slots = inputs ? node.inputs : node.outputs;
-  if (!slots?.some((s) => s._append)) {
-    if (inputs) node.addInput("＋", "*");
-    else node.addOutput("＋", "*");
-    (inputs ? node.inputs : node.outputs).at(-1)._append = true;
+  for (const inputs of [true, false]) {
+    const slots = inputs ? node.inputs : node.outputs;
+    if (!slots?.some((s) => s._append)) {
+      if (inputs) node.addInput("＋", "*");
+      else node.addOutput("＋", "*");
+      (inputs ? node.inputs : node.outputs).at(-1)._append = true;
+    }
   }
-  for (const s of [...node.inputs, ...node.outputs]) delete s.pos;
   node._appendingSocket = false;
 }
+export function alignInputs(node) {
+  for (const s of [...node.inputs, ...node.outputs]) delete s.pos;
+  for (const input of node.inputs) {
+    const index = node.outputs.findIndex((s) =>
+      input._append ? s._append : s._portId === input._portId,
+    );
+    if (index >= 0)
+      input.pos = [0, node.getConnectionPos(false, index)[1] - node.pos[1]];
+  }
+}
 export function addPort(node, name, type = "STRING", kind = "value") {
+  if (
+    (kind === "value" && !MATERIAL_TYPES.has(type)) ||
+    (kind === "position" && type !== POSITION)
+  )
+    throw Error("Canvas endpoints only support Image, Video, Audio and Text");
   const ports = entries(node),
     port = { id: crypto.randomUUID(), slot: ports.length, name, type, kind };
   ports.push(port);

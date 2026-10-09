@@ -3,7 +3,6 @@
 import copy
 import hashlib
 import json
-import math
 import os
 from pathlib import Path
 import re
@@ -160,10 +159,10 @@ def document(root):
                 material = identities[interface["stubs"][interface["positions"][port["id"]]]]
                 materials.append(material)
                 layout.append({"material": material})
-            elif port["type"] in {"STRING", "INT", "FLOAT", "BOOLEAN", "COMBO"}:
+            elif port["type"] == "STRING":
                 value = data.get("overrides", {}).get(port["id"], port.get("default"))
                 if value is None:
-                    value = {"STRING":"", "INT":0, "FLOAT":0., "BOOLEAN":False, "COMBO":""}[port["type"]]
+                    value = ""
                 parameters[port["id"]] = value
                 field = {"node": configuration_id, "input": port["id"], "label": port["name"], "type":port["type"], "options":port.get("options"),
                          "connected": port["id"] in bindings or f"port_{port['slot']}" in data["prompt"][interface["input_node"]]["inputs"] and port["id"] not in data.get("overrides", {})}
@@ -230,10 +229,7 @@ def patch(root, revision, changes):
                 if port is None:
                     raise ValueError("Unknown card input")
                 value = change["value"]
-                valid = {"STRING":type(value) is str, "BOOLEAN":type(value) is bool,
-                         "INT":type(value) is int, "FLOAT":type(value) in (int,float) and math.isfinite(value),
-                         "COMBO": value in port.get("options", [])}
-                if not valid.get(port["type"], False):
+                if port["type"] != "STRING" or not isinstance(value, str):
                     raise ValueError("Value does not match the endpoint parameter type")
                 data["overrides"][change["name"]] = change["value"]
             else:

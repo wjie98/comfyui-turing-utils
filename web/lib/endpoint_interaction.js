@@ -1,4 +1,11 @@
-import { POSITION, entries, syncPorts } from "./canvas_ports.js";
+import {
+  POSITION,
+  INPUTS,
+  MATERIAL_TYPES,
+  entries,
+  syncPorts,
+} from "./canvas_ports.js";
+import { PortReorder } from "./port_reorder.js";
 
 // All mutation is local to endpoint nodes; the native graph still owns links and undo.
 export function installEndpoint(node) {
@@ -8,35 +15,37 @@ export function installEndpoint(node) {
     node.graph?.afterChange();
   };
   const grow = (type, name, widget) => {
+    if (
+      !MATERIAL_TYPES.has(type) &&
+      !(type === POSITION && node.type === INPUTS)
+    )
+      return false;
     const ps = entries(node);
     const p = {
       id: crypto.randomUUID(),
       slot: ps.length,
       name: name || type,
-      type: Array.isArray(type) ? "COMBO" : type,
+      type,
       kind: type === POSITION ? "position" : "value",
     };
-    if (widget) {
+    if (widget && type === "STRING") {
       p.default = widget.value;
-      if (p.type === "COMBO") {
-        const values = widget.options?.values;
-        p.options = typeof values === "function" ? values() : values;
-      }
     }
-    if (Array.isArray(type)) p.options = type;
     ps.push(p);
     syncPorts(node, ps);
+    return true;
   };
   node.onConnectInput = function (slot, type, output, source) {
     if (this.inputs[slot]?._append) {
-      grow(type, output.label || output.name);
+      if (!MATERIAL_TYPES.has(type)) return false;
+      return grow(type, output.label || output.name);
     }
     return true;
   };
   node.onConnectOutput = function (slot, type, input, target) {
     if (this.outputs[slot]?._append) {
       const widget = target.widgets?.find((w) => w.name === input.name);
-      grow(
+      return grow(
         type,
         input.name === "position" ? target.title : input.label || input.name,
         widget,
@@ -44,6 +53,18 @@ export function installEndpoint(node) {
     }
     return true;
   };
+  const rename = (id) => {
+    const port = entries(node).find((p) => p.id === id);
+    node.graph.list_of_graphcanvas[0].prompt("端口名称", port.name, (value) => {
+      if (!value?.trim()) return;
+      commit(() => {
+        const ps = entries(node);
+        ps.find((p) => p.id === id).name = value.trim();
+        syncPorts(node, ps);
+      });
+    });
+  };
+  node.portReorder = new PortReorder(node, rename);
   node.getExtraMenuOptions = function (_, options) {
     options.push({
       content: "端口设置",
@@ -54,17 +75,7 @@ export function installEndpoint(node) {
             options: [
               {
                 content: "重命名",
-                callback: () =>
-                  this.graph.list_of_graphcanvas[0].prompt(
-                    "端口名称",
-                    p.name,
-                    (value) =>
-                      commit(() => {
-                        const ps = entries(this);
-                        ps[index].name = value;
-                        syncPorts(this, ps);
-                      }),
-                  ),
+                callback: () => rename(p.id),
               },
               ...[-1, 1]
                 .filter(

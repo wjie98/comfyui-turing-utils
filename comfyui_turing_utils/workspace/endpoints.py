@@ -2,6 +2,10 @@
 
 import json
 
+from .protocol import MATERIAL_TYPES
+
+DATA_TYPES = {value[0] for value in MATERIAL_TYPES.values()}
+
 INPUTS = "TuringCanvasInputs"
 OUTPUTS = "TuringCanvasOutputs"
 POSITION = "TURING_CANVAS_POSITION"
@@ -39,6 +43,10 @@ def parse_ports(value):
             raise ValueError("Unknown endpoint port kind")
         if port["kind"] == "position" and port["type"] != POSITION:
             raise ValueError("Position markers must use the position type")
+        if port["kind"] == "value" and port["type"] not in DATA_TYPES:
+            raise ValueError("Canvas endpoints only support IMAGE, VIDEO, AUDIO and STRING materials")
+        if "default" in port and (port["type"] != "STRING" or not isinstance(port["default"], str)):
+            raise ValueError("Only text materials may have an inline default")
         identities.add(port["id"])
         slots.add(slot)
     if slots != set(range(len(result))):
@@ -54,6 +62,18 @@ class CanvasInputs:
     @classmethod
     def INPUT_TYPES(cls):
         return {"required": {"ports": ("STRING", {"default": "[]", "hidden": True, "socketless": True})}, "optional": PortInputs()}
+
+    @classmethod
+    def VALIDATE_INPUTS(cls, ports, input_types):
+        try:
+            entries = parse_ports(ports)
+        except ValueError as error:
+            return str(error)
+        allowed = {f"port_{p['slot']}": p["type"] for p in entries if p["kind"] == "value"}
+        for name, received in input_types.items():
+            if name not in allowed or received not in {allowed[name], "*"}:
+                return "Connected input does not match its material port"
+        return True
 
     def check_lazy_status(self, ports, **kwargs):
         return [f"port_{p['slot']}" for p in parse_ports(ports)

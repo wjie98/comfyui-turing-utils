@@ -67,8 +67,12 @@ def compile_segment(prompt, target, selections, directory, run_id, revision, fre
         visiting.add(key)
         inputs = copy.deepcopy(node.get("inputs", {}))
         if destination:
+            if kind == "text":
+                inputs["value"] = inputs.pop("text", None)
             if kind == "video" and "images" in inputs:
                 inputs["value"] = inputs.pop("images")
+            if kind != "video":
+                inputs.pop("audio", None)
             inputs = {k: v for k, v in inputs.items() if k in {"value", "audio", "fps", "bit_depth", "color_space", "codec"}}
             if "value" not in inputs or not is_link(inputs["value"]):
                 raise ValueError("This material has no connected computation input")

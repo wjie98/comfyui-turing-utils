@@ -15,7 +15,7 @@ def project_workflow(project):
         document = project.document()
         positions = canvas.get("layout", {})
         nodes = [{"id":1, "type":PROJECT, "pos":[20,20], "size":[310,110],
-                  "flags":{"pinned":True}, "properties":{"directory":project.directory}, "order":0, "mode":0}]
+                  "flags":{"pinned":True}, "properties":{"directory":project.directory, "settings":project.settings()}, "order":0, "mode":0}]
         for i, card in enumerate(document["cards"], 2):
             layout = positions.get(card["id"], {})
             nodes.append({"id":i, "type":CARD, "title":card["title"],
@@ -27,7 +27,7 @@ def project_workflow(project):
                     "last_node_id":len(nodes), "last_link_id":0, "nodes":nodes, "links":[], "groups":canvas.get("groups", []),
                     "extra":{"turing_project":{"directory":project.directory, "revision":canvas["revision"]},
                              "ds":canvas.get("view", {"scale":1, "offset":[0,0]})}}
-        return {"workflow":workflow, "document":document}
+        return {"workflow":workflow, "document":document, "statistics":project.statistics()}
 
 
 def save_layout(project, workflow, revision):
@@ -77,4 +77,4 @@ def save_layout(project, workflow, revision):
         canvas["groups"] = copy.deepcopy(workflow.get("groups", []))
         canvas["revision"] += 1
         files.atomic_json(path, canvas)
-        return {"revision":canvas["revision"]}
+        return {"revision":canvas["revision"], "statistics":project.statistics()}
