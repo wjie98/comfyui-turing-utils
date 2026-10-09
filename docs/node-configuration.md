@@ -13,9 +13,11 @@ are unchanged by this restoration. Fused SeC/upscaler nodes retain their loader
 fields followed by their existing apply inputs; retired entry points are not
 reintroduced. Legacy flat noise-grid migration remains in place.
 
-Canvas is outside this change: its Attention schema explicitly requests the
-previous advanced grouping. SeC/Crop stable connected controls remain a separate
-compatibility concern, not an advanced-parameter feature.
+The independent Material Workspace is outside this ordinary-node policy.
+SeC/Crop controls retain native widget-backed sockets on the same row as their
+editors. Older workflows saved with detached bindings are repaired on load,
+without replacing slots or renumbering links. Connected editors stay visible
+and disabled. No separate top-of-node socket list is created for these fields.
 
 Restoration checklist: simple loaders/VAE/upscaler, media/ROI/mask prompts,
 padding/segment output/prefix noise, SeC, Bernini and ordinary Attention all use
@@ -95,13 +97,28 @@ relaxed. Do not treat this result as a clean full numerical/kernel regression.
 - Unified attention offers Sol/SLA/Veda under Models; individual strategy IDs,
   Image Sol, Static Virtual KV and experimental Block Cache are removed.
 - Chat settings are inline advanced inputs; the old Options node/socket is removed.
-- INT8 forcing, H3 decode backend, SeC backend and upscaler precision remain
-  advanced, with unchanged defaults.
+- INT8 forcing, H3 decode backend, SeC backend and upscaler precision are
+  ordinary controls, with unchanged defaults.
 - Old model loader/apply IDs are removed. Five private, dev-only execution
   nodes preserve shared loading and independent cache boundaries.
 - Public menus have one level beneath Turing Utils; see the inventory.
 - Keep load/save/merge, crop/stitch, continuation/trim and prefix noise separate.
   Their different workflow positions and independent reuse are intentional.
 - Ordinary workflows retain these composable boundaries. The separate
-  [experimental Material Canvas](material-canvas.md) now provides task cards;
-  it deliberately cannot mix with ordinary nodes.
+  [Material Workspace](material-canvas.md) uses ordinary workflows as cards.
+
+### Native layout regression
+
+`tests/browser/native_parameter_layout.mjs` builds a native-reference node from
+each public ordinary node's schema, without the plugin's layout hooks. It checks
+parameter order, native widget/socket row alignment, DynamicCombo branches,
+Primitive connections, disconnects, and serialized reloads. Crop/SeC additionally
+reload the detached bindings produced by the old workaround. The dedicated
+Crop/SeC browser tests also assert real upstream API links and same-row geometry.
+Visibility alone is not a layout acceptance criterion.
+
+The 2026-10-09 classic frontend 1.53.6 run passed for 37 ordinary nodes,
+13 dynamic branches and Chat's advanced toggle. The reference uses the same
+schema through native registration; it does not apply Turing's parameter-layout
+hooks. Stage/Keyframe references keep their intentional dynamic data-port counts.
+This is not a claim of testing every older frontend or third-party extension.

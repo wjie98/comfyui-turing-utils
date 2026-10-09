@@ -8,7 +8,7 @@ test('connected coordinate controls retain their rows, values and sockets', () =
   const inputs = widgets.map(w=>({name:w.name,widget:{name:w.name},link:null}));
   const node = {widgets, inputs}, restore = stableInputRows(node, widgets.map(w=>w.name));
   restore();
-  assert.ok(inputs.every(input => !input.widget));
+  assert.ok(inputs.every(input => input.widget?.name === input.name));
   inputs[0].link = 42;
   widgets[0].hidden = true; widgets[0].type = 'converted-widget'; widgets[0].computeSize = () => [0,-4];
   restore();
@@ -37,9 +37,25 @@ test('crop numeric and combo controls survive late legacy input conversion', () 
     widget.type='converted-widget';widget.hidden=true;widget.computeSize=()=>[0,-4];
     restore();
     assert.equal(widget.type,type);assert.equal(widget.hidden,false);assert.equal(widget.disabled,true);
-    assert.equal(widget.value,value);assert.equal(slot.link,100+index);assert.equal(slot.widget,undefined);
+    assert.equal(widget.value,value);assert.equal(slot.link,100+index);assert.equal(slot.widget.name,widget.name);
+    assert.deepEqual(slot.pos,[0,0]);
     assert.equal(widget.computeSize()[1],20);
     slot.link=null;restore();assert.equal(widget.disabled,false);
   }
   assert.equal(node.inputs[0].link,1);assert.equal(node.inputs[1].link,2);
+});
+
+test('saved detached sockets recover native metadata without replacing links or slots', () => {
+  const config = Symbol('native widget config');
+  const binding = {name:'width', [config]: () => ['INT', {min:1}]};
+  const widget = {name:'width', type:'number', value:768, options:{}};
+  const node = {widgets:[widget],inputs:[{name:'width',widget:binding,link:null}]};
+  const restore = stableInputRows(node,['width']);
+  const savedSlot = {name:'width',link:42};
+  node.inputs = [savedSlot];
+  restore();
+  assert.equal(savedSlot.widget,binding);
+  assert.equal(savedSlot.widget[config]()[0],'INT');
+  assert.equal(node.inputs[0],savedSlot);
+  assert.equal(savedSlot.link,42);
 });

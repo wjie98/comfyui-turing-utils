@@ -1,7 +1,5 @@
-// These fields are both editable controls and named connection targets.
-// Use ordinary typed sockets, not widget-backed sockets: legacy frontend
-// conversion hooks otherwise hide the text editor when a link is attached.
-// Keep the editor separately, without recreating sockets or changing indices.
+// Preserve native widget-backed sockets. Older plugin versions detached these
+// bindings; restore them without moving slots or changing serialized values.
 export const stableRowNames = {
   TuringUtilsSeCTrackVisualConcept: ["positive_coords", "negative_coords"],
   TuringUtilsVideoMaskGuidedCrop: ["width", "height", "context_scale", "missing_mode", "smooth_window", "mask_threshold"],
@@ -9,19 +7,19 @@ export const stableRowNames = {
 
 export function stableInputRows(node, names) {
   const originals = new Map();
+  const bindings = new Map();
   for (const widget of node.widgets ?? []) {
     if (!names.includes(widget.name)) continue;
     originals.set(widget, Object.fromEntries(
       ["type", "computeSize", "draw", "mouse", "serializeValue", "disabled"].map(key => [key, widget[key]])
     ));
+    const slot = node.inputs?.find(input => input.widget?.name === widget.name || input.name === widget.name);
+    if (slot?.widget) bindings.set(widget.name, slot.widget);
   }
   return () => {
     for (const [widget, original] of originals) {
       const slot = node.inputs?.find(input => input.widget?.name === widget.name || input.name === widget.name);
-      if (slot?.widget) {
-        delete slot.widget;
-        delete slot.pos; // Drop the old widget-row anchor; lay out as a normal input.
-      }
+      if (slot && !slot.widget) slot.widget = bindings.get(widget.name) ?? {name: widget.name};
       const linked = slot?.link != null;
       if (widget.hidden || String(widget.type).startsWith("converted-widget")) {
         for (const key of ["type", "computeSize", "draw", "mouse", "serializeValue"]) {

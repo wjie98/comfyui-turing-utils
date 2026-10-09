@@ -16,11 +16,14 @@ try {
       const widget=target.widgets.find(w=>w.name===name);
       check(target.getLayoutWidgets().includes(widget), 'Missing coordinate row: '+name);
       check(!widget.hidden && widget.type==='text', 'Hidden/converted coordinate: '+name);
+      const i=target.inputs.findIndex(s=>s.name===name);
+      check(target.inputs[i]?.widget?.name===name,'Detached coordinate socket '+name);
+      check(Math.abs(target.getConnectionPos(true,i)[1]-target.pos[1]-widget.y-LiteGraph.NODE_SLOT_HEIGHT/2)<0.1,'Socket not on coordinate row '+name);
       return widget.y;
     });
     await wait(); const before=positions();
     for (const name of ['positive_coords','negative_coords']) {
-      check(!target.inputs.find(s=>s.name===name).widget, 'Coordinate socket still uses widget-conversion path');
+      check(target.inputs.find(s=>s.name===name).widget?.name===name, 'Coordinate socket lost native binding');
     }
     for(const name of ['positive_coords','negative_coords']) {
       const output=source.outputs.findIndex(s=>s.name===name),input=target.inputs.findIndex(s=>s.name===name);

@@ -15,11 +15,15 @@ app.registerExtension({
   },
   nodeCreated(node) {
     if (!node.comfyClass?.startsWith("TuringUtils")) return;
-    const restoreInputs = stableInputRows(node, stableRowNames[node.comfyClass] ?? []);
+    const isChat = node.comfyClass === "TuringUtilsMultimodalPromptChat";
+    const rowNames = stableRowNames[node.comfyClass];
+    if (!isChat && !rowNames) return;
+    const restoreInputs = stableInputRows(node, rowNames ?? []);
     // The legacy canvas reads widget.advanced; Nodes 2.0 reads options.advanced.
     // Bridge the schema flag, keeping the frontend's own toggle and persistence.
     const sync = () => {
       restoreInputs();
+      if (!isChat) return;
       for (const widget of node.widgets ?? []) {
         if (widget.options?.advanced !== undefined && widget.advanced !== widget.options.advanced) {
           widget.advanced = widget.options.advanced;
@@ -33,15 +37,14 @@ app.registerExtension({
         // DynamicCombo can create children after nodeCreated/onConfigure.
         sync();
         const widgets = layoutWidgets.apply(this, args);
+        if (!isChat) return widgets;
         const visible = globalThis.LiteGraph?.vueNodesMode ? widgets : widgets.filter(w => this.isWidgetVisible(w));
         // Sort the display only: widgets_values must retain its serialized order.
-        return this.comfyClass === "TuringUtilsMultimodalPromptChat"
-          ? advancedLast(visible)
-          : visible;
+        return advancedLast(visible);
       };
     }
     // Size new nodes compactly; onConfigure still restores users' saved sizes.
-    if (node.hasAdvancedWidgets?.()) node.setSize(node.computeSize());
+    if (isChat && node.hasAdvancedWidgets?.()) node.setSize(node.computeSize());
     for (const method of ["onConfigure", "onWidgetChanged", "onConnectionsChange"]) {
       const original = node[method];
       node[method] = function (...args) {

@@ -18,6 +18,9 @@ try {
     const rows=()=>names.map(name=>{
       const w=crop.widgets.find(w=>w.name===name);
       check(crop.getLayoutWidgets().includes(w)&&!w.hidden&&!w.advanced,'Missing ordinary control '+name);
+      const i=crop.inputs.findIndex(s=>s.name===name);
+      check(crop.inputs[i]?.widget?.name===name,'Detached widget socket '+name);
+      check(Math.abs(crop.getConnectionPos(true,i)[1]-crop.pos[1]-w.y-LiteGraph.NODE_SLOT_HEIGHT/2)<0.1,'Socket not on widget row '+name);
       return w.y;
     });
     await wait();const before=rows();
