@@ -124,9 +124,7 @@ def device_capabilities(device: torch.device | str) -> DeviceCapabilities:
 def is_supported_turing_device(device: torch.device) -> bool:
     """Return whether ``device`` is exact sm75 with usable Tensor Cores."""
     capabilities = device_capabilities(device)
-    return bool(
-        capabilities.tensor_core and capabilities.compute_capability == (7, 5)
-    )
+    return bool(capabilities.tensor_core and capabilities.compute_capability == (7, 5))
 
 
 def is_supported_tensor_core_device(device: torch.device) -> bool:

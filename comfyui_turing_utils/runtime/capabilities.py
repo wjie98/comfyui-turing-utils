@@ -43,7 +43,9 @@ class CapabilityResult:
 
     def require(self, operation: str) -> None:
         if not self.supported:
-            raise RuntimeError(f"{operation} is unavailable: {self.reason or 'unsupported'}")
+            raise RuntimeError(
+                f"{operation} is unavailable: {self.reason or 'unsupported'}"
+            )
 
 
 @dataclass(frozen=True, slots=True)
@@ -55,7 +57,9 @@ class KernelCapabilities:
 
     def supports(self, feature: str) -> CapabilityResult:
         if not self.installed:
-            return CapabilityResult(False, self.reason or "kernel package is not installed")
+            return CapabilityResult(
+                False, self.reason or "kernel package is not installed"
+            )
         if feature not in self.features:
             return CapabilityResult(False, f"kernel feature {feature!r} is unavailable")
         return CapabilityResult(True)
@@ -69,7 +73,9 @@ class RuntimeCapabilities:
     def supports(self, feature: str) -> CapabilityResult:
         if feature == "stable_sage":
             if self.device.compute_capability != (7, 5) or not self.device.tensor_core:
-                return CapabilityResult(False, "bundled stable Sage requires an sm75 Tensor Core GPU")
+                return CapabilityResult(
+                    False, "bundled stable Sage requires an sm75 Tensor Core GPU"
+                )
         elif feature in {
             "dense_w8a8",
             "sol",
@@ -84,9 +90,12 @@ class RuntimeCapabilities:
             "core_fusions",
             "ffn_channel_sharding",
             "ffn_half_width",
+            "grouped_w6a8",
         }:
             if not self.device.tensor_core:
-                return CapabilityResult(False, "an NVIDIA sm75+ Tensor Core GPU is required")
+                return CapabilityResult(
+                    False, "an NVIDIA sm75+ Tensor Core GPU is required"
+                )
         return self.kernel.supports(feature)
 
 
@@ -98,6 +107,7 @@ _MINIMUM_VERSIONS = {
     "sla": (0, 29, 1),
     "reusable_k_anchor": (0, 30, 0),
     "ffn_channel_sharding": (0, 30, 0),
+    "grouped_w6a8": (0, 45, 0),
 }
 
 
@@ -111,6 +121,10 @@ def kernel_capabilities() -> KernelCapabilities:
         return KernelCapabilities(False, version, frozenset(), str(error))
 
     features = set()
+    if version >= _MINIMUM_VERSIONS["grouped_w6a8"] and kernel_extension_has_symbol(
+        "turing_codebook_w4a8_linear"
+    ):
+        features.add("grouped_w6a8")
     if all(
         kernel_extension_has_symbol(symbol)
         for symbol in (
@@ -120,12 +134,9 @@ def kernel_capabilities() -> KernelCapabilities:
         )
     ):
         features.add("core_fusions")
-    if (
-        version >= _MINIMUM_VERSIONS["ffn_channel_sharding"]
-        and kernel_extension_has_symbol(
-            "turing_swiglu_int8_convrot_quantize_scaled"
-        )
-    ):
+    if version >= _MINIMUM_VERSIONS[
+        "ffn_channel_sharding"
+    ] and kernel_extension_has_symbol("turing_swiglu_int8_convrot_quantize_scaled"):
         features.add("ffn_channel_sharding")
     if all(
         kernel_extension_has_symbol(symbol)
@@ -164,18 +175,12 @@ def kernel_capabilities() -> KernelCapabilities:
             "quant_qk_rms_rope_int8_mapped_cuda", "_sage_fused_sm75"
         )
     )
-    if (
-        mapped_qk
-        and kernel_extension_has_symbol(
-            "gather_value_int8_mapped_cuda", "_sage_fused_sm75"
-        )
+    if mapped_qk and kernel_extension_has_symbol(
+        "gather_value_int8_mapped_cuda", "_sage_fused_sm75"
     ):
         features.add("mapped_kv")
-    if (
-        "mapped_kv" in features
-        and kernel_extension_has_symbol(
-            "sol_w8a8_precompute_mapped_summaries", "_sage_qattn_sm75"
-        )
+    if "mapped_kv" in features and kernel_extension_has_symbol(
+        "sol_w8a8_precompute_mapped_summaries", "_sage_qattn_sm75"
     ):
         features.add("mapped_sparse_kv")
     if mapped_qk and kernel_extension_has_symbol(

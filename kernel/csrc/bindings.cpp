@@ -261,7 +261,7 @@ at::Tensor turing_codebook_w4a8_linear(at::Tensor activation,
                                        at::Tensor activation_scale,
                                        at::Tensor group_scale,
                                        at::Tensor channel_scale,
-                                       at::Tensor codebook,
+                                       std::optional<at::Tensor> codebook,
                                        std::optional<at::Tensor> bias,
                                        int64_t group_size,
                                        int64_t chunk_rows) {
@@ -270,7 +270,9 @@ at::Tensor turing_codebook_w4a8_linear(at::Tensor activation,
     activation_scale = activation_scale.reshape({-1}).to(at::kFloat).contiguous();
     group_scale = group_scale.contiguous();
     channel_scale = channel_scale.reshape({-1}).to(at::kFloat).contiguous();
-    codebook = codebook.reshape({-1}).to(at::kFloat).contiguous();
+    if (codebook.has_value()) {
+        codebook = codebook.value().reshape({-1}).to(at::kFloat).contiguous();
+    }
     if (bias.has_value()) {
         bias = bias.value().reshape({-1}).to(at::kFloat).contiguous();
     }
@@ -287,7 +289,7 @@ at::Tensor turing_codebook_w4a8_linear(at::Tensor activation,
                     activation.device() == group_scale.device() &&
                     activation.device() == activation_scale.device() &&
                     activation.device() == channel_scale.device() &&
-                    activation.device() == codebook.device(),
+                    (!codebook.has_value() || activation.device() == codebook.value().device()),
                 "all codebook W4A8 tensors must use the same CUDA device");
 
     const int64_t m = activation.size(0);
@@ -298,7 +300,10 @@ at::Tensor turing_codebook_w4a8_linear(at::Tensor activation,
                 "codebook W4A8 dimensions exceed the CUDA kernel range");
     TORCH_CHECK(k % 16 == 0 && n % 8 == 0,
                 "codebook W4A8 requires K divisible by 16 and N divisible by 8");
-    TORCH_CHECK(weight.size(1) * 2 == k, "packed weight K must match activation K");
+    const bool w6 = weight.size(1) * 8 == k * 6;
+    TORCH_CHECK(w6 || weight.size(1) * 2 == k, "packed weight must store W4 or W6 at activation K");
+    TORCH_CHECK(!w6 || (k % 32 == 0 && group_size >= 16 && group_size % 16 == 0),
+                "W6A8 requires K%32=0 and group_size a multiple of 16");
     TORCH_CHECK(group_size >= 4 && k % group_size == 0 &&
                     (16 % group_size == 0 || group_size % 16 == 0),
                 "unsupported codebook W4A8 group_size");
@@ -308,7 +313,8 @@ at::Tensor turing_codebook_w4a8_linear(at::Tensor activation,
                 "activation_scale must contain one value per activation row");
     TORCH_CHECK(channel_scale.numel() == n,
                 "channel_scale must contain one value per output channel");
-    TORCH_CHECK(codebook.numel() == 16, "codebook must contain 16 float32 values");
+    TORCH_CHECK(w6 ? !codebook.has_value() : (codebook.has_value() && codebook.value().numel() == 16),
+                "W4A8 requires a 16-entry codebook; uniform W6A8 requires no codebook");
     if (bias.has_value()) {
         TORCH_CHECK(bias.value().is_cuda() && bias.value().device() == activation.device(),
                     "bias must use the activation CUDA device");
@@ -328,7 +334,12 @@ at::Tensor turing_codebook_w4a8_linear(at::Tensor activation,
     // contraction is already limited to one resident CTA on SM75.
     const bool force_inline = chunk_rows == -1;
     TORCH_CHECK(chunk_rows >= -1, "chunk_rows must be -1, 0, or a positive multiple of 8");
-    const bool inline_decode = group_size == 16 && m > 8192 && chunk_rows <= 0;
+    // W6 staging reuses the asynchronous Ampere INT8 schedule. A40 measurements
+    // favor that path over register decode; keep SM75's bounded inline tile,
+    // and retain explicit inline diagnostics on every supported architecture.
+    const bool prefer_inline = !w6 || properties->major == 7;
+    const bool inline_decode = group_size == 16 && m > 8192 && chunk_rows <= 0
+        && (force_inline || prefer_inline);
     constexpr int64_t default_chunk_rows = 4096;
     if (inline_decode) {
         chunk_rows = 0;
@@ -355,7 +366,7 @@ at::Tensor turing_codebook_w4a8_linear(at::Tensor activation,
         from_torch(activation_scale),
         from_torch(group_scale),
         from_torch(channel_scale),
-        from_torch(codebook),
+        maybe_tensor(codebook),
         maybe_tensor(bias),
         workspace.defined() ? from_torch(workspace) : Tensor{},
         from_torch(output),
@@ -939,14 +950,31 @@ std::tuple<at::Tensor, at::Tensor> turing_bf16_int8_convrot_quantize(
     return {output, scales};
 }
 
-std::tuple<at::Tensor, at::Tensor> turing_fp16_int8_quantize(at::Tensor input) {
+std::tuple<at::Tensor, at::Tensor> turing_fp16_int8_convrot_quantize(
+    at::Tensor input, int64_t group_size, int64_t input_act,
+    std::optional<at::Tensor> input_act_weight, double input_act_eps) {
     input = input.contiguous();
     check_cuda_2d(input, "input");
-    TORCH_CHECK(input.scalar_type() == at::kHalf, "FP16 quantization input must be float16");
+    TORCH_CHECK(input.scalar_type() == at::kHalf, "FP16 ConvRot input must be float16");
+    TORCH_CHECK(group_size == 256, "FP16 ConvRot requires group_size=256");
+    TORCH_CHECK(input_act >= 0 && input_act <= 3, "Unsupported FP16 ConvRot activation");
+    TORCH_CHECK(input_act != 2 || input.size(1) % 2 == 0, "SwiGLU input width must be even");
     const int64_t rows = input.size(0);
-    const int64_t hidden = input.size(1);
+    const int64_t hidden = input_act == 2 ? input.size(1) / 2 : input.size(1);
     TORCH_CHECK(rows > 0 && hidden > 0 &&
-                rows <= INT_MAX && hidden <= INT_MAX, "Invalid FP16 quantization shape");
+                rows <= INT_MAX && hidden <= INT_MAX && hidden % 256 == 0,
+                "FP16 ConvRot requires positive dimensions and K divisible by 256");
+    if (input_act == 3) {
+        TORCH_CHECK(input_act_weight.has_value(), "RMSNorm requires input_act_weight");
+        auto &weight = *input_act_weight;
+        TORCH_CHECK(weight.device() == input.device() && weight.dim() == 1 && weight.numel() == hidden,
+                    "RMSNorm weight must be a same-device vector of length K");
+        TORCH_CHECK(weight.scalar_type() == at::kHalf || weight.scalar_type() == at::kFloat,
+                    "RMSNorm weight must be float16 or float32");
+        TORCH_CHECK(std::isfinite(input_act_eps) && input_act_eps >= 0,
+                    "RMSNorm epsilon must be finite and nonnegative");
+        weight = weight.contiguous();
+    }
     const at::cuda::CUDAGuard device_guard(input.device());
     const cudaDeviceProp *properties = getCurrentDeviceProperties();
     TORCH_CHECK(properties->major > 7 || (properties->major == 7 && properties->minor >= 5),
@@ -954,8 +982,9 @@ std::tuple<at::Tensor, at::Tensor> turing_fp16_int8_quantize(at::Tensor input) {
     auto output = at::empty({rows, hidden}, input.options().dtype(at::kChar));
     auto scales = at::empty({rows, 1}, input.options().dtype(at::kFloat));
     TorchOpContext ctx;
-    comfyui_turing_utils::kernels::turing_fp16_int8_quantize(
-        from_torch(input), from_torch(output), from_torch(scales));
+    comfyui_turing_utils::kernels::turing_fp16_int8_convrot_quantize(
+        from_torch(input), from_torch(output), from_torch(scales), input_act,
+        maybe_tensor(input_act_weight), input_act_eps);
     return {output, scales};
 }
 
@@ -1301,7 +1330,11 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
           pybind11::arg("activation"), pybind11::arg("weight"),
           pybind11::arg("activation_scale"), pybind11::arg("weight_scale"),
           pybind11::arg("bias") = std::nullopt);
-    m.def("turing_fp16_int8_quantize", &turing_fp16_int8_quantize, pybind11::arg("input"));
+    m.def("turing_fp16_int8_convrot_quantize", &turing_fp16_int8_convrot_quantize,
+          pybind11::arg("input"), pybind11::arg("group_size") = 256,
+          pybind11::arg("input_act") = 0,
+          pybind11::arg("input_act_weight") = std::nullopt,
+          pybind11::arg("input_act_eps") = 0.0);
     m.def("turing_dequantize_int8_bf16",
           &turing_dequantize_int8_bf16,
           pybind11::arg("accumulator"),

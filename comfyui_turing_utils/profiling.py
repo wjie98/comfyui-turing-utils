@@ -57,9 +57,7 @@ class _ProfileBucket:
     pending: bool = False
     reported: bool = False
     samples: Counter = field(default_factory=Counter)
-    tensor_samples: list[tuple[str, torch.Tensor, float]] = field(
-        default_factory=list
-    )
+    tensor_samples: list[tuple[str, torch.Tensor, float]] = field(default_factory=list)
 
 
 class CudaPhaseProfiler:
@@ -95,7 +93,9 @@ class CudaPhaseProfiler:
             return False
         if self._current_bucket is not None:
             bucket = self._buckets.get(self._current_bucket)
-            return bool(bucket is not None and not bucket.pending and not bucket.reported)
+            return bool(
+                bucket is not None and not bucket.pending and not bucket.reported
+            )
         # Legacy callers may record one implicit bucket before selecting a
         # scope. Once any bucket exists, only begin_operation() may enable a
         # new window; this prevents unrelated CUDA events between samplers.
@@ -126,7 +126,9 @@ class CudaPhaseProfiler:
             self._current_bucket = None
             return False
         shape = self._shape_tuple(value_or_shape)
-        normalized = tuple(sorted((str(name), str(value)) for name, value in metadata.items()))
+        normalized = tuple(
+            sorted((str(name), str(value)) for name, value in metadata.items())
+        )
         key = self._bucket_key(str(kind), shape, normalized)
         bucket = self._buckets.get(key)
         if bucket is None:
@@ -153,9 +155,7 @@ class CudaPhaseProfiler:
                 if record_key != key
             ]
             self.records[:] = [record for record, _record_key in retained]
-            self._record_buckets[:] = [
-                record_key for _record, record_key in retained
-            ]
+            self._record_buckets[:] = [record_key for _record, record_key in retained]
             bucket = self._buckets.get(key)
             if bucket is not None and bucket.calls == 0:
                 self._buckets.pop(key, None)
@@ -293,7 +293,8 @@ class CudaPhaseProfiler:
                 LOG.info(
                     "  counters: %s",
                     " ".join(
-                        f"{name}={value}" for name, value in sorted(bucket.samples.items())
+                        f"{name}={value}"
+                        for name, value in sorted(bucket.samples.items())
                     ),
                 )
             if bucket.tensor_samples:
@@ -390,16 +391,39 @@ class WorkflowTimeline:
             f"{name}={value}" for name, value in sorted(window.counters.items())
         )
         if profile_level() < 2:
-            LOG.info("%s: wall=%.2fs CUDA=%.2fs peak=%.2f GiB",
-                     window.label, wall_ms / 1000, cuda_ms / 1000, peak_allocated / 1024**3)
+            LOG.info(
+                "%s: wall=%.2fs CUDA=%.2fs peak=%.2f GiB",
+                window.label,
+                wall_ms / 1000,
+                cuda_ms / 1000,
+                peak_allocated / 1024**3,
+            )
         else:
-            self._report_detail(window, wall_ms, cuda_ms, residual_ms, allocated_end, reserved_end, peak_allocated, counters)
+            self._report_detail(
+                window,
+                wall_ms,
+                cuda_ms,
+                residual_ms,
+                allocated_end,
+                reserved_end,
+                peak_allocated,
+                counters,
+            )
         if self._active is window:
             self._active = None
         return True
 
     @staticmethod
-    def _report_detail(window, wall_ms, cuda_ms, residual_ms, allocated_end, reserved_end, peak_allocated, counters):
+    def _report_detail(
+        window,
+        wall_ms,
+        cuda_ms,
+        residual_ms,
+        allocated_end,
+        reserved_end,
+        peak_allocated,
+        counters,
+    ):
         LOG.info(
             "timeline span=%d label=%s wall=%.3f ms cuda=%.3f ms "
             "host_or_transfer=%.3f ms allocated=%.1f->%.1f MiB "

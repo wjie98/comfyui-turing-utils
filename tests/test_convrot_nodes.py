@@ -55,9 +55,14 @@ class ConvRotActivationTest(unittest.TestCase):
             "w4": {"format": "convrot_w4a4"},
             "book": {"format": "asym_w4a8_int8"},
         }
-        state = {name + ".comfy_quant": quant_tensor(config) for name, config in configs.items()}
+        state = {
+            name + ".comfy_quant": quant_tensor(config)
+            for name, config in configs.items()
+        }
         _, summary = configure_convrot_activation(state, None, True)
-        self.assertEqual(summary, ConvRotSummary(nvfp4=1, w8a8=1, w4a8=1, codebook_w4a8=1))
+        self.assertEqual(
+            summary, ConvRotSummary(nvfp4=1, w8a8=1, w4a8=1, codebook_w4a8=1)
+        )
         self.assertEqual(quant_config(state["nv.comfy_quant"]), configs["nv"])
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "native.safetensors"
@@ -100,7 +105,9 @@ class ConvRotActivationTest(unittest.TestCase):
 
         updated, summary = configure_convrot_activation({}, metadata, False)
 
-        config = json.loads(updated["_quantization_metadata"])["layers"]["blocks.0.ffn.0"]
+        config = json.loads(updated["_quantization_metadata"])["layers"][
+            "blocks.0.ffn.0"
+        ]
         self.assertNotIn("linear_dtype", config)
         self.assertEqual(summary, ConvRotSummary(w4a4=1))
 
@@ -118,9 +125,14 @@ class ConvRotActivationTest(unittest.TestCase):
 
         updated, summary = configure_convrot_activation(state_dict, metadata, True)
 
-        header_config = json.loads(updated["_quantization_metadata"])["layers"]["blocks.0.ffn.0"]
+        header_config = json.loads(updated["_quantization_metadata"])["layers"][
+            "blocks.0.ffn.0"
+        ]
         self.assertEqual(header_config["linear_dtype"], "int8")
-        self.assertEqual(quant_config(state_dict["blocks.1.ffn.0.comfy_quant"])["linear_dtype"], "int8")
+        self.assertEqual(
+            quant_config(state_dict["blocks.1.ffn.0.comfy_quant"])["linear_dtype"],
+            "int8",
+        )
         self.assertEqual(summary, ConvRotSummary(w4a8=2))
 
     def test_model_prefix_excludes_aio_text_encoder_layers(self):
@@ -143,18 +155,14 @@ class ConvRotActivationTest(unittest.TestCase):
         self.assertEqual(summary, ConvRotSummary(w4a8=1))
         self.assertEqual(
             quant_config(
-                state_dict[
-                    "model.diffusion_model.blocks.0.ffn.0.comfy_quant"
-                ]
+                state_dict["model.diffusion_model.blocks.0.ffn.0.comfy_quant"]
             )["linear_dtype"],
             "int8",
         )
         self.assertEqual(
-            quant_config(
-                state_dict[
-                    "text_encoders.qwen.layers.0.mlp.comfy_quant"
-                ]
-            )["linear_dtype"],
+            quant_config(state_dict["text_encoders.qwen.layers.0.mlp.comfy_quant"])[
+                "linear_dtype"
+            ],
             "int4",
         )
 
@@ -165,7 +173,9 @@ class ConvRotActivationTest(unittest.TestCase):
             )
         }
 
-        with self.assertRaisesRegex(ValueError, "W8 ConvRot supports INT8 activations only"):
+        with self.assertRaisesRegex(
+            ValueError, "W8 ConvRot supports INT8 activations only"
+        ):
             configure_convrot_activation(state_dict, None, False)
 
     def test_force_int8_accepts_mixed_w4_and_w8_convrot(self):
@@ -274,7 +284,10 @@ class ConvRotActivationTest(unittest.TestCase):
 
         _, summary = configure_convrot_activation(state_dict, None, True)
 
-        self.assertEqual(quant_config(state_dict["blocks.0.ffn.0.comfy_quant"])["linear_dtype"], "int8")
+        self.assertEqual(
+            quant_config(state_dict["blocks.0.ffn.0.comfy_quant"])["linear_dtype"],
+            "int8",
+        )
         self.assertEqual(summary, ConvRotSummary(w8a8=1))
 
     def test_non_convrot_model_is_rejected(self):
@@ -302,7 +315,9 @@ class ConvRotActivationTest(unittest.TestCase):
             )
         }
 
-        with self.assertRaisesRegex(ValueError, "W8 ConvRot supports INT8 activations only"):
+        with self.assertRaisesRegex(
+            ValueError, "W8 ConvRot supports INT8 activations only"
+        ):
             configure_convrot_activation(state_dict, None, False)
 
     def test_false_rejects_conflicting_duplicate_metadata(self):
@@ -370,7 +385,10 @@ class ConvRotActivationTest(unittest.TestCase):
         }
         with (
             mock.patch("comfy_kitchen.list_backends", return_value=backends),
-            mock.patch("comfy.model_management.get_torch_device", return_value=torch.device("cuda", 0)),
+            mock.patch(
+                "comfy.model_management.get_torch_device",
+                return_value=torch.device("cuda", 0),
+            ),
             mock.patch("torch.cuda.is_available", return_value=True),
             mock.patch("torch.cuda.get_device_capability", return_value=(7, 5)),
         ):
@@ -403,7 +421,11 @@ class ConvRotModelFilterTest(unittest.TestCase):
             path = self._save(
                 directory,
                 "convrot.safetensors",
-                {"blocks.0.ffn.0.comfy_quant": quant_tensor({"format": "convrot_w4a4"})},
+                {
+                    "blocks.0.ffn.0.comfy_quant": quant_tensor(
+                        {"format": "convrot_w4a4"}
+                    )
+                },
             )
 
             self.assertIsNone(_convrot_skip_reason(path))
@@ -505,15 +527,23 @@ class ConvRotModelFilterTest(unittest.TestCase):
                 },
             )
 
-            self.assertIn("does not contain supported ConvRot", _convrot_skip_reason(dense))
-            self.assertIn("does not contain supported ConvRot", _convrot_skip_reason(int8))
+            self.assertIn(
+                "does not contain supported ConvRot", _convrot_skip_reason(dense)
+            )
+            self.assertIn(
+                "does not contain supported ConvRot", _convrot_skip_reason(int8)
+            )
 
     def test_model_list_only_contains_supported_convrot_files(self):
         with tempfile.TemporaryDirectory() as directory:
             convrot = self._save(
                 directory,
                 "convrot.safetensors",
-                {"blocks.0.ffn.0.comfy_quant": quant_tensor({"format": "convrot_w4a4"})},
+                {
+                    "blocks.0.ffn.0.comfy_quant": quant_tensor(
+                        {"format": "convrot_w4a4"}
+                    )
+                },
             )
             dense = self._save(
                 directory,
@@ -548,7 +578,9 @@ class ConvRotModelFilterTest(unittest.TestCase):
                 "comfyui_turing_utils.loading.convrot._convrot_skip_reason",
                 return_value="does not contain supported ConvRot quantization metadata",
             ),
-            mock.patch("comfyui_turing_utils.loading.convrot.load_convrot_model") as load_model,
+            mock.patch(
+                "comfyui_turing_utils.loading.convrot.load_convrot_model"
+            ) as load_model,
             self.assertRaisesRegex(ValueError, "is not a supported ConvRot model"),
         ):
             ConvRotDiffusionModelLoader().load_diffusion_model("dense.safetensors")
@@ -610,12 +642,25 @@ class ConvRotCLIPLoaderTest(unittest.TestCase):
                 return_value=SimpleNamespace(unet_config={"image_model": "wan"}),
             ),
             mock.patch("comfyui_turing_utils.loading.convrot.validate_runtime_support"),
-            mock.patch("comfyui_turing_utils.loading.convrot.prepare_turing_runtime") as prepare_runtime,
-            mock.patch("comfyui_turing_utils.loading.convrot.select_compute_dtype", return_value=None),
-            mock.patch("comfyui_turing_utils.loading.convrot.normalize_turing_convrot_weight_dtypes") as normalize_dtypes,
-            mock.patch("comfy.sd.load_diffusion_model_state_dict", return_value=fake_model) as load_state,
-            mock.patch("comfyui_turing_utils.loading.convrot.apply_model_adapters") as apply_adapters,
-            mock.patch("comfyui_turing_utils.loading.convrot.apply_attention_backend") as apply_backend,
+            mock.patch(
+                "comfyui_turing_utils.loading.convrot.prepare_turing_runtime"
+            ) as prepare_runtime,
+            mock.patch(
+                "comfyui_turing_utils.loading.convrot.select_compute_dtype",
+                return_value=None,
+            ),
+            mock.patch(
+                "comfyui_turing_utils.loading.convrot.normalize_turing_convrot_weight_dtypes"
+            ) as normalize_dtypes,
+            mock.patch(
+                "comfy.sd.load_diffusion_model_state_dict", return_value=fake_model
+            ) as load_state,
+            mock.patch(
+                "comfyui_turing_utils.loading.convrot.apply_model_adapters"
+            ) as apply_adapters,
+            mock.patch(
+                "comfyui_turing_utils.loading.convrot.apply_attention_backend"
+            ) as apply_backend,
         ):
             loaded = load_convrot_model("model.safetensors")
 
@@ -652,16 +697,38 @@ class ConvRotCLIPLoaderTest(unittest.TestCase):
 
         with (
             mock.patch("comfy.utils.load_torch_file", return_value=(state_dict, {})),
-            mock.patch("comfy.model_detection.unet_prefix_from_state_dict", return_value="model.diffusion_model."),
-            mock.patch("comfy.model_detection.model_config_from_unet", return_value=model_config),
-            mock.patch("comfy.model_management.get_torch_device", return_value=torch.device("cuda", 0)),
+            mock.patch(
+                "comfy.model_detection.unet_prefix_from_state_dict",
+                return_value="model.diffusion_model.",
+            ),
+            mock.patch(
+                "comfy.model_detection.model_config_from_unet",
+                return_value=model_config,
+            ),
+            mock.patch(
+                "comfy.model_management.get_torch_device",
+                return_value=torch.device("cuda", 0),
+            ),
             mock.patch("comfyui_turing_utils.loading.convrot.validate_runtime_support"),
-            mock.patch("comfyui_turing_utils.loading.convrot.prepare_turing_runtime") as prepare_runtime,
-            mock.patch("comfyui_turing_utils.loading.convrot.select_compute_dtype", return_value=torch.bfloat16),
-            mock.patch("comfyui_turing_utils.loading.convrot.normalize_turing_convrot_weight_dtypes") as normalize_dtypes,
-            mock.patch("comfy.sd.load_diffusion_model_state_dict", return_value=fake_model) as load_state,
-            mock.patch("comfyui_turing_utils.loading.convrot.apply_model_adapters") as apply_adapters,
-            mock.patch("comfyui_turing_utils.loading.convrot.apply_attention_backend") as apply_backend,
+            mock.patch(
+                "comfyui_turing_utils.loading.convrot.prepare_turing_runtime"
+            ) as prepare_runtime,
+            mock.patch(
+                "comfyui_turing_utils.loading.convrot.select_compute_dtype",
+                return_value=torch.bfloat16,
+            ),
+            mock.patch(
+                "comfyui_turing_utils.loading.convrot.normalize_turing_convrot_weight_dtypes"
+            ) as normalize_dtypes,
+            mock.patch(
+                "comfy.sd.load_diffusion_model_state_dict", return_value=fake_model
+            ) as load_state,
+            mock.patch(
+                "comfyui_turing_utils.loading.convrot.apply_model_adapters"
+            ) as apply_adapters,
+            mock.patch(
+                "comfyui_turing_utils.loading.convrot.apply_attention_backend"
+            ) as apply_backend,
         ):
             loaded = load_convrot_model("model.safetensors")
 
@@ -669,7 +736,9 @@ class ConvRotCLIPLoaderTest(unittest.TestCase):
         prepare_runtime.assert_called_once_with(
             ConvRotSummary(w4a4=1), torch.device("cuda", 0), "w8a8"
         )
-        self.assertEqual(load_state.call_args.kwargs["model_options"], {"dtype": torch.bfloat16})
+        self.assertEqual(
+            load_state.call_args.kwargs["model_options"], {"dtype": torch.bfloat16}
+        )
         self.assertEqual(fake_model.compute_dtype, torch.bfloat16)
         normalize_dtypes.assert_called_once_with(
             fake_model, torch.device("cuda", 0), torch.bfloat16
@@ -698,10 +767,20 @@ class ConvRotCLIPLoaderTest(unittest.TestCase):
 
         with (
             mock.patch("comfy.utils.load_torch_file", return_value=(state_dict, {})),
-            mock.patch("comfy.model_management.text_encoder_device", return_value=torch.device("cuda", 0)),
-            mock.patch("comfyui_turing_utils.loading.convrot.validate_runtime_support") as validate,
-            mock.patch("comfyui_turing_utils.loading.convrot.prepare_turing_runtime") as prepare_runtime,
-            mock.patch("comfy.sd.load_text_encoder_state_dicts", side_effect=fake_load_text_encoder),
+            mock.patch(
+                "comfy.model_management.text_encoder_device",
+                return_value=torch.device("cuda", 0),
+            ),
+            mock.patch(
+                "comfyui_turing_utils.loading.convrot.validate_runtime_support"
+            ) as validate,
+            mock.patch(
+                "comfyui_turing_utils.loading.convrot.prepare_turing_runtime"
+            ) as prepare_runtime,
+            mock.patch(
+                "comfy.sd.load_text_encoder_state_dicts",
+                side_effect=fake_load_text_encoder,
+            ),
         ):
             loaded = load_convrot_clip(
                 "clip.safetensors",
@@ -710,7 +789,9 @@ class ConvRotCLIPLoaderTest(unittest.TestCase):
             )
 
         self.assertIs(loaded, fake_clip)
-        validate.assert_called_once_with(ConvRotSummary(w4a8=1), torch.device("cuda", 0))
+        validate.assert_called_once_with(
+            ConvRotSummary(w4a8=1), torch.device("cuda", 0)
+        )
         prepare_runtime.assert_called_once_with(
             ConvRotSummary(w4a8=1), torch.device("cuda", 0)
         )
@@ -747,14 +828,22 @@ class ConvRotCLIPLoaderTest(unittest.TestCase):
 
         with (
             mock.patch("comfy.utils.load_torch_file", return_value=({}, metadata)),
-            mock.patch("comfy.model_management.text_encoder_device", return_value=torch.device("cpu")),
-            mock.patch("comfy.sd.load_text_encoder_state_dicts", side_effect=fake_load_text_encoder),
+            mock.patch(
+                "comfy.model_management.text_encoder_device",
+                return_value=torch.device("cpu"),
+            ),
+            mock.patch(
+                "comfy.sd.load_text_encoder_state_dicts",
+                side_effect=fake_load_text_encoder,
+            ),
         ):
             load_convrot_clip("clip.safetensors")
 
         key = "text_model.encoder.layers.0.mlp.fc1.comfy_quant"
         self.assertIn(key, captured["state_dict"])
-        self.assertEqual(quant_config(captured["state_dict"][key])["format"], "convrot_w4a4")
+        self.assertEqual(
+            quant_config(captured["state_dict"][key])["format"], "convrot_w4a4"
+        )
 
     def test_load_clip_rejects_layers_not_loaded_as_quantized(self):
         state_dict = {
@@ -769,8 +858,13 @@ class ConvRotCLIPLoaderTest(unittest.TestCase):
 
         with (
             mock.patch("comfy.utils.load_torch_file", return_value=(state_dict, {})),
-            mock.patch("comfy.model_management.text_encoder_device", return_value=torch.device("cpu")),
-            mock.patch("comfy.sd.load_text_encoder_state_dicts", return_value=fake_clip),
+            mock.patch(
+                "comfy.model_management.text_encoder_device",
+                return_value=torch.device("cpu"),
+            ),
+            mock.patch(
+                "comfy.sd.load_text_encoder_state_dicts", return_value=fake_clip
+            ),
             self.assertRaisesRegex(RuntimeError, "was not applied to every CLIP layer"),
         ):
             load_convrot_clip("clip.safetensors")
@@ -817,7 +911,9 @@ class ConvRotCLIPLoaderTest(unittest.TestCase):
                     "optional": {"device": official_device},
                 },
             ),
-            mock.patch("comfyui_turing_utils.loading.convrot.convrot_model_names") as filter_names,
+            mock.patch(
+                "comfyui_turing_utils.loading.convrot.convrot_model_names"
+            ) as filter_names,
         ):
             inputs = ConvRotCLIPLoader.INPUT_TYPES()
 
@@ -840,7 +936,8 @@ class ConvRotCLIPLoaderTest(unittest.TestCase):
                 return_value="/models/minimax.safetensors",
             ),
             mock.patch(
-                "comfyui_turing_utils.loading.convrot.load_convrot_clip", return_value=fake_clip
+                "comfyui_turing_utils.loading.convrot.load_convrot_clip",
+                return_value=fake_clip,
             ) as load_clip,
         ):
             result = ConvRotCLIPLoader().load_clip(
@@ -848,7 +945,9 @@ class ConvRotCLIPLoaderTest(unittest.TestCase):
             )
 
         self.assertEqual(result, (fake_clip,))
-        self.assertEqual(load_clip.call_args.kwargs["clip_type"], comfy.sd.CLIPType.MINIMAX)
+        self.assertEqual(
+            load_clip.call_args.kwargs["clip_type"], comfy.sd.CLIPType.MINIMAX
+        )
 
     def test_diffusion_node_uses_force_int8_gemm_boolean(self):
         inputs = ConvRotDiffusionModelLoader.INPUT_TYPES()
@@ -869,7 +968,10 @@ class ConvRotCLIPLoaderTest(unittest.TestCase):
                 "comfyui_turing_utils.loading.convrot.resolve_convrot_model_path",
                 return_value="/models/convrot.safetensors",
             ),
-            mock.patch("comfyui_turing_utils.loading.convrot.load_convrot_model", return_value=fake_model) as load_model,
+            mock.patch(
+                "comfyui_turing_utils.loading.convrot.load_convrot_model",
+                return_value=fake_model,
+            ) as load_model,
         ):
             result = ConvRotDiffusionModelLoader().load_diffusion_model(
                 "convrot.safetensors",

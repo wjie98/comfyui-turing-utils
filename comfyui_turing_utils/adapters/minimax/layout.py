@@ -19,10 +19,9 @@ from ...attention.layout import (
     AttentionSemanticLayout,
     AttentionTopology,
     LayoutProviderStatus,
-    has_complete_attention_layout,
 )
 from ..methods import OriginalMethod, weak_method
-from .activation_policy import ActivationRuntimePlan
+from .memory_state import ActivationRuntimePlan
 from .compat import accepts_parameter, make_packed_layout
 
 
@@ -247,9 +246,7 @@ def minimax_attention_segments(base_model):
             }:
                 return ()
             if role == "reference_video":
-                _append_reference_video_segments(
-                    translated, start, stop, descriptor[1]
-                )
+                _append_reference_video_segments(translated, start, stop, descriptor[1])
                 continue
         elif kind == "audio":
             role = "target_audio"
@@ -361,17 +358,6 @@ def publish_minimax_attention_layout(
     return "topologies" in expected_layout
 
 
-def has_complete_minimax_attention_layout(
-    transformer_options,
-    sequence_length: int | None = None,
-) -> bool:
-    return has_complete_attention_layout(
-        transformer_options,
-        sequence_length,
-        provider=MINIMAX_H3_LAYOUT_KIND,
-    )
-
-
 def _forward_has_provider(forward) -> bool:
     function = getattr(forward, "__func__", forward)
     return bool(getattr(function, _FORWARD_PROVIDER_ATTR, False))
@@ -399,9 +385,7 @@ def _make_model_forward(base_model, diffusion_model, original):
         runtime = dict(previous) if isinstance(previous, dict) else {}
         payload = minimax_payload if isinstance(minimax_payload, dict) else {}
         runtime.update(
-            packed_layout=_resolve_packed_layout(
-                self, x, context, payload
-            ),
+            packed_layout=_resolve_packed_layout(self, x, context, payload),
             refs=payload.get("refs"),
         )
         setattr(base_model, RUNTIME_CONTEXT_ATTR, runtime)
@@ -462,9 +446,7 @@ def _make_layout_forward(
         kwargs = {"transformer_options": transformer_options}
         if supports_attention:
             kwargs["attention"] = attention
-        return original(
-            self, x, t_emb, mod_segments, rope_freqs, **kwargs
-        )
+        return original(self, x, t_emb, mod_segments, rope_freqs, **kwargs)
 
     setattr(forward, _FORWARD_PROVIDER_ATTR, True)
     return weak_method(forward, block)

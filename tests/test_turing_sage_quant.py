@@ -22,7 +22,9 @@ from comfyui_turing_utils_kernel.turing_sage.custom_ops import (  # noqa: E402
 class TuringSageQuantContractTest(unittest.TestCase):
     def test_key_tile_auto_policy_uses_resources_not_product_names(self):
         core._KEY_TILE_CACHE.clear()
-        with mock.patch.object(torch.cuda, "get_device_capability", return_value=(8, 6)):
+        with mock.patch.object(
+            torch.cuda, "get_device_capability", return_value=(8, 6)
+        ):
             self.assertEqual(
                 core._automatic_key_tile_tokens(
                     torch.device("cuda:0"),
@@ -42,7 +44,9 @@ class TuringSageQuantContractTest(unittest.TestCase):
                 128,
             )
         core._KEY_TILE_CACHE.clear()
-        with mock.patch.object(torch.cuda, "get_device_capability", return_value=(7, 5)):
+        with mock.patch.object(
+            torch.cuda, "get_device_capability", return_value=(7, 5)
+        ):
             self.assertEqual(
                 core._automatic_key_tile_tokens(
                     torch.device("cuda:0"),
@@ -67,9 +71,7 @@ class TuringSageQuantContractTest(unittest.TestCase):
         key = torch.empty((2, 2, 129, 128), dtype=torch.bfloat16, device="meta")
         query_norm = torch.empty((128,), dtype=torch.bfloat16, device="meta")
         key_norm = torch.empty((128,), dtype=torch.bfloat16, device="meta")
-        freqs = torch.empty(
-            (1, 129, 1, 64, 2, 2), dtype=torch.bfloat16, device="meta"
-        )
+        freqs = torch.empty((1, 129, 1, 64, 2, 2), dtype=torch.bfloat16, device="meta")
 
         query_int8, query_scale, key_int8, key_scale = qk_rms_rope_int8(
             query,
@@ -191,9 +193,7 @@ class TuringSageQuantContractTest(unittest.TestCase):
         v = torch.empty_like(k)
 
         compiled = torch.compile(
-            lambda query, key, value: turing_sage.sageattn_compiled(
-                query, key, value
-            ),
+            lambda query, key, value: turing_sage.sageattn_compiled(query, key, value),
             backend="eager",
             fullgraph=True,
         )
@@ -267,9 +267,7 @@ class TuringSageQuantContractTest(unittest.TestCase):
         self.assertEqual(q_scale.shape, (2, 4, 12))
         self.assertEqual(k_scale.shape, (2, 2, 3))
         args = fused.call_args.args
-        for actual, expected in zip(
-            args[:6], (q, k, q_int8, k_int8, q_scale, k_scale)
-        ):
+        for actual, expected in zip(args[:6], (q, k, q_int8, k_int8, q_scale, k_scale)):
             self.assertIs(actual, expected)
         self.assertEqual(args[6].shape, (2, 2))
         self.assertEqual(args[6].dtype, torch.int32)

@@ -33,7 +33,9 @@ class MiniMaxH3AVLatentTest(unittest.TestCase):
         video_latent = {"samples": video, "noise_mask": video_mask, "video_metadata": 1}
         audio_latent = {"samples": audio, "noise_mask": audio_mask, "audio_metadata": 2}
 
-        av_latent = minimax_nodes.LTXVConcatAVLatent.execute(video_latent, audio_latent).result[0]
+        av_latent = minimax_nodes.LTXVConcatAVLatent.execute(
+            video_latent, audio_latent
+        ).result[0]
         av_video, av_audio = av_latent["samples"].unbind()
         av_video_mask, av_audio_mask = av_latent["noise_mask"].unbind()
         self.assertIs(av_video, video)
@@ -43,7 +45,9 @@ class MiniMaxH3AVLatentTest(unittest.TestCase):
         self.assertEqual(av_latent["video_metadata"], 1)
         self.assertEqual(av_latent["audio_metadata"], 2)
 
-        separated_video, separated_audio = minimax_nodes.LTXVSeparateAVLatent.execute(av_latent).result
+        separated_video, separated_audio = minimax_nodes.LTXVSeparateAVLatent.execute(
+            av_latent
+        ).result
         self.assertIs(separated_video["samples"], video)
         self.assertIs(separated_audio["samples"], audio)
         self.assertIs(separated_video["noise_mask"], video_mask)
@@ -83,8 +87,9 @@ class MiniMaxH3AVLatentTest(unittest.TestCase):
         self.assertEqual(int(torch.count_nonzero(output_audio[..., 5:])), 0)
         self.assertTrue(torch.equal(video_mask, torch.ones_like(video)))
         self.assertTrue(torch.equal(audio_mask[..., :5], replacement_mask))
-        self.assertTrue(torch.equal(audio_mask[..., 5:], torch.ones_like(audio_mask[..., 5:])))
-
+        self.assertTrue(
+            torch.equal(audio_mask[..., 5:], torch.ones_like(audio_mask[..., 5:]))
+        )
 
 
 if __name__ == "__main__":

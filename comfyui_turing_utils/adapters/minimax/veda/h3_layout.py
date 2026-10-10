@@ -29,7 +29,7 @@ import dataclasses
 
 import torch
 
-_REFERENCE_KINDS = ('cond', 'ref_img')
+_REFERENCE_KINDS = ("cond", "ref_img")
 
 
 @dataclasses.dataclass(frozen=True)
@@ -62,8 +62,9 @@ class LayoutError(ValueError):
     """The layout cannot be mapped; the caller runs dense attention."""
 
 
-def _segment_grid(position_ids: torch.Tensor, start: int,
-                  stop: int) -> tuple[int, int, int] | None:
+def _segment_grid(
+    position_ids: torch.Tensor, start: int, stop: int
+) -> tuple[int, int, int] | None:
     """(T, H, W) of a segment if its rows are T, H, W row-major, else None.
 
     Positions are (t, h, w) floats; a row-major grid has exactly
@@ -75,8 +76,7 @@ def _segment_grid(position_ids: torch.Tensor, start: int,
     t, h, w = (a.numel() for a in axes)
     if t * h * w != stop - start:
         return None
-    expected = torch.stack(torch.meshgrid(*axes, indexing='ij'),
-                           dim=-1).reshape(-1, 3)
+    expected = torch.stack(torch.meshgrid(*axes, indexing="ij"), dim=-1).reshape(-1, 3)
     if not torch.equal(expected, pos.to(expected.dtype)):
         return None
     return t, h, w
@@ -94,27 +94,31 @@ def describe(layout) -> LayoutSpec:
         _, latent_t, latent_h, latent_w, _ = layout.signature
         seq_len = int(layout.seq_len)
     except (AttributeError, TypeError, ValueError) as error:
-        raise LayoutError(
-            f'not a MiniMax-H3 packed layout ({error})') from error
-    video = [(a, b) for a, b, kind in segments if kind == 'video']
+        raise LayoutError(f"not a MiniMax-H3 packed layout ({error})") from error
+    video = [(a, b) for a, b, kind in segments if kind == "video"]
     if len(video) != 1:
-        raise LayoutError(f'expected one target video segment, '
-                          f'found {len(video)}')
+        raise LayoutError(f"expected one target video segment, found {len(video)}")
     a, b = video[0]
     grid = (int(latent_t), int(latent_h) // 2, int(latent_w) // 2)
     if grid[0] * grid[1] * grid[2] != b - a:
-        raise LayoutError(f'video segment of {b - a} rows does not match the '
-                          f'latent grid {grid}')
+        raise LayoutError(
+            f"video segment of {b - a} rows does not match the latent grid {grid}"
+        )
     references, skipped = [], []
-    position_ids = getattr(layout, 'position_ids', None)
+    position_ids = getattr(layout, "position_ids", None)
     for start, stop, kind in segments:
         if kind not in _REFERENCE_KINDS:
             continue
-        span_grid = (None if position_ids is None
-                     else _segment_grid(position_ids, start, stop))
+        span_grid = (
+            None if position_ids is None else _segment_grid(position_ids, start, stop)
+        )
         if span_grid is None:
-            skipped.append(f'{kind}[{start}:{stop}] has no row-major grid')
+            skipped.append(f"{kind}[{start}:{stop}] has no row-major grid")
             continue
         references.append(SpanSpec(kind, int(start), span_grid))
-    return LayoutSpec(seq_len=seq_len, target=SpanSpec('target', int(a), grid),
-                      references=tuple(references), skipped=tuple(skipped))
+    return LayoutSpec(
+        seq_len=seq_len,
+        target=SpanSpec("target", int(a), grid),
+        references=tuple(references),
+        skipped=tuple(skipped),
+    )

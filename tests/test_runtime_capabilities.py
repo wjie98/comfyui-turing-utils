@@ -29,8 +29,12 @@ class DeviceCapabilitiesTest(unittest.TestCase):
         with (
             mock.patch.object(torch.cuda, "is_available", return_value=True),
             mock.patch.object(torch.cuda, "get_device_capability", return_value=(8, 6)),
-            mock.patch.object(torch.cuda, "get_device_properties", return_value=properties),
-            mock.patch.object(torch.cuda, "get_device_name", return_value=properties.name),
+            mock.patch.object(
+                torch.cuda, "get_device_properties", return_value=properties
+            ),
+            mock.patch.object(
+                torch.cuda, "get_device_name", return_value=properties.name
+            ),
         ):
             result = hardware.device_capabilities(torch.device("cuda", 0))
 
@@ -41,12 +45,18 @@ class DeviceCapabilitiesTest(unittest.TestCase):
         self.assertEqual(result.optin_shared_memory_per_block, 99 * 1024)
 
     def test_low_end_turing_name_remains_excluded(self):
-        properties = SimpleNamespace(name="NVIDIA GeForce GTX 1650", total_memory=4 * 1024**3)
+        properties = SimpleNamespace(
+            name="NVIDIA GeForce GTX 1650", total_memory=4 * 1024**3
+        )
         with (
             mock.patch.object(torch.cuda, "is_available", return_value=True),
             mock.patch.object(torch.cuda, "get_device_capability", return_value=(7, 5)),
-            mock.patch.object(torch.cuda, "get_device_properties", return_value=properties),
-            mock.patch.object(torch.cuda, "get_device_name", return_value=properties.name),
+            mock.patch.object(
+                torch.cuda, "get_device_properties", return_value=properties
+            ),
+            mock.patch.object(
+                torch.cuda, "get_device_name", return_value=properties.name
+            ),
         ):
             result = hardware.device_capabilities(torch.device("cuda", 0))
             supported = hardware.is_supported_turing_device(torch.device("cuda", 0))
@@ -126,15 +136,18 @@ class KernelCapabilitiesTest(unittest.TestCase):
             fused_qk_preprocessing_available=lambda: True,
         )
         for schema, expected in ((0, False), (2, True)):
-            with self.subTest(schema=schema), mock.patch.dict(
-                sys.modules,
-                {
-                    "comfyui_turing_utils_kernel": package,
-                    "comfyui_turing_utils_kernel._sage_fused_sm75": SimpleNamespace(
-                        qk_preprocess_protocol_schema=schema
-                    ),
-                    "comfyui_turing_utils_kernel.turing_sage": sage,
-                },
+            with (
+                self.subTest(schema=schema),
+                mock.patch.dict(
+                    sys.modules,
+                    {
+                        "comfyui_turing_utils_kernel": package,
+                        "comfyui_turing_utils_kernel._sage_fused_sm75": SimpleNamespace(
+                            qk_preprocess_protocol_schema=schema
+                        ),
+                        "comfyui_turing_utils_kernel.turing_sage": sage,
+                    },
+                ),
             ):
                 result = capabilities.kernel_capabilities()
                 self.assertEqual(

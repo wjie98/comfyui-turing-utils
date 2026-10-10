@@ -13,8 +13,8 @@ COMFY_ROOT = PLUGIN_ROOT.parents[1]
 sys.path.insert(0, str(COMFY_ROOT))
 sys.path.insert(0, str(PLUGIN_ROOT))
 
-from comfyui_turing_utils.attention.patches import (  # noqa: E402
-    _make_dense_prepared_executor,
+from comfyui_turing_utils.attention.dense import _make_dense_prepared_executor  # noqa: E402
+from comfyui_turing_utils.attention.execution import (  # noqa: E402
     _prepared_external_call_reason,
     _prepared_qk_transform,
 )
@@ -182,9 +182,7 @@ class AttentionProtocolTest(unittest.TestCase):
     def test_layout_protocol_describes_unequal_query_and_key_sequences(self):
         semantic = AttentionSemanticLayout(
             provider="test_cross_attention",
-            query_segments=(
-                AttentionSegment.for_role(0, 128, "target_video"),
-            ),
+            query_segments=(AttentionSegment.for_role(0, 128, "target_video"),),
             key_segments=(
                 AttentionSegment.for_role(0, 64, "text"),
                 AttentionSegment.for_role(64, 192, "target_video"),

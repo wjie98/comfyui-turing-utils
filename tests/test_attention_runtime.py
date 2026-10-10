@@ -13,7 +13,10 @@ COMFY_ROOT = PLUGIN_ROOT.parents[1]
 sys.path.insert(0, str(COMFY_ROOT))
 sys.path.insert(0, str(PLUGIN_ROOT))
 
-from comfyui_turing_utils.attention import patches as attention_patches, runtime as attention_runtime  # noqa: E402
+from comfyui_turing_utils.attention import (
+    patches as attention_patches,
+    runtime as attention_runtime,
+)  # noqa: E402
 
 
 class FakePatcher:
@@ -31,9 +34,14 @@ class FakePatcher:
 
 class AttentionRuntimeTest(unittest.TestCase):
     def test_removed_static_image_strategies_are_rejected(self):
-        config = attention_runtime.AttentionRuntimeConfig("sdpa", "test", lambda *args: None)
+        config = attention_runtime.AttentionRuntimeConfig(
+            "sdpa", "test", lambda *args: None
+        )
         for name in ("h3_virtual_kv", "h3_image_sol"):
-            with self.subTest(strategy=name), self.assertRaisesRegex(ValueError, "unsupported attention strategy"):
+            with (
+                self.subTest(strategy=name),
+                self.assertRaisesRegex(ValueError, "unsupported attention strategy"),
+            ):
                 config.with_strategy(name, "removed", lambda *args: None)
 
     def test_dense_backend_installs_native_capability_marker(self):
@@ -79,7 +87,9 @@ class AttentionRuntimeTest(unittest.TestCase):
             dense_implementation="test:sdpa",
             dense_override=dense,
         )
-        attention_runtime.install_attention_runtime(options, base, dispatcher=dispatcher)
+        attention_runtime.install_attention_runtime(
+            options, base, dispatcher=dispatcher
+        )
         self.assertEqual(
             dispatcher(None, transformer_options=options),
             "dense",
@@ -90,7 +100,9 @@ class AttentionRuntimeTest(unittest.TestCase):
         )
 
         sparse = base.with_strategy("sol", "test:sol", sol)
-        attention_runtime.install_attention_runtime(options, sparse, dispatcher=dispatcher)
+        attention_runtime.install_attention_runtime(
+            options, sparse, dispatcher=dispatcher
+        )
         self.assertIs(options["optimized_attention_override"], dispatcher)
         self.assertEqual(
             dispatcher(None, transformer_options=options),
@@ -137,7 +149,10 @@ class AttentionRuntimeTest(unittest.TestCase):
         sol.turing_utils_attention_implementation = "bundled_sol_sparse"
         sol.turing_utils_dense_implementation = "test:sdpa"
         sol.turing_utils_sparse_numeric_backend = "fp16"
-        with mock.patch("comfyui_turing_utils.attention.patches.make_sparse_attention_override", return_value=sol) as make:
+        with mock.patch(
+            "comfyui_turing_utils.attention.patches.make_sparse_attention_override",
+            return_value=sol,
+        ) as make:
             patched = attention_patches.apply_sparse_attention_patch(model)
 
         patched_options = patched.model_options["transformer_options"]
@@ -189,7 +204,8 @@ class AttentionRuntimeTest(unittest.TestCase):
                 sparse.turing_utils_dense_implementation = "comfy:sage"
                 sparse.turing_utils_sparse_numeric_backend = "fp16"
                 with mock.patch(
-                    f"comfyui_turing_utils.attention.patches.{make_name}", return_value=sparse
+                    f"comfyui_turing_utils.attention.patches.{make_name}",
+                    return_value=sparse,
                 ) as make:
                     patched = getattr(attention_patches, apply_name)(model)
 
@@ -231,7 +247,10 @@ class AttentionRuntimeTest(unittest.TestCase):
         sol.turing_utils_sparse_numeric_backend = "w8a8"
         sol.prepared_attention_executor = lambda request: None
         with (
-            mock.patch("comfyui_turing_utils.attention.patches.make_sparse_attention_override", return_value=sol),
+            mock.patch(
+                "comfyui_turing_utils.attention.patches.make_sparse_attention_override",
+                return_value=sol,
+            ),
             mock.patch(
                 "comfyui_turing_utils.attention.orchestration.ensure_attention_layout_provider"
             ) as ensure_layout,
@@ -253,10 +272,19 @@ class AttentionRuntimeTest(unittest.TestCase):
     def test_sdpa_base_selects_fp16_sol_sparse_numeric_path(self):
         q = torch.zeros((1, 2, 256, 128), dtype=torch.bfloat16)
         with (
-            mock.patch("comfyui_turing_utils.attention.patches.is_supported_attention_device", return_value=True),
-            mock.patch("comfyui_turing_utils.attention.patches.bundled_sparse_available", return_value=True),
-            mock.patch("comfyui_turing_utils.attention.patches.preflight_bundled_sparse"),
-            mock.patch("comfyui_turing_utils.attention.patches.turing_sol_sparse_attention", return_value=q) as sparse,
+            mock.patch(
+                "comfyui_turing_utils.attention.sol.is_supported_attention_device",
+                return_value=True,
+            ),
+            mock.patch(
+                "comfyui_turing_utils.attention.sol.bundled_sparse_available",
+                return_value=True,
+            ),
+            mock.patch("comfyui_turing_utils.attention.sol.preflight_bundled_sparse"),
+            mock.patch(
+                "comfyui_turing_utils.attention.sol.turing_sol_sparse_attention",
+                return_value=q,
+            ) as sparse,
         ):
             override = attention_patches.make_sparse_attention_override(
                 torch.device("cuda", 0),

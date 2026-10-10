@@ -106,7 +106,9 @@ def _image_tokens(latent, patch_size) -> int | None:
         return None
     tokens_height = height // patch_height
     tokens_width = width // patch_width
-    return tokens_height * tokens_width if min(tokens_height, tokens_width) > 0 else None
+    return (
+        tokens_height * tokens_width if min(tokens_height, tokens_width) > 0 else None
+    )
 
 
 def _append_video_reference(
@@ -388,9 +390,7 @@ def _publish_attention_layout(
             "provider": provider,
         }
         return False
-    transformer_options[ATTENTION_LAYOUT_KEY] = semantic.to_wire(
-        extensions=preserved
-    )
+    transformer_options[ATTENTION_LAYOUT_KEY] = semantic.to_wire(extensions=preserved)
     return True
 
 

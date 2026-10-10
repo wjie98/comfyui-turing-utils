@@ -68,7 +68,9 @@ class WanLayoutTest(unittest.TestCase):
             ),
         )
         self.assertEqual(
-            tuple((item.topology_id, item.start, item.stop) for item in layout.topologies),
+            tuple(
+                (item.topology_id, item.start, item.stop) for item in layout.topologies
+            ),
             (("target_video", 20, 80), ("context_video_1", 100, 180)),
         )
         self.assertIsNone(layout.validate(180, 180))
@@ -198,9 +200,7 @@ class ScailLayoutTest(unittest.TestCase):
         )
         self.assertEqual(options[ATTENTION_LAYOUT_KEY]["extension"], "preserved")
         self.assertTrue(
-            has_complete_attention_layout(
-                options, 92, provider=SCAIL_LAYOUT_KIND
-            )
+            has_complete_attention_layout(options, 92, provider=SCAIL_LAYOUT_KIND)
         )
         self.assertEqual(
             tuple(

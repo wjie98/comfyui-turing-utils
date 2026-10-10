@@ -26,7 +26,9 @@ def release_intermediates(cache):
         owned = False
         while current is not None:
             kind = cache.dynprompt.get_node(current)["class_type"]
-            if kind.startswith(("_TuringMaterialFresh_", "_TuringMaterialRead", "_TuringMaterialWrite")):
+            if kind.startswith(
+                ("_TuringMaterialFresh_", "_TuringMaterialRead", "_TuringMaterialWrite")
+            ):
                 owned = True
                 break
             current = cache.dynprompt.get_parent_node_id(current)
@@ -50,7 +52,10 @@ def install_task_cleanup():
 
     @wraps(original)
     async def execute(self, prompt, prompt_id, *args, **kwargs):
-        workspace = any(n.get("class_type", "").startswith("_TuringMaterialWrite") for n in prompt.values())
+        workspace = any(
+            n.get("class_type", "").startswith("_TuringMaterialWrite")
+            for n in prompt.values()
+        )
         try:
             return await original(self, prompt, prompt_id, *args, **kwargs)
         finally:
@@ -62,7 +67,9 @@ def install_task_cleanup():
                         # A frontend/core upgrade must not turn a successful saved
                         # result into a failure or mask the original task error.
                         # Never fall back to clearing all caches or unloading models.
-                        logger.exception("Canvas intermediate cleanup failed; model caches were not globally cleared")
+                        logger.exception(
+                            "Canvas intermediate cleanup failed; model caches were not globally cleared"
+                        )
 
     execute._turing_material_cleanup = True
     PromptExecutor.execute_async = execute

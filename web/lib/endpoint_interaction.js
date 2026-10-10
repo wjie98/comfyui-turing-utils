@@ -15,10 +15,7 @@ export function installEndpoint(node) {
     node.graph?.afterChange();
   };
   const grow = (type, name, widget) => {
-    if (
-      !MATERIAL_TYPES.has(type) &&
-      !(type === POSITION && node.type === INPUTS)
-    )
+    if (!MATERIAL_TYPES.has(type) && !(type === POSITION && node.type === INPUTS))
       return false;
     const ps = entries(node);
     const p = {
@@ -79,18 +76,14 @@ export function installEndpoint(node) {
               },
               ...[-1, 1]
                 .filter(
-                  (delta) =>
-                    index + delta >= 0 && index + delta < entries(this).length,
+                  (delta) => index + delta >= 0 && index + delta < entries(this).length,
                 )
                 .map((delta) => ({
                   content: delta < 0 ? "上移" : "下移",
                   callback: () =>
                     commit(() => {
                       const ps = entries(this);
-                      [ps[index], ps[index + delta]] = [
-                        ps[index + delta],
-                        ps[index],
-                      ];
+                      [ps[index], ps[index + delta]] = [ps[index + delta], ps[index]];
                       syncPorts(this, ps);
                     }),
                 })),

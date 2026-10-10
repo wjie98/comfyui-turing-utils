@@ -33,7 +33,8 @@ void turing_int8_linear(Tensor activation,
                         Tensor bias,
                         Tensor output, bool precise = false);
 
-void turing_fp16_int8_quantize(Tensor input, Tensor output, Tensor scales);
+void turing_fp16_int8_convrot_quantize(Tensor input, Tensor output, Tensor scales,
+    int input_act, Tensor norm_weight, float eps);
 
 void turing_int8_batched_residual(Tensor activation, Tensor weight,
                                 Tensor activation_scale, Tensor weight_scale,

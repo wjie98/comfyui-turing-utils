@@ -29,17 +29,31 @@ class H3AddNoise(io.ComfyNode):
                 "if only one stream should change."
             ),
             inputs=[
-                io.Model.Input("model", tooltip="The H3 MODEL used by the continuation sampler, including its sampling patches."),
-                io.Noise.Input("noise", tooltip="Connect RandomNoise to control the new noise seed."),
-                io.Sigmas.Input("sigmas", tooltip="Remaining sampling schedule. Its FIRST sigma is the target level (0 <= sigma < 1)."),
-                io.Latent.Input("latent_image", tooltip="Clean x0: denoised_output, VAE-encoded latent, or upscaled clean latent. Do not pass an already-noisy sampler output."),
+                io.Model.Input(
+                    "model",
+                    tooltip="The H3 MODEL used by the continuation sampler, including its sampling patches.",
+                ),
+                io.Noise.Input(
+                    "noise",
+                    tooltip="Connect RandomNoise to control the new noise seed.",
+                ),
+                io.Sigmas.Input(
+                    "sigmas",
+                    tooltip="Remaining sampling schedule. Its FIRST sigma is the target level (0 <= sigma < 1).",
+                ),
+                io.Latent.Input(
+                    "latent_image",
+                    tooltip="Clean x0: denoised_output, VAE-encoded latent, or upscaled clean latent. Do not pass an already-noisy sampler output.",
+                ),
             ],
             outputs=[io.Latent.Output(display_name="latent")],
         )
 
     @classmethod
     def execute(cls, model, noise, sigmas, latent_image) -> io.NodeOutput:
-        return io.NodeOutput(add_h3_noise_for_resampling(model, noise, sigmas, latent_image))
+        return io.NodeOutput(
+            add_h3_noise_for_resampling(model, noise, sigmas, latent_image)
+        )
 
 
 class _H3UpscaleLoader(io.ComfyNode):
@@ -50,7 +64,8 @@ class _H3UpscaleLoader(io.ComfyNode):
             display_name="H3 Upscale Loader (Internal)",
             is_dev_only=True,
             category="",
-            description=INTERNAL_NODE_NOTE + (
+            description=INTERNAL_NODE_NOTE
+            + (
                 "Load an attention-free 3D MiniMax H3 latent upscaler from "
                 "models/latent_upscale_models with ComfyUI-managed VRAM offloading."
             ),
@@ -85,7 +100,8 @@ class _H3UpscaleApply(io.ComfyNode):
             is_dev_only=True,
             display_name="MiniMax H3 Latent Upscale Apply (Internal)",
             category="",
-            description=INTERNAL_NODE_NOTE + (
+            description=INTERNAL_NODE_NOTE
+            + (
                 "Learned spatial pixel-count upscale for MiniMax H3 AV latents. The video stream and "
                 "optional FL2AV keyframe latents are enlarged together; audio and Ref2AV "
                 "references remain unchanged. Video noise_mask uses conservative spatial maximum "
@@ -94,7 +110,11 @@ class _H3UpscaleApply(io.ComfyNode):
             inputs=[
                 H3LatentUpscaleModel.Input("upscale_model"),
                 io.Latent.Input("latent"),
-                io.Conditioning.Input("conditioning", optional=True, tooltip="Optional FL2AV conditioning whose first/last keyframe latents should follow the same spatial upscale."),
+                io.Conditioning.Input(
+                    "conditioning",
+                    optional=True,
+                    tooltip="Optional FL2AV conditioning whose first/last keyframe latents should follow the same spatial upscale.",
+                ),
                 io.Float.Input(
                     "scale",
                     default=2.0,
@@ -111,13 +131,21 @@ class _H3UpscaleApply(io.ComfyNode):
             outputs=[
                 io.Latent.Output(display_name="latent"),
                 io.Conditioning.Output(display_name="conditioning"),
-                io.Int.Output("width", tooltip="Aligned pixel width produced by the upscaled H3 video latent."),
-                io.Int.Output("height", tooltip="Aligned pixel height produced by the upscaled H3 video latent."),
+                io.Int.Output(
+                    "width",
+                    tooltip="Aligned pixel width produced by the upscaled H3 video latent.",
+                ),
+                io.Int.Output(
+                    "height",
+                    tooltip="Aligned pixel height produced by the upscaled H3 video latent.",
+                ),
             ],
         )
 
     @classmethod
-    def execute(cls, upscale_model, latent, conditioning=None, scale: float = 2.0) -> io.NodeOutput:
+    def execute(
+        cls, upscale_model, latent, conditioning=None, scale: float = 2.0
+    ) -> io.NodeOutput:
         output_latent, output_conditioning, width, height = upscale_h3_latent(
             upscale_model,
             latent,
@@ -140,6 +168,9 @@ class MiniMaxH3LatentUpscale(io.ComfyNode):
         return schema
 
     @classmethod
-    def execute(cls, model_name, latent, precision="auto", conditioning=None, scale=2.0):
+    def execute(
+        cls, model_name, latent, precision="auto", conditioning=None, scale=2.0
+    ):
         return _H3UpscaleApply.execute(
-            load_h3_latent_upscaler(model_name, precision), latent, conditioning, scale)
+            load_h3_latent_upscaler(model_name, precision), latent, conditioning, scale
+        )

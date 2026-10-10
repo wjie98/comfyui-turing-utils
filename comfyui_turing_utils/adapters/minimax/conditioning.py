@@ -22,9 +22,7 @@ def repair_combined_minimax_payload(out, kwargs):
         *(item["latent"] for item in refs if "latent" in item),
     ]
     repaired["cond_audio_latents"] = [
-        item["audio_latent"]
-        for item in refs
-        if item.get("audio_latent") is not None
+        item["audio_latent"] for item in refs if item.get("audio_latent") is not None
     ]
     updated = dict(out)
     updated["minimax_payload"] = holder._copy_with(repaired)

@@ -113,8 +113,7 @@ class KernelCustomOpContractTest(unittest.TestCase):
             self.assertTrue(torch.equal(first, second))
 
     @unittest.skipUnless(
-        torch.cuda.is_available()
-        and kernel.turing_sage.overlap_accumulate_available(),
+        torch.cuda.is_available() and kernel.turing_sage.overlap_accumulate_available(),
         "the rebuilt CUDA streaming overlap accumulator is required",
     )
     def test_overlap_accumulate_matches_sequential_fp32_reference(self):
@@ -139,11 +138,15 @@ class KernelCustomOpContractTest(unittest.TestCase):
                     dtype=dtype,
                     device="cuda",
                 )
-                output_indices = torch.randperm(
-                    output_tokens,
-                    device="cuda",
-                    dtype=torch.int64,
-                )[:affected_tokens].sort().values.to(torch.int32)
+                output_indices = (
+                    torch.randperm(
+                        output_tokens,
+                        device="cuda",
+                        dtype=torch.int64,
+                    )[:affected_tokens]
+                    .sort()
+                    .values.to(torch.int32)
+                )
                 local_indices = torch.full(
                     (affected_tokens, windows),
                     -1,
@@ -158,9 +161,7 @@ class KernelCustomOpContractTest(unittest.TestCase):
                 for row in range(affected_tokens):
                     for window in range(windows):
                         if (row + window) % 3:
-                            local_indices[row, window] = (
-                                row * 5 + window
-                            ) % tokens
+                            local_indices[row, window] = (row * 5 + window) % tokens
                             weights[row, window] = 0.2 + 0.1 * window
                 for row in range(affected_tokens):
                     output_index = int(output_indices[row])
@@ -168,12 +169,9 @@ class KernelCustomOpContractTest(unittest.TestCase):
                         local = int(local_indices[row, window])
                         if local >= 0:
                             expected[:, output_index].add_(
-                                values[:, window, local].float()
-                                * weights[row, window]
+                                values[:, window, local].float() * weights[row, window]
                             )
-                payloads.append(
-                    (values, local_indices, weights, output_indices)
-                )
+                payloads.append((values, local_indices, weights, output_indices))
 
             results = []
             for _repeat in range(2):
@@ -223,9 +221,7 @@ class KernelCustomOpContractTest(unittest.TestCase):
         self.assertEqual(scaled.shape, (3, 256))
         self.assertEqual(scaled.dtype, torch.int8)
         self.assertEqual(scaled.device.type, "meta")
-        scaled_destination = torch.empty(
-            (3, 256), dtype=torch.int8, device="meta"
-        )
+        scaled_destination = torch.empty((3, 256), dtype=torch.int8, device="meta")
         self.assertIsNone(
             kernel.turing_swiglu_int8_convrot_quantize_scaled_out(
                 x,
@@ -233,9 +229,7 @@ class KernelCustomOpContractTest(unittest.TestCase):
                 scaled_destination,
             )
         )
-        rotated_gate = torch.empty(
-            (3, 512), dtype=torch.bfloat16, device="meta"
-        )
+        rotated_gate = torch.empty((3, 512), dtype=torch.bfloat16, device="meta")
         partials = torch.empty((3, 2), dtype=torch.float32, device="meta")
         self.assertIsNone(
             kernel.turing_swiglu_convrot_shard_inplace(
@@ -245,10 +239,8 @@ class KernelCustomOpContractTest(unittest.TestCase):
                 256,
             )
         )
-        sharded, sharded_scale = (
-            kernel.turing_int8_convrot_quantize_from_partials(
-                rotated_gate, partials
-            )
+        sharded, sharded_scale = kernel.turing_int8_convrot_quantize_from_partials(
+            rotated_gate, partials
         )
         self.assertEqual(sharded.shape, rotated_gate.shape)
         self.assertEqual(sharded.dtype, torch.int8)
@@ -259,9 +251,7 @@ class KernelCustomOpContractTest(unittest.TestCase):
         weight = torch.empty((64, 64), dtype=torch.int8, device="meta")
         row_scale = torch.empty((7,), dtype=torch.float32, device="meta")
         column_scale = torch.empty((64,), dtype=torch.float32, device="meta")
-        linear = kernel.turing_w4a8_linear(
-            activation, weight, row_scale, column_scale
-        )
+        linear = kernel.turing_w4a8_linear(activation, weight, row_scale, column_scale)
         self.assertEqual(linear.shape, (7, 64))
         self.assertEqual(linear.dtype, torch.bfloat16)
 
@@ -296,9 +286,7 @@ class KernelCustomOpContractTest(unittest.TestCase):
         self.assertEqual(int8_linear.shape, (7, 64))
         self.assertEqual(int8_linear.dtype, torch.bfloat16)
 
-        direct_linear = torch.empty(
-            (7, 64), dtype=torch.bfloat16, device="meta"
-        )
+        direct_linear = torch.empty((7, 64), dtype=torch.bfloat16, device="meta")
         self.assertIsNone(
             kernel.turing_int8_linear_out(
                 activation,
@@ -356,20 +344,35 @@ class KernelCustomOpContractTest(unittest.TestCase):
         qx = torch.randint(-127, 128, (m, k), device="cuda", dtype=torch.int8)
         codes = torch.randint(0, 16, (n, k), device="cuda", dtype=torch.uint8)
         packed = (codes[:, ::2] | (codes[:, 1::2] << 4)).contiguous().view(torch.int8)
-        book = torch.tensor([0, .5, 1, 1.5, 2, 3, 4, 6, 0, -.5, -1, -1.5, -2, -3, -4, -6], device="cuda")
-        sx = torch.full((m,), .001, device="cuda")
-        sw = torch.full((n,), .002, device="cuda")
-        bias = torch.randn(n, device="cuda") * .01
+        book = torch.tensor(
+            [0, 0.5, 1, 1.5, 2, 3, 4, 6, 0, -0.5, -1, -1.5, -2, -3, -4, -6],
+            device="cuda",
+        )
+        sx = torch.full((m,), 0.001, device="cuda")
+        sw = torch.full((n,), 0.002, device="cuda")
+        bias = torch.randn(n, device="cuda") * 0.01
         for dtype in (torch.float32, torch.float8_e4m3fn):
             scales = (torch.rand(n, k // 16, device="cuda") * 30).to(dtype)
-            w8 = (book[codes.long()] * scales.float().repeat_interleave(16, 1)).round().clamp(-127, 127)
+            w8 = (
+                (book[codes.long()] * scales.float().repeat_interleave(16, 1))
+                .round()
+                .clamp(-127, 127)
+            )
             reference = (qx.float() @ w8.t()) * sx[:, None] * sw[None, :] + bias
             for chunk in (-1, 32):
                 actual = kernel.turing_codebook_w4a8_linear(
-                    qx, packed, sx, scales, sw, book, bias, chunk_rows=chunk,
+                    qx,
+                    packed,
+                    sx,
+                    scales,
+                    sw,
+                    book,
+                    bias,
+                    chunk_rows=chunk,
                 )
-                torch.testing.assert_close(actual.float(), reference,
-                                           rtol=.004, atol=2e-6)
+                torch.testing.assert_close(
+                    actual.float(), reference, rtol=0.004, atol=2e-6
+                )
 
     def test_sol_and_varlen_are_fullgraph_leaves(self):
         q = torch.empty((1, 4, 129, 128), dtype=torch.bfloat16, device="meta")

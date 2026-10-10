@@ -9,10 +9,16 @@ from collections.abc import Mapping
 APPLICATIONS = {
     "TuringUtilsMiniMaxH3LatentUpscale": (
         "_TuringUtilsH3UpscaleLoader",
-        "_TuringUtilsH3UpscaleApply", "upscale_model", {"precision": "auto"}),
+        "_TuringUtilsH3UpscaleApply",
+        "upscale_model",
+        {"precision": "auto"},
+    ),
     "TuringUtilsSeCTrackVisualConcept": (
         "_TuringUtilsSeCLoader",
-        "_TuringUtilsSeCApply", "model", {"attention": "auto"}),
+        "_TuringUtilsSeCApply",
+        "model",
+        {"attention": "auto"},
+    ),
 }
 
 
@@ -29,10 +35,14 @@ def compile_shared_loaders(prompt):
         if "model_name" not in inputs:
             continue  # Let normal prompt validation report the missing input.
         loading = {"model_name": inputs.pop("model_name")}
-        loading.update({name: inputs.pop(name, default) for name, default in defaults.items()})
+        loading.update(
+            {name: inputs.pop(name, default) for name, default in defaults.items()}
+        )
         signature = json.dumps([loader, loading], sort_keys=True, separators=(",", ":"))
         if signature not in shared:
-            base = "_turing_loader_" + hashlib.sha256(signature.encode()).hexdigest()[:24]
+            base = (
+                "_turing_loader_" + hashlib.sha256(signature.encode()).hexdigest()[:24]
+            )
             shared_id = base
             suffix = 0
             while shared_id in result:

@@ -5,6 +5,7 @@ import platform
 import runpy
 import sys
 import tempfile
+
 try:
     import tomllib
 except ModuleNotFoundError:  # Python 3.10 build environments
@@ -22,13 +23,20 @@ SETUP_PATH = PLUGIN_ROOT / "kernel" / "setup.py"
 class KernelSetupTest(unittest.TestCase):
     def test_veda_preparation_avoids_unrelated_cuda_library_headers(self):
         source = (PLUGIN_ROOT / "kernel/csrc/turing/sage/veda_prepare.cu").read_text()
-        for header in ("ATen/cuda/CUDAContext.h", "ATen/cuda/CUDAContextLight.h",
-                       "cusparse.h", "cusolverDn.h", "cublas_v2.h"):
+        for header in (
+            "ATen/cuda/CUDAContext.h",
+            "ATen/cuda/CUDAContextLight.h",
+            "cusparse.h",
+            "cusolverDn.h",
+            "cublas_v2.h",
+        ):
             self.assertNotIn(f"#include <{header}>", source)
         self.assertIn("#include <c10/cuda/CUDAStream.h>", source)
         self.assertNotIn("cublasGemm", source)
         self.assertNotIn("projection_int8", source)
-        attention = (PLUGIN_ROOT / "kernel/csrc/turing/sage/sol_sparse_cuda_sm75.cu").read_text()
+        attention = (
+            PLUGIN_ROOT / "kernel/csrc/turing/sage/sol_sparse_cuda_sm75.cu"
+        ).read_text()
         self.assertNotIn('#include "veda_prepare', attention)
 
     @staticmethod
@@ -57,12 +65,16 @@ class KernelSetupTest(unittest.TestCase):
             mock.patch.dict(os.environ, environment, clear=False),
             mock.patch("torch.utils.cpp_extension.CUDA_HOME", None),
             mock.patch("torch.version.cuda", cuda_version),
-            mock.patch("torch.utils.cpp_extension.CUDAExtension", side_effect=self._extension),
+            mock.patch(
+                "torch.utils.cpp_extension.CUDAExtension", side_effect=self._extension
+            ),
             mock.patch("torch.utils.cpp_extension.BuildExtension", object()),
             mock.patch("shutil.which", return_value=None),
             mock.patch("setuptools.setup") as setup,
         ):
-            runpy.run_path(str(SETUP_PATH), run_name="__turing_utils_windows_setup_test__")
+            runpy.run_path(
+                str(SETUP_PATH), run_name="__turing_utils_windows_setup_test__"
+            )
         return setup.call_args.kwargs["ext_modules"]
 
     @staticmethod
@@ -88,7 +100,10 @@ class KernelSetupTest(unittest.TestCase):
             with (
                 mock.patch.object(platform, "system", return_value="Linux"),
                 mock.patch.dict(os.environ, environment, clear=False),
-                mock.patch("torch.utils.cpp_extension.CUDAExtension", side_effect=self._extension),
+                mock.patch(
+                    "torch.utils.cpp_extension.CUDAExtension",
+                    side_effect=self._extension,
+                ),
                 mock.patch("torch.utils.cpp_extension.BuildExtension", object()),
                 mock.patch("setuptools.setup") as setup,
             ):
@@ -99,7 +114,11 @@ class KernelSetupTest(unittest.TestCase):
         extensions = setup.call_args.kwargs["ext_modules"]
         self.assertEqual(
             [extension.name for extension in extensions],
-            ["comfyui_turing_utils_kernel._C", "comfyui_turing_utils_kernel._sage_qattn_sm75", "comfyui_turing_utils_kernel._sage_fused_sm75"],
+            [
+                "comfyui_turing_utils_kernel._C",
+                "comfyui_turing_utils_kernel._sage_qattn_sm75",
+                "comfyui_turing_utils_kernel._sage_fused_sm75",
+            ],
         )
         flags = extensions[1].kwargs["extra_compile_args"]["nvcc"]
         self.assertEqual(namespace["ARCH_LIST"], "7.5+PTX")
@@ -117,20 +136,30 @@ class KernelSetupTest(unittest.TestCase):
             "-std=c++17",
             extensions[0].kwargs["extra_compile_args"]["cxx"],
         )
-        self.assertIn("csrc/turing/sage/sol_sparse_cuda_sm75.cu", extensions[1].kwargs["sources"])
-        self.assertIn("csrc/turing/sage/quant_v_int8_cuda_sm75.cu", extensions[1].kwargs["sources"])
-        self.assertIn("csrc/turing/sage/veda_prepare.cu", extensions[1].kwargs["sources"])
+        self.assertIn(
+            "csrc/turing/sage/sol_sparse_cuda_sm75.cu", extensions[1].kwargs["sources"]
+        )
+        self.assertIn(
+            "csrc/turing/sage/quant_v_int8_cuda_sm75.cu",
+            extensions[1].kwargs["sources"],
+        )
+        self.assertIn(
+            "csrc/turing/sage/veda_prepare.cu", extensions[1].kwargs["sources"]
+        )
         self.assertIn(
             "csrc/turing/sage/qk_preprocess.cu", extensions[2].kwargs["sources"]
         )
         self.assertIn(
             "csrc/turing/sage/overlap_blend.cu", extensions[2].kwargs["sources"]
         )
-        self.assertEqual(setup.call_args.kwargs["version"], "0.43.0")
-        self.assertEqual(set(setup.call_args.kwargs["packages"]), {
-            "comfyui_turing_utils_kernel",
-            "comfyui_turing_utils_kernel.turing_sage",
-        })
+        self.assertEqual(setup.call_args.kwargs["version"], "0.45.0")
+        self.assertEqual(
+            set(setup.call_args.kwargs["packages"]),
+            {
+                "comfyui_turing_utils_kernel",
+                "comfyui_turing_utils_kernel.turing_sage",
+            },
+        )
 
     def test_visible_gpu_arches_are_default_and_explicit_multiarch_is_supported(self):
         setup_source = SETUP_PATH.read_text(encoding="utf-8")
@@ -142,8 +171,8 @@ class KernelSetupTest(unittest.TestCase):
             setup_source,
         )
         self.assertIn('{"75", "80", "86", "89", "90"}', setup_source)
-        self.assertIn('default=None', wheel_source)
-        self.assertIn('defaults to all visible supported GPUs', wheel_source)
+        self.assertIn("default=None", wheel_source)
+        self.assertIn("defaults to all visible supported GPUs", wheel_source)
 
         with tempfile.TemporaryDirectory() as temp_dir:
             include_dir = Path(temp_dir) / "cutlass" / "include"
@@ -230,7 +259,10 @@ class KernelSetupTest(unittest.TestCase):
                 mock.patch.dict(os.environ, environment, clear=True),
                 mock.patch.object(platform, "system", return_value="Linux"),
                 mock.patch("torch.cuda.is_available", return_value=False),
-                mock.patch("torch.utils.cpp_extension.CUDAExtension", side_effect=self._extension),
+                mock.patch(
+                    "torch.utils.cpp_extension.CUDAExtension",
+                    side_effect=self._extension,
+                ),
                 mock.patch("torch.utils.cpp_extension.BuildExtension", object()),
                 mock.patch("setuptools.setup") as setup,
             ):
@@ -253,7 +285,10 @@ class KernelSetupTest(unittest.TestCase):
             with (
                 mock.patch.object(platform, "system", return_value="Linux"),
                 mock.patch.dict(os.environ, environment, clear=False),
-                mock.patch("torch.utils.cpp_extension.CUDAExtension", side_effect=self._extension),
+                mock.patch(
+                    "torch.utils.cpp_extension.CUDAExtension",
+                    side_effect=self._extension,
+                ),
                 mock.patch("torch.utils.cpp_extension.BuildExtension", object()),
                 mock.patch("setuptools.setup"),
             ):
@@ -276,7 +311,10 @@ class KernelSetupTest(unittest.TestCase):
             with (
                 mock.patch.object(platform, "system", return_value="Linux"),
                 mock.patch.dict(os.environ, environment, clear=False),
-                mock.patch("torch.utils.cpp_extension.CUDAExtension", side_effect=self._extension),
+                mock.patch(
+                    "torch.utils.cpp_extension.CUDAExtension",
+                    side_effect=self._extension,
+                ),
                 mock.patch("torch.utils.cpp_extension.BuildExtension", object()),
                 mock.patch("setuptools.setup") as setup,
             ):
@@ -316,16 +354,11 @@ class KernelSetupTest(unittest.TestCase):
         metadata = tomllib.loads(
             (PLUGIN_ROOT / "kernel" / "pyproject.toml").read_text(encoding="utf-8")
         )
-        self.assertEqual(metadata["project"]["version"], "0.43.0")
+        self.assertEqual(metadata["project"]["version"], "0.45.0")
 
     def test_overlap_epilogue_is_self_contained_and_deterministic_by_design(self):
         source = (
-            PLUGIN_ROOT
-            / "kernel"
-            / "csrc"
-            / "turing"
-            / "sage"
-            / "overlap_blend.cu"
+            PLUGIN_ROOT / "kernel" / "csrc" / "turing" / "sage" / "overlap_blend.cu"
         ).read_text(encoding="utf-8")
         self.assertNotIn("ATen/cuda/CUDAContext", source)
         self.assertNotIn("cusparse", source.lower())
@@ -335,7 +368,12 @@ class KernelSetupTest(unittest.TestCase):
 
     def test_sparse_source_does_not_require_optional_cuda_library_headers(self):
         source = (
-            PLUGIN_ROOT / "kernel" / "csrc" / "turing" / "sage" / "sol_sparse_cuda_sm75.cu"
+            PLUGIN_ROOT
+            / "kernel"
+            / "csrc"
+            / "turing"
+            / "sage"
+            / "sol_sparse_cuda_sm75.cu"
         ).read_text(encoding="utf-8")
         route_source = (
             PLUGIN_ROOT
@@ -424,9 +462,7 @@ class KernelSetupTest(unittest.TestCase):
 
     def test_sol_summary_abi_supports_mapped_physical_values(self):
         sage_dir = PLUGIN_ROOT / "kernel" / "csrc" / "turing" / "sage"
-        source = (sage_dir / "sol_sparse_cuda_sm75.cu").read_text(
-            encoding="utf-8"
-        )
+        source = (sage_dir / "sol_sparse_cuda_sm75.cu").read_text(encoding="utf-8")
         header = (sage_dir / "attn_cuda_sm75.h").read_text(encoding="utf-8")
         binding = (sage_dir / "pybind_sm75.cpp").read_text(encoding="utf-8")
         marker = "sol_w8a8_precompute_mapped_summaries"
@@ -468,9 +504,9 @@ class KernelSetupTest(unittest.TestCase):
         self.assertIn("maxThreadsPerMultiProcessor", bindings)
         self.assertIn("forced_threads", bindings)
         self.assertIn("cudaFuncAttributeMaxDynamicSharedMemorySize", source)
-        self.assertIn('(\"fc2\", 5376, 14336, \"swiglu\")', benchmark)
+        self.assertIn('("fc2", 5376, 14336, "swiglu")', benchmark)
         self.assertIn(
-            '(\"H3 fc2 fused SwiGLU+ConvRot A8\", 28672, \"swiglu\")',
+            '("H3 fc2 fused SwiGLU+ConvRot A8", 28672, "swiglu")',
             benchmark,
         )
 
@@ -478,9 +514,9 @@ class KernelSetupTest(unittest.TestCase):
         bindings = (PLUGIN_ROOT / "kernel" / "csrc" / "bindings.cpp").read_text(
             encoding="utf-8"
         )
-        source = (
-            PLUGIN_ROOT / "kernel" / "csrc" / "turing" / "w4a8.cu"
-        ).read_text(encoding="utf-8")
+        source = (PLUGIN_ROOT / "kernel" / "csrc" / "turing" / "w4a8.cu").read_text(
+            encoding="utf-8"
+        )
         self.assertNotIn("tile_policy", bindings)
         self.assertNotIn("run_auto_tuned", source)
         self.assertNotIn("GEMM_TUNE", source)
@@ -488,7 +524,9 @@ class KernelSetupTest(unittest.TestCase):
         self.assertNotIn("PersistentTileTuneCache", source)
         # Staged NVFP4 retains the full output width for architecture dispatch;
         # shrinking a temporary chunk must not change the selected GEMM family.
-        self.assertIn("properties->major >= 8 && std::max(n, original_n) >= 16384", source)
+        self.assertIn(
+            "properties->major >= 8 && std::max(n, original_n) >= 16384", source
+        )
         self.assertIn("int original_n = 0", source)
         self.assertIn("static_cast<int>(output.stride(0)));", source)
         self.assertIn(
@@ -501,9 +539,9 @@ class KernelSetupTest(unittest.TestCase):
         bindings = (PLUGIN_ROOT / "kernel" / "csrc" / "bindings.cpp").read_text(
             encoding="utf-8"
         )
-        source = (
-            PLUGIN_ROOT / "kernel" / "csrc" / "turing" / "w4a8.cu"
-        ).read_text(encoding="utf-8")
+        source = (PLUGIN_ROOT / "kernel" / "csrc" / "turing" / "w4a8.cu").read_text(
+            encoding="utf-8"
+        )
         self.assertNotIn("__dp4a", source)
         self.assertNotIn("w4a8_compatibility_kernel", source)
         self.assertIn("run_k_tail_tile", source)
@@ -530,7 +568,9 @@ class KernelSetupTest(unittest.TestCase):
                 "comfyui_turing_utils_kernel._sage_fused_sm75",
             ],
         )
-        self.assertEqual(extensions[0].kwargs["include_dirs"][1], str(conda_include.resolve()))
+        self.assertEqual(
+            extensions[0].kwargs["include_dirs"][1], str(conda_include.resolve())
+        )
         self.assertIn(str(cccl.resolve()), extensions[0].kwargs["include_dirs"])
         self.assertIn("/std:c++20", extensions[0].kwargs["extra_compile_args"]["cxx"])
         self.assertIn("-std=c++20", extensions[0].kwargs["extra_compile_args"]["nvcc"])
@@ -604,7 +644,9 @@ class KernelSetupTest(unittest.TestCase):
                     "COMFYUI_TURING_UTILS_NVCC_CXX_STANDARD": "20",
                 },
             )
-            with self.assertRaisesRegex(RuntimeError, "must select c\\+\\+17 or c\\+\\+20"):
+            with self.assertRaisesRegex(
+                RuntimeError, "must select c\\+\\+17 or c\\+\\+20"
+            ):
                 self._run_windows_setup(
                     prefix,
                     extra_environment={
@@ -618,7 +660,9 @@ class KernelSetupTest(unittest.TestCase):
 
     def test_wheel_builder_finds_windows_conda_nvcc(self):
         script = PLUGIN_ROOT / "kernel" / "scripts" / "build_wheel.py"
-        namespace = runpy.run_path(str(script), run_name="__turing_utils_build_wheel_test__")
+        namespace = runpy.run_path(
+            str(script), run_name="__turing_utils_build_wheel_test__"
+        )
         with tempfile.TemporaryDirectory() as temp_dir:
             prefix = Path(temp_dir)
             nvcc = prefix / "Library" / "bin" / "nvcc.exe"
@@ -641,11 +685,16 @@ class KernelSetupTest(unittest.TestCase):
                 mock.patch.object(platform, "system", return_value="Linux"),
                 mock.patch.dict(os.environ, environment, clear=False),
                 mock.patch.object(sys, "path", [str(site_root), *sys.path]),
-                mock.patch("torch.utils.cpp_extension.CUDAExtension", side_effect=self._extension),
+                mock.patch(
+                    "torch.utils.cpp_extension.CUDAExtension",
+                    side_effect=self._extension,
+                ),
                 mock.patch("torch.utils.cpp_extension.BuildExtension", object()),
                 mock.patch("setuptools.setup") as setup,
             ):
-                runpy.run_path(str(SETUP_PATH), run_name="__turing_utils_cutlass_package_test__")
+                runpy.run_path(
+                    str(SETUP_PATH), run_name="__turing_utils_cutlass_package_test__"
+                )
 
         core = setup.call_args.kwargs["ext_modules"][0]
         self.assertEqual(core.kwargs["include_dirs"][1], str(cutlass_include.resolve()))

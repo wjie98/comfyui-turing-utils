@@ -37,7 +37,9 @@ class CudaPhaseProfilerTest(unittest.TestCase):
                 "attention_kernel_architectures",
                 return_value=("sm75+ptx", "sm86"),
             ),
-            mock.patch.object(profiling, "attention_runtime_profile_schema", return_value=1),
+            mock.patch.object(
+                profiling, "attention_runtime_profile_schema", return_value=1
+            ),
             mock.patch.object(profiling, "kernel_version", return_value="0.31.0"),
             mock.patch.object(profiling.torch.cuda, "current_device", return_value=0),
             mock.patch.object(
@@ -134,18 +136,14 @@ class CudaPhaseProfilerTest(unittest.TestCase):
         for event in events[::2]:
             event.elapsed_time.return_value = 1.0
 
-        with mock.patch.object(
-            profiling.torch.cuda, "Event", side_effect=events
-        ):
+        with mock.patch.object(profiling.torch.cuda, "Event", side_effect=events):
             for kind, shape, phase in (
                 ("attention", (1, 56, 60186, 128), "attention.execute"),
                 ("mlp", (60186, 5376), "minimax.mlp.swiglu_fc2"),
                 ("attention", (1, 56, 127275, 128), "attention.execute"),
                 ("mlp", (127275, 5376), "minimax.mlp.swiglu_fc2_tile"),
             ):
-                self.assertTrue(
-                    profiler.begin_operation(kind, shape, path="test")
-                )
+                self.assertTrue(profiler.begin_operation(kind, shape, path="test"))
                 profiler.call(phase, lambda: None)
                 profiler.complete_operation(kind, shape)
 
@@ -159,16 +157,12 @@ class CudaPhaseProfilerTest(unittest.TestCase):
         start = mock.Mock()
         end = mock.Mock()
         start.elapsed_time.return_value = 1.0
-        with mock.patch.object(
-            profiling.torch.cuda, "Event", side_effect=(start, end)
-        ):
+        with mock.patch.object(profiling.torch.cuda, "Event", side_effect=(start, end)):
             profiler.begin_operation("attention", (1, 1, 64, 64))
             profiler.call("attention.execute", lambda: None)
             profiler.complete_operation("attention", (1, 1, 64, 64))
         with mock.patch.object(profiling.torch.cuda, "Event") as event:
-            self.assertFalse(
-                profiler.begin_operation("mlp", (64, 64), path="full")
-            )
+            self.assertFalse(profiler.begin_operation("mlp", (64, 64), path="full"))
             profiler.call("mlp", lambda: None)
             profiler.complete_operation("mlp", (64, 64))
         event.assert_not_called()
@@ -203,7 +197,9 @@ class WorkflowTimelineTest(unittest.TestCase):
             mock.patch.object(profiling.time, "perf_counter", return_value=10.020),
             mock.patch.object(profiling.torch.cuda, "memory_allocated", return_value=0),
             mock.patch.object(profiling.torch.cuda, "memory_reserved", return_value=0),
-            mock.patch.object(profiling.torch.cuda, "max_memory_allocated", return_value=1024**3),
+            mock.patch.object(
+                profiling.torch.cuda, "max_memory_allocated", return_value=1024**3
+            ),
             self.assertLogs("comfyui-turing-utils", level="INFO") as logs,
         ):
             self.assertTrue(timeline.finish_after_synchronize(window))
@@ -223,9 +219,7 @@ class WorkflowTimelineTest(unittest.TestCase):
             return "output"
 
         with (
-            mock.patch.object(
-                profiling.torch.cuda, "Event", side_effect=(start, end)
-            ),
+            mock.patch.object(profiling.torch.cuda, "Event", side_effect=(start, end)),
             mock.patch.object(profiling.torch.cuda, "synchronize") as synchronize,
             mock.patch.object(profiling.torch.cuda, "reset_peak_memory_stats") as reset,
             mock.patch.object(
@@ -249,9 +243,7 @@ class WorkflowTimelineTest(unittest.TestCase):
             mock.patch.object(profiling, "profile_level", return_value=2),
             self.assertLogs("comfyui-turing-utils", level="INFO") as logs,
         ):
-            output = timeline.call(
-                "latent_upscale", torch.device("cuda", 0), function
-            )
+            output = timeline.call("latent_upscale", torch.device("cuda", 0), function)
 
         self.assertEqual(output, "output")
         self.assertEqual(synchronize.call_count, 2)

@@ -146,9 +146,7 @@ export class DirectoryPicker {
       } else panels[0].replaceChildren();
       await preview(current);
     };
-    addButton("上一级", () =>
-      navigate(current.split("/").slice(0, -1).join("/")),
-    );
+    addButton("上一级", () => navigate(current.split("/").slice(0, -1).join("/")));
     addButton("新建文件夹", async () => {
       const name = await ask(() => this.prompt("新文件夹名称"));
       if (!name) return;

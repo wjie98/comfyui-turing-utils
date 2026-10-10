@@ -42,12 +42,12 @@ def turing_codebook_w4a8_linear(
     activation_scale: torch.Tensor,
     group_scale: torch.Tensor,
     channel_scale: torch.Tensor,
-    codebook: torch.Tensor,
+    codebook: torch.Tensor | None = None,
     bias: torch.Tensor | None = None,
     group_size: int = 16,
     chunk_rows: int = 0,
 ) -> torch.Tensor:
-    """SM75 grouped-codebook W4A8.
+    """SM75+ grouped-codebook W4A8 or uniform W6A8 (codebook=None).
 
     ``chunk_rows=0`` selects the production path, ``-1`` forces inline
     packed-W4 decode for supported long sequences, and a positive multiple of
@@ -67,7 +67,7 @@ def turing_codebook_w4a8_linear(
         activation_scale.contiguous(),
         group_scale.contiguous(),
         channel_scale.contiguous(),
-        codebook.contiguous(),
+        None if codebook is None else codebook.contiguous(),
         None if bias is None else bias.contiguous(),
         group_size,
         chunk_rows,
@@ -81,7 +81,7 @@ def _turing_codebook_w4a8_linear_fake(
     activation_scale,
     group_scale,
     channel_scale,
-    codebook,
+    codebook=None,
     bias=None,
     group_size=16,
     chunk_rows=0,
@@ -226,18 +226,30 @@ def _turing_fp16_int8_linear_fake(activation, weight, activation_scale, weight_s
     return torch.empty((activation.size(0), weight.size(0)), dtype=torch.float16, device=activation.device)
 
 
-@torch.library.custom_op("turing_utils::fp16_int8_quantize", mutates_args=())
-def turing_fp16_int8_quantize(
+@torch.library.custom_op("turing_utils::fp16_int8_convrot_quantize", mutates_args=())
+def turing_fp16_int8_convrot_quantize(
     x: torch.Tensor,
+    group_size: int = 256,
+    input_act: str | None = None,
+    input_act_weight: torch.Tensor | None = None,
+    input_act_eps: float = 0.0,
 ) -> tuple[torch.Tensor, torch.Tensor]:
-    """FP16 row quantization with eager's scale and rounding boundaries."""
-    return _C.turing_fp16_int8_quantize(x)
+    """FP16 input storage with fused FP32 activation, ConvRot and INT8 rounding."""
+    codes = {None: 0, "none": 0, "gelu_tanh": 1, "swiglu": 2, "rms_norm": 3}
+    if input_act not in codes:
+        raise ValueError(f"unsupported FP16 ConvRot activation: {input_act!r}")
+    return _C.turing_fp16_int8_convrot_quantize(
+        x, group_size, codes[input_act], input_act_weight, input_act_eps
+    )
 
 
-@turing_fp16_int8_quantize.register_fake
-def _turing_fp16_int8_quantize_fake(x):
+@turing_fp16_int8_convrot_quantize.register_fake
+def _turing_fp16_int8_convrot_quantize_fake(
+    x, group_size=256, input_act=None, input_act_weight=None, input_act_eps=0.0
+):
+    hidden = x.size(1) // 2 if input_act == "swiglu" else x.size(1)
     return (
-        torch.empty(x.shape, dtype=torch.int8, device=x.device),
+        torch.empty((x.size(0), hidden), dtype=torch.int8, device=x.device),
         torch.empty((x.size(0), 1), dtype=torch.float32, device=x.device),
     )
 

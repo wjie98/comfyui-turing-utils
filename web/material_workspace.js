@@ -1,47 +1,30 @@
 import { app } from "../../scripts/app.js";
 import { api } from "../../scripts/api.js";
-import { ComfyWidgets } from "../../scripts/widgets.js";
 import { INPUTS, entries, syncPorts } from "./lib/canvas_ports.js";
 import { DirectoryPicker } from "./lib/directory_picker.js";
-import { bindMaterialCombo } from "./lib/material_combo.js";
+import { request, report, action, prompt } from "./workspace/api.js";
+import {
+  button,
+  field,
+  url,
+  controls,
+  releasePlayer,
+  clearPosters,
+  stopActivePreview,
+} from "./workspace/material_controls.js";
+import {
+  ROOT,
+  CARD,
+  jobs,
+  project,
+  editor,
+  enqueueSave,
+  saveProject,
+  setProjectStatus,
+} from "./workspace/project_state.js";
 
-const ROOT = "TuringCanvasProject",
-  CARD = "TuringCanvasCard",
-  jobs = new Map();
-const saves = new Map();
 let templates = [];
-let playing = null;
-const project = () => app.graph.extra?.turing_project;
-const editor = () => app.graph.extra?.turing_editor;
-export async function request(path, body = {}) {
-  const r = await api.fetchApi(`/turing/workspace/${path}`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body),
-  });
-  const data = await r.json();
-  if (!r.ok) throw Error(data.error || JSON.stringify(data));
-  return data;
-}
-const report = (e) =>
-  app.extensionManager.toast.add({
-    severity: "error",
-    summary: "Canvas",
-    detail: e.message || String(e),
-    life: 7000,
-  });
-const action =
-  (fn) =>
-  (...args) =>
-    Promise.resolve()
-      .then(() => fn(...args))
-      .catch(report);
-const prompt = (title, value = "") =>
-  app.extensionManager.dialog.prompt({
-    title,
-    message: title,
-    defaultValue: value,
-  });
+export { request } from "./workspace/api.js";
 export async function openTab(workflow, name) {
   const p = workflow.extra?.turing_project,
     e = workflow.extra?.turing_editor;
@@ -108,8 +91,12 @@ function prepare({ workflow, document, statistics }) {
   const outputs = new Map();
   for (const node of workflow.nodes) {
     if (node.type !== CARD) continue;
-    configureCard(node, cards.get(node.properties.instance), document,
-      workflow.extra.turing_project.directory);
+    configureCard(
+      node,
+      cards.get(node.properties.instance),
+      document,
+      workflow.extra.turing_project.directory,
+    );
     node.properties.card.outputs.forEach((p, slot) => {
       const key = p.source + ":" + p.source_slot;
       if (!outputs.has(key)) outputs.set(key, { node, slot });
@@ -122,7 +109,14 @@ function prepare({ workflow, document, statistics }) {
       const binding = target.properties.card.bindings?.[port.id];
       const source = binding && outputs.get(binding.source + ":" + binding.slot);
       if (!source) continue;
-      workflow.links.push([++id, source.node.id, source.slot, target.id, slot, port.type]);
+      workflow.links.push([
+        ++id,
+        source.node.id,
+        source.slot,
+        target.id,
+        slot,
+        port.type,
+      ]);
       target.inputs[slot].link = id;
       source.node.outputs[source.slot].links.push(id);
     }
@@ -133,74 +127,11 @@ function prepare({ workflow, document, statistics }) {
 export async function openProject(directory, create = false) {
   templates = (await request("templates")).items;
   await openTab(
-    prepare(
-      await request(create ? "project/create" : "project/open", { directory }),
-    ),
+    prepare(await request(create ? "project/create" : "project/open", { directory })),
     `Canvas - ${directory}.json`,
   );
 }
-function snapshot(directory) {
-  if (project()?.directory === directory) return app.graph.serialize();
-  const tab = app.extensionManager.workflow.openWorkflows.find(
-    (w) => w.activeState?.extra?.turing_project?.directory === directory,
-  );
-  return tab?.activeState ? JSON.parse(JSON.stringify(tab.activeState)) : null;
-}
-function enqueueSave(state, operation) {
-  let queue = saves.get(state.directory);
-  if (!queue)
-    saves.set(
-      state.directory,
-      (queue = { revision: state.revision, tail: Promise.resolve() }),
-    );
-  queue.revision = Math.max(queue.revision, state.revision);
-  const task = queue.tail.then(async () => {
-    const result = await operation(queue.revision);
-    queue.revision = result.revision;
-    state.revision = result.revision;
-    if (project()?.directory === state.directory)
-      project().revision = result.revision;
-    for (const tab of app.extensionManager.workflow.openWorkflows) {
-      const p = tab.activeState?.extra?.turing_project;
-      if (p?.directory === state.directory) p.revision = result.revision;
-    }
-    return result;
-  });
-  queue.tail = task.catch(() => {});
-  return task;
-}
-export async function saveProject(directory = project()?.directory) {
-  if (typeof directory !== "string") directory = project()?.directory;
-  if (!directory) throw Error("当前不是素材画布");
-  const workflow = snapshot(directory);
-  if (!workflow) return; // A closed project already saved before task submission.
-  const state = workflow.extra.turing_project;
-  setProjectStatus(directory, "正在保存");
-  try {
-    const result = await enqueueSave(state, (revision) => {
-      // Capture at queue execution, not enqueue time: adding a card may have
-      // changed the native graph while this autosave was waiting.
-      const current = snapshot(directory);
-      if (!current) return { revision };
-      current.nodes = current.nodes.map((n) => ({
-        id: n.id,
-        type: n.type,
-        pos: n.pos,
-        size: n.size,
-        properties: { instance: n.properties.instance },
-      }));
-      return request("project/save", {
-        directory,
-        revision,
-        workflow: current,
-      });
-    });
-    setProjectStatus(directory, "已保存", result.statistics);
-  } catch (error) {
-    setProjectStatus(directory, "保存失败");
-    throw error;
-  }
-}
+export { saveProject } from "./workspace/project_state.js";
 export async function addCard(spec, position) {
   const state = { ...project() },
     directory = state.directory;
@@ -208,9 +139,11 @@ export async function addCard(spec, position) {
   const result = await enqueueSave(state, async (revision) => {
     const added = await request("card/add", { directory, revision, ...spec });
     const definition = {
-      type: CARD, title: added.document.cards[0].title,
+      type: CARD,
+      title: added.document.cards[0].title,
       properties: { instance: added.id },
-      pos: position || [360, 20], size: [320, 300],
+      pos: position || [360, 20],
+      size: [320, 300],
     };
     configureCard(definition, added.document.cards[0], added.document, directory);
     if (project()?.directory === directory) {
@@ -299,47 +232,11 @@ async function saveTemplate() {
 }
 async function editTemplate() {
   const { items } = await request("templates");
-  const name = await choose(
-    items.map((name) => ({ label: name, value: name })),
-  );
+  const name = await choose(items.map((name) => ({ label: name, value: name })));
   if (!name) return;
   const data = await request("template/open", { name });
   data.workflow.extra.turing_editor = { name, revision: data.revision };
   await openTab(data.workflow, name);
-}
-function button(node, name, fn) {
-  return node.addWidget("button", name, null, action(fn), { serialize: false });
-}
-function field(node, name, type, value, fn, options = {}) {
-  const w =
-    type === "STRING"
-      ? ComfyWidgets.STRING(
-          node,
-          name,
-          ["STRING", { default: value, multiline: options.multiline ?? true }],
-          app,
-        ).widget
-      : node.addWidget(
-          type === "BOOLEAN" ? "toggle" : type === "COMBO" ? "combo" : "number",
-          name,
-          value,
-          () => {},
-          options,
-        );
-  w.value = value;
-  w.callback = action(fn);
-  w.options = { ...w.options, serialize: false };
-  return w;
-}
-function url(directory, asset, thumbnail = false) {
-  return api.apiURL(
-    "/turing/workspace/asset?" +
-      new URLSearchParams({
-        directory,
-        asset,
-        ...(thumbnail ? { thumbnail: "1" } : {}),
-      }),
-  );
 }
 async function refreshMaterial(node, m, directory) {
   m.selection = await request("selection", { directory, node: m.id });
@@ -352,8 +249,7 @@ async function refreshMaterial(node, m, directory) {
   await w?.refreshMaterialList?.();
   node.graph?.setDirtyCanvas(true, true);
   const poster = node.posters?.get(m.id);
-  if (poster && m.selection.asset)
-    poster.src = url(directory, m.selection.asset, true);
+  if (poster && m.selection.asset) poster.src = url(directory, m.selection.asset, true);
 }
 async function select(node, m, content) {
   const previous = m.pending || Promise.resolve();
@@ -378,8 +274,7 @@ async function importMedia(node, m, file) {
   let data;
   try {
     const r = await api.fetchApi(
-      "/turing/workspace/import?" +
-        new URLSearchParams({ directory, kind: m.kind }),
+      "/turing/workspace/import?" + new URLSearchParams({ directory, kind: m.kind }),
       { method: "POST", body },
     );
     data = await r.json();
@@ -420,121 +315,6 @@ async function run(node, m) {
     setProjectStatus(state.directory, "执行失败");
     throw Error(JSON.stringify(await r.json()));
   }
-}
-function controls(node, m) {
-  if (m.kind === "text")
-    field(node, m.id, "STRING", m.selection.text || "", (value) =>
-      select(node, m, { text: value }),
-    ).label = m.name;
-  else {
-    if (["image", "video"].includes(m.kind)) {
-      const img = new Image();
-      img.loading = "lazy";
-      img.style.cssText =
-        "width:100%;height:100%;max-height:180px;object-fit:contain";
-      if (m.selection.asset)
-        img.src = url(node.properties.directory, m.selection.asset, true);
-      node.posters ||= new Map();
-      node.posters.set(m.id, img);
-      const preview = node.addDOMWidget(`poster:${m.id}`, "image", img, {
-        serialize: false,
-      });
-      preview.computeSize = () => [280, 180];
-    }
-    const w = field(
-      node,
-      m.id,
-      "COMBO",
-      m.selection.asset || "",
-      (value) => select(node, m, { asset: value }),
-      { values: [m.selection.asset?.split("/").at(-1) || ""] },
-    );
-    w.label = m.name;
-    const directory = node.properties.directory;
-    bindMaterialCombo(node, w, {
-      key: `${directory}:${m.kind}`,
-      list: async () =>
-        (
-          await request("history", {
-            directory,
-            kind: m.kind,
-            limit: 0,
-          })
-        ).items,
-      selected: () => m.selection.asset,
-      select: action((asset) => select(node, m, { asset })),
-    }).catch(report);
-    button(node, "choose file to upload", () => {
-      const input = document.createElement("input");
-      input.type = "file";
-      input.accept = m.kind + "/*";
-      input.onchange = action(async () => {
-        if (!input.files[0]) return;
-        await importMedia(node, m, input.files[0]);
-      });
-      input.click();
-    });
-    button(node, `${m.kind} · 预览`, () => {
-      if (!m.selection.asset) return;
-      playing?.releasePlayer();
-      node.releasePlayer();
-      const media = document.createElement(m.kind === "image" ? "img" : m.kind);
-      media.style.cssText =
-        "width:100%;height:100%;max-height:240px;object-fit:contain";
-      if (m.kind !== "image") {
-        media.controls = true;
-        media.preload = "none";
-        media.onloadedmetadata = () => {
-          media.currentTime = node.trims[m.id]?.start || 0;
-        };
-        media.ontimeupdate = () => {
-          const trim = node.trims[m.id] || {};
-          if (trim.end && media.currentTime >= trim.end) {
-            media.pause();
-            media.currentTime = trim.start || 0;
-          }
-        };
-      }
-      media.src = url(
-        node.properties.directory,
-        m.selection.asset,
-        m.kind === "image",
-      );
-      node.player = media;
-      playing = node;
-      node.playerWidget = node.addDOMWidget("preview", m.kind, media, {
-        serialize: false,
-      });
-      node.playerWidget.computeSize = () => [
-        280,
-        m.kind === "audio" ? 54 : 180,
-      ];
-      node.setSize(node.computeSize());
-      node.visibility = new IntersectionObserver((items) => {
-        if (!items[0].isIntersecting) node.releasePlayer();
-      });
-      node.visibility.observe(media);
-    });
-  }
-  if (["video", "audio"].includes(m.kind)) {
-    node.trims ||= {};
-    node.trims[m.id] = { start: 0, end: 0 };
-    for (const [key, label] of [
-      ["start", "起点（秒）"],
-      ["end", "终点（秒，0 为末尾）"],
-    ])
-      field(
-        node,
-        `${m.name} · ${label}`,
-        "FLOAT",
-        0,
-        (value) => {
-          node.trims[m.id][key] = value;
-        },
-        { min: 0, step: 1, precision: 2 },
-      );
-  }
-  if (m.executable) button(node, `${m.kind} · 执行到这里`, () => run(node, m));
 }
 class ProjectNode extends LiteGraph.LGraphNode {
   constructor() {
@@ -598,25 +378,6 @@ class ProjectNode extends LiteGraph.LGraphNode {
     this.setSize(this.computeSize());
   }
 }
-function setProjectStatus(directory, status, statistics, root) {
-  root ||=
-    project()?.directory === directory &&
-    app.graph._nodes.find((n) => n.type === ROOT);
-  if (!root) return;
-  if (statistics) root.properties.statistics = statistics;
-  const stats = root.properties.statistics;
-  const info = root.widgets.find((w) => w.name === "画布统计");
-  if (info && stats) {
-    const counts = Object.entries(stats.materials)
-      .map(([kind, count]) => `${kind}: ${count}`)
-      .join(" · ");
-    info.value = `${stats.cards} 张卡片 · ${counts} · ${(stats.bytes / 1048576).toFixed(1)} MiB`;
-  }
-  const saved = root.widgets.find((w) => w.name === "保存状态");
-  if (saved)
-    saved.value = `${status} · ${[...jobs.values()].filter((j) => j.directory === directory).length} 个任务`;
-  root.graph?.setDirtyCanvas(true, true);
-}
 class CardNode extends LiteGraph.LGraphNode {
   constructor() {
     super("Canvas Card");
@@ -639,6 +400,7 @@ class CardNode extends LiteGraph.LGraphNode {
   }
   onConfigure() {
     this.releasePlayer();
+    clearPosters(this);
     for (const w of this.widgets || []) w.onRemove?.();
     this.widgets = [];
     const card = this.properties.card;
@@ -666,28 +428,18 @@ class CardNode extends LiteGraph.LGraphNode {
           precision: f.type === "INT" ? 0 : 3,
         },
       );
-    for (const m of this.properties.materials) controls(this, m);
+    for (const m of this.properties.materials)
+      controls(this, m, { select, importMedia, run });
     button(this, "编辑工作流", () => editCard(this));
     this.setSize(this.computeSize());
   }
   releasePlayer() {
-    this.visibility?.disconnect();
-    if (this.player) {
-      this.player.pause?.();
-      this.player.removeAttribute("src");
-      this.player.load?.();
-      this.player.remove();
-      const i = this.widgets.indexOf(this.playerWidget);
-      if (i >= 0) this.widgets.splice(i, 1);
-      this.playerWidget.onRemove?.();
-      this.player = null;
-    }
-    if (playing === this) playing = null;
+    releasePlayer(this);
   }
   onRemoved() {
     this.releasePlayer();
     for (const w of this.widgets || []) w.onRemove?.();
-    this.posters?.clear();
+    clearPosters(this);
   }
 }
 app.registerExtension({
@@ -723,10 +475,7 @@ app.registerExtension({
       label: "新建 Canvas 卡片",
       function: action(async () => {
         const r = await api.fetchApi("/turing/workspace/new-template");
-        await openTab(
-          await r.json(),
-          `新卡片-${crypto.randomUUID().slice(0, 6)}.json`,
-        );
+        await openTab(await r.json(), `新卡片-${crypto.randomUUID().slice(0, 6)}.json`);
       }),
     },
     {
@@ -761,7 +510,7 @@ app.registerExtension({
   ],
   setup() {
     document.addEventListener("visibilitychange", () => {
-      if (document.hidden) playing?.releasePlayer();
+      if (document.hidden) stopActivePreview();
     });
     const queue = app.queuePrompt;
     app.queuePrompt = function (...args) {
@@ -788,16 +537,12 @@ app.registerExtension({
                 ["文本", "text"],
               ].map(([label, kind]) => ({
                 content: label,
-                callback: action(() =>
-                  addCard({ kind }, Array.from(this.graph_mouse)),
-                ),
+                callback: action(() => addCard({ kind }, Array.from(this.graph_mouse))),
               })),
               null,
               ...templates.map((name) => ({
                 content: name,
-                callback: action(() =>
-                  addCard({ name }, Array.from(this.graph_mouse)),
-                ),
+                callback: action(() => addCard({ name }, Array.from(this.graph_mouse))),
               })),
             ],
           },

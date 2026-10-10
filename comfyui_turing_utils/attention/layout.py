@@ -198,7 +198,10 @@ class AttentionSemanticLayout:
                 return "video topology metadata is invalid"
             topology_ids.add(topology.topology_id)
         for segment in (*self.query_segments, *self.key_segments):
-            if segment.topology_id is not None and segment.topology_id not in topology_ids:
+            if (
+                segment.topology_id is not None
+                and segment.topology_id not in topology_ids
+            ):
                 return f"segment references unknown topology {segment.topology_id!r}"
         return None
 

@@ -15,7 +15,7 @@ sys.path.insert(0, str(PLUGIN_ROOT))
 
 import comfy.patcher_extension  # noqa: E402
 
-from comfyui_turing_utils.quantization import dispatch  # noqa: E402
+from comfyui_turing_utils.quantization import backend  # noqa: E402
 from comfyui_turing_utils.quantization.capabilities import BACKEND_NAME  # noqa: E402
 from comfyui_turing_utils.quantization.operator_scope import (  # noqa: E402
     CLIP_ATTACHMENT_KEY,
@@ -142,9 +142,9 @@ class OperatorScopeTest(unittest.TestCase):
         with (
             mock.patch("comfy_kitchen.list_backends", return_value=cuda_status),
             mock.patch("comfy_kitchen.registry.registry", fake_registry),
-            mock.patch.object(dispatch, "_kernel_available", return_value=True),
+            mock.patch.object(backend, "_kernel_available", return_value=True),
         ):
-            self.assertTrue(dispatch.register_backend())
+            self.assertTrue(backend.register_backend())
 
         fake_registry.register.assert_called_once()
         fake_registry.set_priority.assert_not_called()

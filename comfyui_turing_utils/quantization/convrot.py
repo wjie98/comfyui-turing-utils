@@ -9,14 +9,17 @@ import struct
 from pathlib import Path
 
 import torch
-
+from .formats import (
+    W4_FORMAT,
+    GROUPED_INT8_FORMAT,
+    W8_FORMAT,
+    LEGACY_W8_FORMAT,
+    NVFP4_FORMAT,
+    describe_weight_storage,
+    grouped_weight_geometry,
+)
 
 MODEL_EXTENSIONS = {".safetensors", ".sft"}
-W4_FORMAT = "convrot_w4a4"
-CODEBOOK_W4_FORMAT = "asym_w4a8_int8"
-W8_FORMAT = "int8_tensorwise"
-LEGACY_W8_FORMAT = "int8_rowwise"
-NVFP4_FORMAT = "nvfp4"
 MAX_SAFETENSORS_HEADER_SIZE = 128 * 1024 * 1024
 MAX_QUANT_CONFIG_SIZE = 1024 * 1024
 
@@ -28,6 +31,7 @@ class ConvRotSummary:
     codebook_w4a8: int = 0
     w8a8: int = 0
     nvfp4: int = 0
+    w6a8: int = 0
 
 
 def _params(config: dict, layer_name: str) -> dict:
@@ -46,13 +50,21 @@ def _normalize_legacy_config(config: dict, layer_name: str) -> None:
     quant_format = config.get("format")
     convrot = _config_value(config, params, "convrot", False)
     per_row = _config_value(config, params, "per_row", False)
-    if (quant_format is None or quant_format == LEGACY_W8_FORMAT) and convrot is True and per_row is True:
+    if (
+        (quant_format is None or quant_format == LEGACY_W8_FORMAT)
+        and convrot is True
+        and per_row is True
+    ):
         config["format"] = W8_FORMAT
 
 
-def _classify_config(config: dict, layer_name: str, force_int8_gemm: bool) -> tuple[str, str] | None:
+def _classify_config(
+    config: dict, layer_name: str, force_int8_gemm: bool
+) -> tuple[str, str] | None:
     if not isinstance(config, dict):
-        raise ValueError(f"Quantization metadata for layer {layer_name} must be an object")
+        raise ValueError(
+            f"Quantization metadata for layer {layer_name} must be an object"
+        )
 
     _normalize_legacy_config(config, layer_name)
     quant_format = config.get("format")
@@ -68,31 +80,39 @@ def _classify_config(config: dict, layer_name: str, force_int8_gemm: bool) -> tu
             )
         return "w4", "int8" if force_int8_gemm else activation_dtype
 
-    if quant_format == CODEBOOK_W4_FORMAT:
+    if quant_format == GROUPED_INT8_FORMAT:
         convrot = _config_value(config, params, "convrot", True)
         if convrot is not True:
             raise ValueError(
-                f"Grouped-codebook W4A8 layer {layer_name} must declare convrot=true"
+                f"Grouped INT8 layer {layer_name} must declare convrot=true"
             )
         group_size = _config_value(config, params, "group_size", 16)
         convrot_groupsize = _config_value(config, params, "convrot_groupsize", 256)
-        if not isinstance(group_size, int) or isinstance(group_size, bool) or group_size < 4:
+        if (
+            not isinstance(group_size, int)
+            or isinstance(group_size, bool)
+            or group_size < 4
+        ):
             raise ValueError(
-                f"Grouped-codebook W4A8 layer {layer_name} has invalid group_size={group_size!r}"
+                f"Grouped INT8 layer {layer_name} has invalid group_size={group_size!r}"
             )
         if convrot_groupsize != 256:
             raise ValueError(
-                f"Grouped-codebook W4A8 layer {layer_name} requires convrot_groupsize=256"
+                f"Grouped INT8 layer {layer_name} requires convrot_groupsize=256"
             )
         return "w4_codebook", "int8"
 
     convrot = _config_value(config, params, "convrot", False)
     if not isinstance(convrot, bool):
-        raise ValueError(f"Quantized layer {layer_name} has non-boolean convrot={convrot!r}")
+        raise ValueError(
+            f"Quantized layer {layer_name} has non-boolean convrot={convrot!r}"
+        )
     if not convrot:
         return None
     if quant_format != W8_FORMAT:
-        raise ValueError(f"ConvRot layer {layer_name} uses unsupported weight format {quant_format!r}")
+        raise ValueError(
+            f"ConvRot layer {layer_name} uses unsupported weight format {quant_format!r}"
+        )
 
     activation_dtype = _config_value(config, params, "linear_dtype", "int8")
     if activation_dtype not in {"int4", "int8"}:
@@ -118,6 +138,31 @@ def _decode_quant_tensor(value: torch.Tensor, key: str) -> dict:
     if not isinstance(config, dict):
         raise ValueError(f"{key} quantization JSON must be an object")
     return config
+
+
+def _classify_layer(config, layer_name, force_int8_gemm, tensor_shapes):
+    classification = _classify_config(config, layer_name, force_int8_gemm)
+    if classification != ("w4_codebook", "int8"):
+        return classification
+    if layer_name + ".weight_correction" in tensor_shapes:
+        raise ValueError(
+            f"Grouped INT8 layer {layer_name} contains unsupported weight_correction"
+        )
+    packed = tensor_shapes.get(layer_name + ".weight")
+    scales = tensor_shapes.get(layer_name + ".weight_s_rel")
+    if packed is None and scales is None:
+        return classification
+    if packed is None or scales is None:
+        raise ValueError(
+            f"Grouped INT8 layer {layer_name} requires both weight and weight_s_rel"
+        )
+    group_size = _config_value(config, _params(config, layer_name), "group_size", 16)
+    _, _, bits = grouped_weight_geometry(packed, scales, group_size)
+    if bits == 6:
+        if layer_name + ".weight_codebook" in tensor_shapes:
+            raise ValueError(f"W6A8 layer {layer_name} must not contain a codebook")
+        return "w6", "int8"
+    return classification
 
 
 def _encode_quant_tensor(config: dict) -> torch.Tensor:
@@ -165,10 +210,16 @@ def _read_quant_config(
     offsets = tensor_info.get("data_offsets")
     if (
         not isinstance(shape, list)
-        or any(not isinstance(size, int) or isinstance(size, bool) or size < 0 for size in shape)
+        or any(
+            not isinstance(size, int) or isinstance(size, bool) or size < 0
+            for size in shape
+        )
         or not isinstance(offsets, list)
         or len(offsets) != 2
-        or any(not isinstance(offset, int) or isinstance(offset, bool) for offset in offsets)
+        or any(
+            not isinstance(offset, int) or isinstance(offset, bool)
+            for offset in offsets
+        )
     ):
         raise ValueError(f"{key} has invalid shape or data offsets")
 
@@ -203,6 +254,11 @@ def _convrot_skip_reason(model_path: str | Path) -> str | None:
 
     try:
         tensor_index, data_start, file_size = _read_safetensors_header(model_path)
+        tensor_shapes = {
+            key: info.get("shape", ())
+            for key, info in tensor_index.items()
+            if key != "__metadata__" and isinstance(info, dict)
+        }
         metadata = tensor_index.get("__metadata__", {})
         if not isinstance(metadata, dict):
             return "safetensors __metadata__ must be an object"
@@ -210,18 +266,27 @@ def _convrot_skip_reason(model_path: str | Path) -> str | None:
         raw_quantization = metadata.get("_quantization_metadata")
         if raw_quantization is not None:
             quantization = json.loads(raw_quantization)
-            if not isinstance(quantization, dict) or not isinstance(quantization.get("layers"), dict):
+            if not isinstance(quantization, dict) or not isinstance(
+                quantization.get("layers"), dict
+            ):
                 return "safetensors _quantization_metadata must contain a layers object"
             for layer_name, config in quantization["layers"].items():
-                if _classify_config(config, layer_name, True) is not None:
+                if _classify_layer(config, layer_name, True, tensor_shapes) is not None:
                     return None
 
         with model_path.open("rb") as handle:
             for key, tensor_info in tensor_index.items():
                 if key == "__metadata__" or not key.endswith(".comfy_quant"):
                     continue
-                config = _read_quant_config(handle, tensor_info, key, data_start, file_size)
-                if _classify_config(config, key[: -len(".comfy_quant")], True) is not None:
+                config = _read_quant_config(
+                    handle, tensor_info, key, data_start, file_size
+                )
+                if (
+                    _classify_layer(
+                        config, key[: -len(".comfy_quant")], True, tensor_shapes
+                    )
+                    is not None
+                ):
                     return None
     except Exception as exc:
         return f"could not read ConvRot metadata ({exc})"
@@ -246,9 +311,15 @@ def configure_convrot_activation(
         try:
             header_quantization = json.loads(raw_header)
         except (TypeError, json.JSONDecodeError) as exc:
-            raise ValueError("Safetensors _quantization_metadata contains invalid JSON") from exc
-        if not isinstance(header_quantization, dict) or not isinstance(header_quantization.get("layers"), dict):
-            raise ValueError("Safetensors _quantization_metadata must contain a layers object")
+            raise ValueError(
+                "Safetensors _quantization_metadata contains invalid JSON"
+            ) from exc
+        if not isinstance(header_quantization, dict) or not isinstance(
+            header_quantization.get("layers"), dict
+        ):
+            raise ValueError(
+                "Safetensors _quantization_metadata must contain a layers object"
+            )
         records.extend(
             (name, config)
             for name, config in header_quantization["layers"].items()
@@ -268,8 +339,11 @@ def configure_convrot_activation(
 
     classified_records: list[tuple[str, dict, str, str]] = []
     layer_types: dict[str, tuple[str, str]] = {}
+    tensor_shapes = {key: value.shape for key, value in state_dict.items()}
     for layer_name, config in records:
-        classification = _classify_config(config, layer_name, force_int8_gemm)
+        classification = _classify_layer(
+            config, layer_name, force_int8_gemm, tensor_shapes
+        )
         if classification is None:
             continue
         previous = layer_types.get(layer_name)
@@ -284,11 +358,13 @@ def configure_convrot_activation(
         classified_records.append((layer_name, config, *classification))
 
     if not classified_records:
-        raise ValueError("The selected model does not contain supported ConvRot quantization metadata")
+        raise ValueError(
+            "The selected model does not contain supported ConvRot quantization metadata"
+        )
 
     if force_int8_gemm:
         for _, config, weight_dtype, _ in classified_records:
-            if weight_dtype not in {"w4_codebook", "nvfp4"}:
+            if weight_dtype not in {"w4_codebook", "w6", "nvfp4"}:
                 config["linear_dtype"] = "int8"
 
     if header_quantization is not None:
@@ -297,15 +373,28 @@ def configure_convrot_activation(
         state_dict[key] = _encode_quant_tensor(config)
 
     summary = ConvRotSummary(
+        w6a8=sum(1 for kind, _ in layer_types.values() if kind == "w6"),
         nvfp4=sum(1 for kind, _ in layer_types.values() if kind == "nvfp4"),
-        w4a4=sum(1 for weight_dtype, act_dtype in layer_types.values() if (weight_dtype, act_dtype) == ("w4", "int4")),
-        w4a8=sum(1 for weight_dtype, act_dtype in layer_types.values() if (weight_dtype, act_dtype) == ("w4", "int8")),
+        w4a4=sum(
+            1
+            for weight_dtype, act_dtype in layer_types.values()
+            if (weight_dtype, act_dtype) == ("w4", "int4")
+        ),
+        w4a8=sum(
+            1
+            for weight_dtype, act_dtype in layer_types.values()
+            if (weight_dtype, act_dtype) == ("w4", "int8")
+        ),
         codebook_w4a8=sum(
             1
             for weight_dtype, act_dtype in layer_types.values()
             if (weight_dtype, act_dtype) == ("w4_codebook", "int8")
         ),
-        w8a8=sum(1 for weight_dtype, act_dtype in layer_types.values() if (weight_dtype, act_dtype) == ("w8", "int8")),
+        w8a8=sum(
+            1
+            for weight_dtype, act_dtype in layer_types.values()
+            if (weight_dtype, act_dtype) == ("w8", "int8")
+        ),
     )
     return metadata, summary
 
@@ -316,6 +405,7 @@ def _summarize_convrot_modules(root: torch.nn.Module) -> ConvRotSummary:
     codebook_w4a8 = 0
     w8a8 = 0
     nvfp4 = 0
+    w6a8 = 0
     for _, module in root.named_modules():
         quant_format = getattr(module, "quant_format", None)
         weight = getattr(module, "weight", None)
@@ -333,17 +423,21 @@ def _summarize_convrot_modules(root: torch.nn.Module) -> ConvRotSummary:
                     f"Loaded ConvRot W4 layer has unsupported linear_dtype={activation_dtype!r}; "
                     "update ComfyUI and comfy-kitchen"
                 )
-        elif quant_format == CODEBOOK_W4_FORMAT:
-            if getattr(params, "codebook", None) is None:
+        elif quant_format == GROUPED_INT8_FORMAT:
+            storage = describe_weight_storage(weight)
+            if storage.kind not in {"codebook_w4a8", "w6a8"}:
                 raise RuntimeError(
-                    "Loaded grouped-codebook W4A8 layer is missing its 16-entry codebook"
+                    "Loaded grouped W4A8 layer is missing its 16-entry codebook"
                 )
             if getattr(params, "correction", None) is not None:
                 raise RuntimeError(
                     "Loaded grouped-codebook W4A8 layer uses asymmetric correction, "
                     "which is not supported by the production Turing path"
                 )
-            codebook_w4a8 += 1
+            if storage.kind == "w6a8":
+                w6a8 += 1
+            else:
+                codebook_w4a8 += 1
         elif quant_format == W8_FORMAT and getattr(params, "convrot", False):
             w8a8 += 1
     return ConvRotSummary(
@@ -352,4 +446,5 @@ def _summarize_convrot_modules(root: torch.nn.Module) -> ConvRotSummary:
         codebook_w4a8=codebook_w4a8,
         w8a8=w8a8,
         nvfp4=nvfp4,
+        w6a8=w6a8,
     )

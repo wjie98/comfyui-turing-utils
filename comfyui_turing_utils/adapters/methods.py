@@ -45,7 +45,9 @@ class OriginalMethod:
             return self.function(*args, **kwargs)
         owner = current_owner if self.owner is None else self.owner()
         if owner is None:
-            raise ReferenceError("the owner of the original patched method was released")
+            raise ReferenceError(
+                "the owner of the original patched method was released"
+            )
         return self.function(owner, *args, **kwargs)
 
 

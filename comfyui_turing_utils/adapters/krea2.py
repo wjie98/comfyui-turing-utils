@@ -59,10 +59,9 @@ def _fit_reference_image(
     source_height, source_width = samples.shape[-2:]
     scale = min(target_height / source_height, target_width / source_width)
 
-    if (
-        source_height * scale >= target_height * (1 - _FIT_CROP_TOLERANCE)
-        and source_width * scale >= target_width * (1 - _FIT_CROP_TOLERANCE)
-    ):
+    if source_height * scale >= target_height * (
+        1 - _FIT_CROP_TOLERANCE
+    ) and source_width * scale >= target_width * (1 - _FIT_CROP_TOLERANCE):
         fill_scale = max(target_height / source_height, target_width / source_width)
         crop_height = min(source_height, int(round(target_height / fill_scale)))
         crop_width = min(source_width, int(round(target_width / fill_scale)))
@@ -170,7 +169,9 @@ def _reference_bias_patches(
         finally:
             state.clear()
 
-    def apply_reference_bias(q, k, v, pe=None, attn_mask=None, extra_options=None, **kwargs):
+    def apply_reference_bias(
+        q, k, v, pe=None, attn_mask=None, extra_options=None, **kwargs
+    ):
         state = None if extra_options is None else extra_options.get(_BIAS_STATE_KEY)
         if state is None:
             return {}
@@ -179,16 +180,18 @@ def _reference_bias_patches(
             sequence = int(q.shape[2])
             text_tokens = sequence - target_tokens - reference_tokens
             if text_tokens < 0:
-                raise ValueError("Krea2 Identity Edit received an invalid attention layout")
+                raise ValueError(
+                    "Krea2 Identity Edit received an invalid attention layout"
+                )
             target_end = text_tokens + target_tokens
             bias = q.new_zeros((1, 1, sequence, sequence))
             reference_start = target_end
             for count, strength in zip(reference_counts, strengths):
                 reference_end = reference_start + count
                 if strength != 1.0:
-                    bias[:, :, text_tokens:target_end, reference_start:reference_end] = math.log(
-                        max(strength, 1e-4)
-                    )
+                    bias[
+                        :, :, text_tokens:target_end, reference_start:reference_end
+                    ] = math.log(max(strength, 1e-4))
                 reference_start = reference_end
             state["bias"] = bias
         if attn_mask is not None:
@@ -212,8 +215,14 @@ def build_identity_edit_conditioning(
 ):
     samples = target_latent["samples"]
     if not torch.is_tensor(samples) or samples.ndim not in (4, 5):
-        shape = tuple(samples.shape) if hasattr(samples, "shape") else type(samples).__name__
-        raise ValueError(f"Krea2 Identity Edit target latent must be 4D or 5D, got {shape}")
+        shape = (
+            tuple(samples.shape)
+            if hasattr(samples, "shape")
+            else type(samples).__name__
+        )
+        raise ValueError(
+            f"Krea2 Identity Edit target latent must be 4D or 5D, got {shape}"
+        )
 
     target_height, target_width = map(int, samples.shape[-2:])
     if background_image is None:

@@ -40,14 +40,14 @@ class TileShape:
 
     def __post_init__(self):
         if min(self.t, self.h, self.w) <= 0 or self.t * self.h * self.w != TILE_SIZE:
-            raise ValueError(f'tile {self} does not hold {TILE_SIZE} tokens')
+            raise ValueError(f"tile {self} does not hold {TILE_SIZE} tokens")
 
     def __str__(self) -> str:
-        return f'{self.t}x{self.h}x{self.w}'
+        return f"{self.t}x{self.h}x{self.w}"
 
     @classmethod
     def parse(cls, text: str) -> TileShape:
-        t, h, w = (int(v) for v in text.split('x'))
+        t, h, w = (int(v) for v in text.split("x"))
         return cls(t, h, w)
 
     def transposed(self) -> TileShape:
@@ -55,8 +55,7 @@ class TileShape:
         return TileShape(self.t, self.w, self.h)
 
     def padded_grid(self, grid: Sequence[int]) -> tuple[int, int, int]:
-        return tuple(-(-g // s) * s
-                     for g, s in zip(grid, (self.t, self.h, self.w)))
+        return tuple(-(-g // s) * s for g, s in zip(grid, (self.t, self.h, self.w)))
 
     def num_tiles(self, grid: Sequence[int]) -> int:
         tp, hp, wp = self.padded_grid(grid)
@@ -73,18 +72,20 @@ def all_shapes() -> list[TileShape]:
     shapes = []
     for i, j in itertools.product(range(exponent + 1), repeat=2):
         if i + j <= exponent:
-            shapes.append(TileShape(2**i, 2**j, 2**(exponent - i - j)))
+            shapes.append(TileShape(2**i, 2**j, 2 ** (exponent - i - j)))
     return sorted(shapes)
 
 
 def least_padding_shape(grid: Sequence[int]) -> TileShape:
     """Shape with the least padding on `grid` (Miowtion's rule for tiled
     conditions); ties go to the most cubic, then the lexicographic first."""
-    fitting = [s for s in all_shapes()
-               if s.t <= grid[0] and s.h <= grid[1] and s.w <= grid[2]]
-    return min(fitting or all_shapes(),
-               key=lambda s: (s.num_tiles(grid), s.aspect_spread(),
-                              (s.t, s.h, s.w)))
+    fitting = [
+        s for s in all_shapes() if s.t <= grid[0] and s.h <= grid[1] and s.w <= grid[2]
+    ]
+    return min(
+        fitting or all_shapes(),
+        key=lambda s: (s.num_tiles(grid), s.aspect_spread(), (s.t, s.h, s.w)),
+    )
 
 
 @dataclasses.dataclass(frozen=True)
@@ -170,8 +171,9 @@ class TileLayout:
         return self.n_tiles * TILE_SIZE
 
 
-def build_tile_layout(spans: Sequence[TiledSpan], seq_len: int,
-                      device: torch.device | str = 'cpu') -> TileLayout:
+def build_tile_layout(
+    spans: Sequence[TiledSpan], seq_len: int, device: torch.device | str = "cpu"
+) -> TileLayout:
     """Builds the permutation; rows outside every span are global.
 
     Args:
@@ -186,26 +188,25 @@ def build_tile_layout(spans: Sequence[TiledSpan], seq_len: int,
         ValueError: If spans overlap, are out of order or exceed seq_len.
     """
     if not spans:
-        raise ValueError('at least the target span must be tiled')
+        raise ValueError("at least the target span must be tiled")
     covered = torch.zeros(seq_len, dtype=torch.bool)
     tiles = []
     prev_stop = 0
     for span in spans:
         if span.start < prev_stop or span.start + span.num_rows > seq_len:
-            raise ValueError(f'span {span} overlaps or exceeds {seq_len}')
+            raise ValueError(f"span {span} overlaps or exceeds {seq_len}")
         prev_stop = span.start + span.num_rows
-        covered[span.start:prev_stop] = True
+        covered[span.start : prev_stop] = True
         tiles.append(span_tiles(span))
     n_ref_tiles = sum(t.shape[0] for t in tiles[:-1])
     video = torch.cat(tiles)
     global_rows = torch.nonzero(~covered).view(-1)
     n_global = -(-global_rows.numel() // TILE_SIZE)
     global_tiles = torch.full((n_global * TILE_SIZE,), -1, dtype=torch.long)
-    global_tiles[:global_rows.numel()] = global_rows
+    global_tiles[: global_rows.numel()] = global_rows
     perm = torch.cat([video.view(-1), global_tiles])
     valid_count = (perm.view(-1, TILE_SIZE) >= 0).sum(1).to(torch.int32)
-    partial = torch.nonzero((valid_count > 0)
-                            & (valid_count < TILE_SIZE)).view(-1)
+    partial = torch.nonzero((valid_count > 0) & (valid_count < TILE_SIZE)).view(-1)
     return TileLayout(
         perm=perm.to(device),
         valid_count=valid_count.to(device),

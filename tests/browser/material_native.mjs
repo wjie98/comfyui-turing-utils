@@ -1,9 +1,7 @@
 import assert from "node:assert/strict";
 import { pathToFileURL } from "node:url";
 import { readFile } from "node:fs/promises";
-const { chromium } = await import(
-  pathToFileURL(process.env.PLAYWRIGHT_MODULE).href
-);
+const { chromium } = await import(pathToFileURL(process.env.PLAYWRIGHT_MODULE).href);
 const browser = await chromium.launch({
   executablePath: process.env.CHROMIUM_PATH,
   args: ["--no-sandbox"],
@@ -12,10 +10,7 @@ try {
   const page = await browser.newPage();
   const errors = [];
   page.on("response", async (response) => {
-    if (
-      response.status() >= 400 &&
-      response.url().includes("/turing/workspace/")
-    )
+    if (response.status() >= 400 && response.url().includes("/turing/workspace/"))
       console.log("API ERROR", response.url(), await response.text());
   });
   page.on("pageerror", (e) => {
@@ -32,8 +27,7 @@ try {
   await page.goto("http://127.0.0.1:18188");
   await page.waitForFunction(
     () =>
-      window.app?.graph &&
-      window.LiteGraph?.registered_node_types.TuringCanvasProject,
+      window.app?.graph && window.LiteGraph?.registered_node_types.TuringCanvasProject,
   );
   await page.waitForFunction(
     () =>
@@ -42,8 +36,7 @@ try {
   );
   const result = await page.evaluate(async () => {
     const { app } = await import("/scripts/app.js");
-    const m =
-      await import("/extensions/comfyui-turing-utils/material_workspace.js");
+    const m = await import("/extensions/comfyui-turing-utils/material_workspace.js");
     const directory = `native-smoke-${Date.now()}`;
     await m.request("directory/create", { directory });
     await m.openProject(directory, true);
@@ -67,8 +60,12 @@ try {
     const widgets = card.widgets;
     const trims = card.trims;
     await m.addCard({ kind: "text" }, [900, 230]);
-    if (app.graph.getNodeById(card.id) !== card || card.widgets !== widgets ||
-        card.trims !== trims || !card.widgets.includes(w))
+    if (
+      app.graph.getNodeById(card.id) !== card ||
+      card.widgets !== widgets ||
+      card.trims !== trims ||
+      !card.widgets.includes(w)
+    )
       throw Error("Adding a card rebuilt existing nodes or session state");
     await m.request("select", {
       directory,
@@ -80,9 +77,7 @@ try {
     await m.saveProject();
     const raw = await m.request("project/open", { directory });
     if (raw.workflow.nodes[1].pos[0] !== 530) throw Error("Layout not saved");
-    const starter = await (
-      await fetch("/turing/workspace/new-template")
-    ).json();
+    const starter = await (await fetch("/turing/workspace/new-template")).json();
     await m.openTab(starter, `new-card-${Date.now()}.json`);
     if (app.graph._nodes.length !== 6) throw Error("Starter missing");
     for (const type of [
@@ -112,9 +107,7 @@ try {
     if (app.extensionManager.workflow.openWorkflows.length !== beforeTabs)
       throw Error("Project duplicated its tab");
     await m.openTab(starter, `compute-${Date.now()}.json`);
-    const target = app.graph._nodes.find(
-      (n) => n.type === "TuringMaterialText",
-    );
+    const target = app.graph._nodes.find((n) => n.type === "TuringMaterialText");
     const constant = LiteGraph.createNode("PrimitiveString");
     app.graph.add(constant);
     constant.widgets.find((w) => w.name === "value").value = "computed";
@@ -139,12 +132,8 @@ try {
         n.type === "TuringCanvasCard" &&
         n.properties.materials.some((x) => x.executable),
     );
-    const output = generated.properties.materials.find(
-      (x) => x.kind === "text",
-    );
-    await generated.widgets
-      .find((w) => w.name.includes("执行到这里"))
-      .callback();
+    const output = generated.properties.materials.find((x) => x.kind === "text");
+    await generated.widgets.find((w) => w.name.includes("执行到这里")).callback();
     let success = false;
     for (let i = 0; i < 60; i++) {
       const state = await m.request("selection", { directory, node: output.id });
@@ -156,11 +145,10 @@ try {
     }
     if (!success) throw Error("Local execution did not publish text");
     await m.openTab(task.workflow, `linked-${Date.now()}.json`);
-    const { addPort } =
-      await import("/extensions/comfyui-turing-utils/lib/canvas_ports.js");
-    const endpoint = app.graph._nodes.find(
-      (n) => n.type === "TuringCanvasInputs",
+    const { addPort } = await import(
+      "/extensions/comfyui-turing-utils/lib/canvas_ports.js"
     );
+    const endpoint = app.graph._nodes.find((n) => n.type === "TuringCanvasInputs");
     if (!endpoint.inputs.some((s) => s._append))
       throw Error("Missing dynamic source input");
     const beforePorts = endpoint.outputs.length;
@@ -174,9 +162,7 @@ try {
       endpoint.outputs.length !== beforePorts
     )
       throw Error("Endpoint accepted a non-material type");
-    const linkedTarget = app.graph._nodes.find(
-      (n) => n.type === "TuringMaterialText",
-    );
+    const linkedTarget = app.graph._nodes.find((n) => n.type === "TuringMaterialText");
     const port = addPort(endpoint, "source", "STRING");
     endpoint.connect(
       port.slot,
@@ -207,10 +193,12 @@ try {
     );
     const to = app.graph._nodes.find((n) => n.properties.instance === added.id);
     from.connect(0, to, 0);
-    const fromWidgets = from.widgets, toWidgets = to.widgets,
+    const fromWidgets = from.widgets,
+      toWidgets = to.widgets,
       link = to.inputs[0].link;
     const imageNode = app.graph._nodes.find((n) =>
-      n.properties.materials?.some((m) => m.kind === "image"));
+      n.properties.materials?.some((m) => m.kind === "image"),
+    );
     const image = imageNode.properties.materials.find((m) => m.kind === "image");
     await imageNode.widgets.find((w) => w.name === image.id).refreshMaterialList();
     const { api } = await import("/scripts/api.js");
@@ -226,22 +214,20 @@ try {
     } finally {
       api.fetchApi = fetchApi;
     }
-    if (app.graph.getNodeById(from.id) !== from || app.graph.getNodeById(to.id) !== to ||
-        from.widgets !== fromWidgets || to.widgets !== toWidgets || to.inputs[0].link !== link)
+    if (
+      app.graph.getNodeById(from.id) !== from ||
+      app.graph.getNodeById(to.id) !== to ||
+      from.widgets !== fromWidgets ||
+      to.widgets !== toWidgets ||
+      to.inputs[0].link !== link
+    )
       throw Error("Incremental insertion changed existing widgets or links");
     await m.saveProject();
     await m.openProject(directory);
-    const restored = app.graph._nodes.find(
-      (n) => n.properties.instance === added.id,
-    );
-    if (restored.inputs[0].link === null)
-      throw Error("Cross-card link not restored");
-    await restored.widgets
-      .find((w) => w.name.includes("执行到这里"))
-      .callback();
-    const finalId = restored.properties.materials.find(
-      (x) => x.kind === "text",
-    ).id;
+    const restored = app.graph._nodes.find((n) => n.properties.instance === added.id);
+    if (restored.inputs[0].link === null) throw Error("Cross-card link not restored");
+    await restored.widgets.find((w) => w.name.includes("执行到这里")).callback();
+    const finalId = restored.properties.materials.find((x) => x.kind === "text").id;
     let linkedSuccess = false;
     for (let i = 0; i < 60; i++) {
       const state = await m.request("selection", { directory, node: finalId });
@@ -266,13 +252,11 @@ try {
   console.log(JSON.stringify(result));
   const interactions = await page.evaluate(async () => {
     const { app } = await import("/scripts/app.js");
-    const m =
-      await import("/extensions/comfyui-turing-utils/material_workspace.js");
-    const { addPort, entries } =
-      await import("/extensions/comfyui-turing-utils/lib/canvas_ports.js");
-    const starter = await (
-      await fetch("/turing/workspace/new-template")
-    ).json();
+    const m = await import("/extensions/comfyui-turing-utils/material_workspace.js");
+    const { addPort, entries } = await import(
+      "/extensions/comfyui-turing-utils/lib/canvas_ports.js"
+    );
+    const starter = await (await fetch("/turing/workspace/new-template")).json();
     await m.openTab(starter, `port-test-${Date.now()}.json`);
     const checkLabels = (node) => {
       for (const port of entries(node)) {
@@ -288,9 +272,7 @@ try {
       ["TuringCanvasInputs", "TuringCanvasOutputs"].includes(n.type),
     );
     endpoints.forEach(checkLabels);
-    const endpoint = app.graph._nodes.find(
-      (n) => n.type === "TuringCanvasInputs",
-    );
+    const endpoint = app.graph._nodes.find((n) => n.type === "TuringCanvasInputs");
     const a = addPort(endpoint, "A", "STRING"),
       b = addPort(endpoint, "B", "STRING");
     const first = LiteGraph.createNode("PrimitiveString"),
@@ -336,12 +318,9 @@ try {
       [endpoint.size[0] / 2, y + LiteGraph.NODE_SLOT_HEIGHT],
       app.canvas,
     );
-    if (entries(endpoint).at(-1).id !== a.id)
-      throw Error("Port order not changed");
+    if (entries(endpoint).at(-1).id !== a.id) throw Error("Port order not changed");
     for (const input of endpoint.inputs.filter((s) => !s._append)) {
-      const output = endpoint.outputs.findIndex(
-        (s) => s._portId === input._portId,
-      );
+      const output = endpoint.outputs.findIndex((s) => s._portId === input._portId);
       if (
         Math.abs(
           endpoint.getConnectionPos(true, endpoint.inputs.indexOf(input))[1] -
@@ -353,10 +332,7 @@ try {
     const prompt = await app.graphToPrompt();
     const p = prompt.output[String(endpoint.id)].inputs,
       ordered = entries(endpoint);
-    if (
-      p[`port_${ordered.find((x) => x.id === a.id).slot}`][0] !==
-      String(first.id)
-    )
+    if (p[`port_${ordered.find((x) => x.id === a.id).slot}`][0] !== String(first.id))
       throw Error("Reorder changed input source");
     if (
       prompt.output[String(text.id)].inputs.text[1] !==
@@ -381,10 +357,7 @@ try {
     } finally {
       app.canvas.prompt = oldPrompt;
     }
-    if (
-      !renamed ||
-      entries(endpoint).find((p) => p.id === a.id).name !== "Renamed"
-    )
+    if (!renamed || entries(endpoint).find((p) => p.id === a.id).name !== "Renamed")
       throw Error("Native double-click did not rename the port");
     endpoints.forEach(checkLabels);
     const saved = app.graph.serialize();
@@ -424,10 +397,12 @@ try {
   console.log(JSON.stringify(interactions));
   const pickerDirectory = `picker-smoke-${Date.now()}`;
   await page.evaluate(async (directory) => {
-    const { request } =
-      await import("/extensions/comfyui-turing-utils/material_workspace.js");
-    const { DirectoryPicker } =
-      await import("/extensions/comfyui-turing-utils/lib/directory_picker.js");
+    const { request } = await import(
+      "/extensions/comfyui-turing-utils/material_workspace.js"
+    );
+    const { DirectoryPicker } = await import(
+      "/extensions/comfyui-turing-utils/lib/directory_picker.js"
+    );
     await request("directory/create", { directory });
     window.pickerResult = new DirectoryPicker(
       request,
@@ -448,14 +423,14 @@ try {
     .getByRole("button", { name: "创建项目", exact: true })
     .dispatchEvent("click");
   assert.equal(await page.evaluate(() => window.pickerResult), pickerDirectory);
-  console.log(
-    JSON.stringify({ directoryColumns: true, emptyFolderSelection: true }),
-  );
+  console.log(JSON.stringify({ directoryColumns: true, emptyFolderSelection: true }));
   await page.evaluate(async (directory) => {
-    const { request } =
-      await import("/extensions/comfyui-turing-utils/material_workspace.js");
-    const { DirectoryPicker } =
-      await import("/extensions/comfyui-turing-utils/lib/directory_picker.js");
+    const { request } = await import(
+      "/extensions/comfyui-turing-utils/material_workspace.js"
+    );
+    const { DirectoryPicker } = await import(
+      "/extensions/comfyui-turing-utils/lib/directory_picker.js"
+    );
     window.folderPromptReleasedModal = false;
     window.pickerResult = new DirectoryPicker(
       request,
@@ -478,14 +453,11 @@ try {
         (b) => b.textContent === "创建项目" && !b.disabled,
       ),
   );
-  await page
-    .getByRole("button", { name: "取消", exact: true })
-    .dispatchEvent("click");
+  await page.getByRole("button", { name: "取消", exact: true }).dispatchEvent("click");
   assert.equal(await page.evaluate(() => window.pickerResult), null);
   const persistence = await page.evaluate(async (directory) => {
     const { app } = await import("/scripts/app.js");
-    const m =
-      await import("/extensions/comfyui-turing-utils/material_workspace.js");
+    const m = await import("/extensions/comfyui-turing-utils/material_workspace.js");
     await m.openProject(directory);
     const root = app.graph._nodes.find((n) => n.type === "TuringCanvasProject");
     if (root.widgets.find((w) => w.name === "素材像素上限（MP）").value !== 4)
@@ -511,15 +483,11 @@ try {
       throw Error("Global settings did not persist");
     if (data.workflow.nodes[0].properties.settings.max_megapixels !== 3)
       throw Error("Concurrent settings lost a change");
-    if (
-      !root.widgets.find((w) => w.name === "画布统计").value.includes("text:")
-    )
+    if (!root.widgets.find((w) => w.name === "画布统计").value.includes("text:"))
       throw Error("Missing material statistics");
     await Promise.all([m.saveProject(), m.saveProject(), m.saveProject()]);
     const nodeCount = app.graph._nodes.length;
-    const starter = await (
-      await fetch("/turing/workspace/new-template")
-    ).json();
+    const starter = await (await fetch("/turing/workspace/new-template")).json();
     await m.openTab(starter, `ordinary-${Date.now()}.json`);
     const ordinary = app.graph;
     await m.saveProject(directory);
@@ -537,8 +505,12 @@ try {
     const { api } = await import("/scripts/api.js");
     const fetchApi = api.fetchApi;
     let release, arrived;
-    const gate = new Promise((r) => { release = r; });
-    const ready = new Promise((r) => { arrived = r; });
+    const gate = new Promise((r) => {
+      release = r;
+    });
+    const ready = new Promise((r) => {
+      arrived = r;
+    });
     api.fetchApi = async function (path, ...args) {
       const response = await fetchApi.call(this, path, ...args);
       if (path === "/turing/workspace/card/add") {
@@ -562,11 +534,16 @@ try {
       api.fetchApi = fetchApi;
     }
     data = await m.request("project/open", { directory });
-    if (data.workflow.nodes.length !== nodeCount + 1 ||
-        data.workflow.nodes.find((n) => n.properties.instance === added.id)?.pos[0] !== 1400)
+    if (
+      data.workflow.nodes.length !== nodeCount + 1 ||
+      data.workflow.nodes.find((n) => n.properties.instance === added.id)?.pos[0] !==
+        1400
+    )
       throw Error("Background insertion lost the new card or position");
     await m.openProject(directory);
-    if (!app.graph._nodes.find((n) => n.properties.instance === added.id)?.widgets.length)
+    if (
+      !app.graph._nodes.find((n) => n.properties.instance === added.id)?.widgets.length
+    )
       throw Error("Background card did not restore native widgets");
     return {
       autosave: true,
@@ -584,8 +561,7 @@ try {
     const media = await page.evaluate(
       async ({ directory, base64 }) => {
         const { app } = await import("/scripts/app.js"),
-          m =
-            await import("/extensions/comfyui-turing-utils/material_workspace.js");
+          m = await import("/extensions/comfyui-turing-utils/material_workspace.js");
         await m.openProject(directory);
         const form = new FormData();
         form.append(
@@ -604,9 +580,7 @@ try {
             n.type === "TuringCanvasCard" &&
             n.properties.materials.some((m) => m.kind === "video"),
         );
-        const material = card.properties.materials.find(
-          (m) => m.kind === "video",
-        );
+        const material = card.properties.materials.find((m) => m.kind === "video");
         await m.request("select", {
           directory,
           node: material.id,
@@ -626,19 +600,14 @@ try {
           `/turing/workspace/asset?${new URLSearchParams({ directory, asset })}`,
           { headers: { Range: "bytes=0-127" } },
         );
-        if (
-          ranged.status !== 206 ||
-          (await ranged.arrayBuffer()).byteLength !== 128
-        )
+        if (ranged.status !== 206 || (await ranged.arrayBuffer()).byteLength !== 128)
           throw Error("Media streaming does not support byte ranges");
         if (node.player) throw Error("Player created before request");
         await node.widgets.find((w) => w.name === "video · 预览").callback();
         if (!node.player || node.player.preload !== "none")
           throw Error("Player not lazy");
         const player = node.player;
-        const source = await (
-          await fetch("/turing/workspace/new-template")
-        ).json();
+        const source = await (await fetch("/turing/workspace/new-template")).json();
         await m.openTab(source, `media-test-${Date.now()}.json`);
         if (player.getAttribute("src"))
           throw Error("Switching tab retained media source");

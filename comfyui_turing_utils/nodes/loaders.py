@@ -57,7 +57,7 @@ class ConvRotDiffusionModelLoader:
     FUNCTION = "load_diffusion_model"
     CATEGORY = "Turing Utils/Models"
     TITLE = "Load ConvRot DiT"
-    DESCRIPTION = "Load ConvRot INT8/INT4 and native NVFP4, including mixed checkpoints. NVFP4 retains packed storage and uses paired ConvRot256 with A8/S8 GEMM."
+    DESCRIPTION = "Load ConvRot INT8/INT6/INT4 and native NVFP4, including mixed checkpoints. NVFP4 retains packed storage and uses paired ConvRot256 with A8/S8 GEMM."
 
     def load_diffusion_model(
         self,
@@ -103,8 +103,12 @@ class ConvRotCLIPLoader:
                 ),
             },
             "optional": (
-                {"device": (official_optional["device"][0],
-                            {**official_optional["device"][1], "advanced": False})}
+                {
+                    "device": (
+                        official_optional["device"][0],
+                        {**official_optional["device"][1], "advanced": False},
+                    )
+                }
                 if "device" in official_optional
                 else {}
             ),
@@ -115,7 +119,7 @@ class ConvRotCLIPLoader:
     FUNCTION = "load_clip"
     CATEGORY = "Turing Utils/Models"
     TITLE = "Load ConvRot CLIP"
-    DESCRIPTION = "Load ConvRot INT8/INT4 and native NVFP4 text encoders, including mixed checkpoints. NVFP4 uses A8/S8 GEMM on CUDA and dense fallback on CPU."
+    DESCRIPTION = "Load ConvRot INT8/INT6/INT4 and native NVFP4 text encoders, including mixed checkpoints. NVFP4 uses A8/S8 GEMM on CUDA and dense fallback on CPU."
 
     def load_clip(
         self,
@@ -126,16 +130,24 @@ class ConvRotCLIPLoader:
     ):
         clip_types = service.official_clip_types()
         if type not in clip_types:
-            raise ValueError(f"Unsupported ConvRot CLIP type {type!r}; expected one of {clip_types}")
+            raise ValueError(
+                f"Unsupported ConvRot CLIP type {type!r}; expected one of {clip_types}"
+            )
         if device not in {"default", "cpu"}:
-            raise ValueError(f"Unsupported ConvRot CLIP device {device!r}; expected 'default' or 'cpu'")
+            raise ValueError(
+                f"Unsupported ConvRot CLIP device {device!r}; expected 'default' or 'cpu'"
+            )
         try:
             clip_type = comfy.sd.CLIPType[type.upper()]
         except KeyError as exc:
-            raise RuntimeError(f"ComfyUI CLIPLoader exposes type {type!r} without a matching CLIPType") from exc
+            raise RuntimeError(
+                f"ComfyUI CLIPLoader exposes type {type!r} without a matching CLIPType"
+            ) from exc
         model_options = {}
         if device == "cpu":
-            model_options["load_device"] = model_options["offload_device"] = torch.device("cpu")
+            model_options["load_device"] = model_options["offload_device"] = (
+                torch.device("cpu")
+            )
 
         model_path = service.resolve_convrot_model_path(
             service.CLIP_FOLDER_NAME, clip_name

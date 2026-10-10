@@ -192,7 +192,10 @@ def available_sec_models() -> tuple[SeCModelSpec, ...]:
                 if "sec" not in path.relative_to(root).as_posix().lower():
                     continue
                 # Shard files belong to their parent directory entry.
-                if path.name.startswith("model-") and (path.parent / "config.json").is_file():
+                if (
+                    path.name.startswith("model-")
+                    and (path.parent / "config.json").is_file()
+                ):
                     continue
                 name = path.relative_to(root).as_posix()
                 found.setdefault(
@@ -301,7 +304,11 @@ def _register_parameter_dtype_input_hooks(model: nn.Module) -> int:
             del current_module
 
             def convert(value):
-                if torch.is_tensor(value) and value.is_floating_point() and value.dtype != dtype:
+                if (
+                    torch.is_tensor(value)
+                    and value.is_floating_point()
+                    and value.dtype != dtype
+                ):
                     return value.to(dtype=dtype)
                 return value
 
@@ -309,9 +316,7 @@ def _register_parameter_dtype_input_hooks(model: nn.Module) -> int:
                 key: convert(value) for key, value in kwargs.items()
             }
 
-        handles.append(
-            module.register_forward_pre_hook(align_dtype, with_kwargs=True)
-        )
+        handles.append(module.register_forward_pre_hook(align_dtype, with_kwargs=True))
     # Retain handles for the lifetime of the model and make the installation
     # explicit for diagnostics.  Module hook dictionaries also own them, but
     # this gives us one place to inspect or remove them in future revisions.
@@ -372,7 +377,11 @@ def load_sec_model(
                 llm_attention_backend=attention_plan.llm,
             )
         incompatible = model.load_state_dict(state_dict, strict=False, assign=True)
-        missing = [key for key in incompatible.missing_keys if not key.endswith("num_batches_tracked")]
+        missing = [
+            key
+            for key in incompatible.missing_keys
+            if not key.endswith("num_batches_tracked")
+        ]
         if missing or incompatible.unexpected_keys:
             raise ValueError(
                 "SeC checkpoint does not match the bundled architecture: "
@@ -392,7 +401,11 @@ def load_sec_model(
             llm_attention_backend=attention_plan.llm,
         )
         dtype = next(
-            (parameter.dtype for parameter in model.parameters() if parameter.is_floating_point()),
+            (
+                parameter.dtype
+                for parameter in model.parameters()
+                if parameter.is_floating_point()
+            ),
             dtype,
         )
         if cpu_inference and dtype != torch.float32:
@@ -455,7 +468,9 @@ def load_sec_model(
     )
 
 
-def parse_points(value: str | None, *, width: int, height: int, label: int) -> tuple[np.ndarray, np.ndarray]:
+def parse_points(
+    value: str | None, *, width: int, height: int, label: int
+) -> tuple[np.ndarray, np.ndarray]:
     if value is None or not str(value).strip():
         return np.empty((0, 2), dtype=np.float32), np.empty((0,), dtype=np.int32)
     try:
@@ -504,7 +519,9 @@ def parse_bbox(value, *, width: int, height: int) -> np.ndarray | None:
                 float(current["y"]) + float(current["height"]),
             )
         else:
-            raise ValueError("BBOX dictionaries must use startX/startY/endX/endY or x/y/width/height")
+            raise ValueError(
+                "BBOX dictionaries must use startX/startY/endX/endY or x/y/width/height"
+            )
     elif isinstance(current, (list, tuple)) and len(current) == 4:
         coords = current
     else:
@@ -520,7 +537,9 @@ def parse_bbox(value, *, width: int, height: int) -> np.ndarray | None:
     return np.asarray([x1, y1, x2, y2], dtype=np.float32)
 
 
-def _select_mask(mask: torch.Tensor, frames: torch.Tensor, annotation_frame_idx: int) -> np.ndarray:
+def _select_mask(
+    mask: torch.Tensor, frames: torch.Tensor, annotation_frame_idx: int
+) -> np.ndarray:
     if mask.ndim == 2:
         selected = mask
     elif mask.ndim == 3:
@@ -573,25 +592,34 @@ def prepare_visual_prompt(
         if box is not None:
             x1, y1, x2, y2 = box
             roi = np.zeros_like(selected_mask)
-            roi[int(np.floor(y1)) : int(np.ceil(y2)), int(np.floor(x1)) : int(np.ceil(x2))] = True
+            roi[
+                int(np.floor(y1)) : int(np.ceil(y2)),
+                int(np.floor(x1)) : int(np.ceil(x2)),
+            ] = True
             selected_mask &= roi
             if not selected_mask.any():
                 raise ValueError("bounding_box does not overlap the mask foreground")
         for point in positive:
             x, y = int(point[0]), int(point[1])
             if not selected_mask[y, x]:
-                raise ValueError(f"Positive point ({x}, {y}) is outside the authoritative mask")
+                raise ValueError(
+                    f"Positive point ({x}, {y}) is outside the authoritative mask"
+                )
         for point in negative:
             x, y = int(point[0]), int(point[1])
             if selected_mask[y, x]:
-                raise ValueError(f"Negative point ({x}, {y}) falls inside the authoritative mask")
+                raise ValueError(
+                    f"Negative point ({x}, {y}) falls inside the authoritative mask"
+                )
         # SAM2 stores mask and point inputs as mutually exclusive prompt states.
         # Keeping one authoritative mask avoids the silent last-prompt-wins behavior.
         return SeCVisualPrompt(mask=selected_mask, points=None, labels=None, box=None)
 
     if len(positive) == 0 and box is None:
         if len(negative):
-            raise ValueError("Negative points require at least one positive point or a BBOX")
+            raise ValueError(
+                "Negative points require at least one positive point or a BBOX"
+            )
         raise ValueError("Provide mask, positive_coords, or bounding_box")
     points = np.concatenate((positive, negative), axis=0)
     labels = np.concatenate((positive_labels, negative_labels), axis=0)
@@ -600,7 +628,9 @@ def prepare_visual_prompt(
     return SeCVisualPrompt(mask=None, points=points, labels=labels, box=box)
 
 
-def estimate_sec_activation_memory(frames: torch.Tensor, semantic_keyframes: int) -> int:
+def estimate_sec_activation_memory(
+    frames: torch.Tensor, semantic_keyframes: int
+) -> int:
     """Conservative reservation for SAM state plus scene-change MLLM activations."""
 
     frame_bytes = int(frames.shape[0] * frames.shape[1] * frames.shape[2] * 12)
@@ -626,7 +656,7 @@ def _seed_predictor(predictor, state, prompt: SeCVisualPrompt, frame_idx: int):
         labels=prompt.labels,
         box=prompt.box,
     )
-    return (logits[0].detach().float().cpu().numpy().squeeze() > 0.0)
+    return logits[0].detach().float().cpu().numpy().squeeze() > 0.0
 
 
 def _resolve_annotation_frame_idx(annotation_frame_idx: int, frame_count: int) -> int:
@@ -660,12 +690,16 @@ def track_visual_concept(
     if not isinstance(handle, SeCModelHandle):
         raise TypeError("model must come from Load SeC Model")
     if not torch.is_tensor(frames) or frames.ndim != 4 or frames.shape[-1] < 3:
-        shape = tuple(frames.shape) if hasattr(frames, "shape") else type(frames).__name__
+        shape = (
+            tuple(frames.shape) if hasattr(frames, "shape") else type(frames).__name__
+        )
         raise ValueError(f"frames must be a ComfyUI IMAGE batch [N,H,W,C], got {shape}")
     frame_count = int(frames.shape[0])
     if frame_count < 1:
         raise ValueError("frames must contain at least one image")
-    annotation_frame_idx = _resolve_annotation_frame_idx(annotation_frame_idx, frame_count)
+    annotation_frame_idx = _resolve_annotation_frame_idx(
+        annotation_frame_idx, frame_count
+    )
     if tracking_direction not in {"forward", "backward", "bidirectional"}:
         raise ValueError(f"Unsupported tracking_direction: {tracking_direction}")
     if int(semantic_keyframes) < 1:
@@ -709,7 +743,9 @@ def track_visual_concept(
             mllm_memory_size=int(semantic_keyframes),
         ):
             comfy.model_management.throw_exception_if_processing_interrupted()
-            mask = (mask_logits[0].detach().float().cpu().squeeze() > 0.0).to(torch.float32)
+            mask = (mask_logits[0].detach().float().cpu().squeeze() > 0.0).to(
+                torch.float32
+            )
             masks[int(out_frame_idx)].copy_(mask.to(output_device))
             if int(out_frame_idx) not in completed:
                 completed.add(int(out_frame_idx))

@@ -105,9 +105,7 @@ class DenseAttentionFallback:
         )
         self._default_fallback = default_fallback
 
-    def run_prepared(
-        self, request: PreparedAttention
-    ) -> AttentionExecutionOutcome:
+    def run_prepared(self, request: PreparedAttention) -> AttentionExecutionOutcome:
         if callable(self.prepared_executor):
             return self.prepared_executor(request)
         return AttentionExecutionOutcome.unsupported(

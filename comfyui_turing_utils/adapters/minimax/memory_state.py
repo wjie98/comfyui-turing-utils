@@ -24,11 +24,11 @@ _LOGGED_DECISIONS: set[tuple] = set()
 class ActivationRuntimePlan:
     """Monotonic, sampler-scoped state for memory policy decisions."""
 
-    available_floors: dict[tuple[str, int | None, int, str], int] = (
-        dataclasses.field(default_factory=dict)
+    available_floors: dict[tuple[str, int | None, int, str], int] = dataclasses.field(
+        default_factory=dict
     )
-    reclaim_requests: dict[tuple[str, int | None, int, str], int] = (
-        dataclasses.field(default_factory=dict)
+    reclaim_requests: dict[tuple[str, int | None, int, str], int] = dataclasses.field(
+        default_factory=dict
     )
     logged_decisions: set[tuple] = dataclasses.field(default_factory=set)
 
@@ -139,9 +139,7 @@ def dynamic_weight_prefetch_reserve(base_model, device: torch.device) -> int:
         patcher = base_model.current_patcher
         vbar = patcher._vbar_get()
         model_size = getattr(patcher, "model_size", None)
-        model_bytes = int(
-            model_size() if callable(model_size) else vbar.loaded_size()
-        )
+        model_bytes = int(model_size() if callable(model_size) else vbar.loaded_size())
         layers = max(
             int(getattr(base_model, "_turing_utils_minimax_layer_count", 0)),
             1,
@@ -150,9 +148,7 @@ def dynamic_weight_prefetch_reserve(base_model, device: torch.device) -> int:
         return default
     if model_bytes <= 0 or layers <= 1:
         return default
-    reserve = (
-        math.ceil((2 * model_bytes / layers) / VBAR_PAGE_BYTES) * VBAR_PAGE_BYTES
-    )
+    reserve = math.ceil((2 * model_bytes / layers) / VBAR_PAGE_BYTES) * VBAR_PAGE_BYTES
     return min(max(int(reserve), default), MAX_WEIGHT_PREFETCH_BYTES)
 
 
@@ -213,7 +209,9 @@ def planning_available(
 
 
 def should_log(runtime_plan: ActivationRuntimePlan | None, key: tuple) -> bool:
-    logged = runtime_plan.logged_decisions if runtime_plan is not None else _LOGGED_DECISIONS
+    logged = (
+        runtime_plan.logged_decisions if runtime_plan is not None else _LOGGED_DECISIONS
+    )
     if key in logged:
         return False
     logged.add(key)
@@ -262,16 +260,13 @@ def ensure_dynamic_vram_headroom(
     operation: str,
     estimated_peak_bytes: int,
     runtime_plan: ActivationRuntimePlan | None = None,
-    _runtime_memory_fn=runtime_memory,
-    _dynamic_vbars_fn=dynamic_vbars,
-    _diagnostics_fn=log_memory_diagnostics,
 ) -> int:
     """Release inactive VBAR mappings only when the selected tier cannot fit."""
     device = torch.device(device)
     if base_model is None or device.type != "cuda":
         return 0
     try:
-        available, _reserve, usable = _runtime_memory_fn(device)
+        available, _reserve, usable = runtime_memory(device)
     except (ImportError, RuntimeError, TypeError):
         return 0
     safety = max(768 * MIB, int(usable * 0.075))
@@ -286,7 +281,7 @@ def ensure_dynamic_vram_headroom(
 
     freed = 0
     remaining = deficit
-    for vbar in _dynamic_vbars_fn(base_model, device):
+    for vbar in dynamic_vbars(base_model, device):
         free_memory = getattr(vbar, "free_memory", None)
         if not callable(free_memory):
             continue
@@ -309,7 +304,7 @@ def ensure_dynamic_vram_headroom(
             rows,
             deficit / MIB,
             freed / MIB,
-            _diagnostics_fn(device, base_model),
+            log_memory_diagnostics(device, base_model),
         )
     return freed
 

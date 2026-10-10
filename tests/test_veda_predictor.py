@@ -7,14 +7,22 @@ import torch
 from safetensors.torch import save_file
 
 from comfyui_turing_utils.adapters.minimax.veda.predictor import (
-    FORMAT, PRECISIONS, Projection, convert_projection, load_bundle,
-    predictor_compute_dtype, project_features, rotate_features,
+    FORMAT,
+    PRECISIONS,
+    Projection,
+    convert_projection,
+    load_bundle,
+    predictor_compute_dtype,
+    project_features,
+    rotate_features,
 )
 from .veda_pooling_reference import pool_video_tiles
 from .veda_selection_reference import select_tiles
 from .veda_tiling_reference import gather_tiles
 from comfyui_turing_utils.adapters.minimax.veda.tiling import (
-    TileShape, TiledSpan, build_tile_layout,
+    TileShape,
+    TiledSpan,
+    build_tile_layout,
 )
 
 
@@ -45,7 +53,7 @@ def test_fp32_debug_does_not_round_activations_to_bf16():
 
 
 def test_predictor_head_selection_keeps_order_and_avoids_contiguous_copy():
-    weight = torch.arange(4*12*4).reshape(4, 12, 4).float()
+    weight = torch.arange(4 * 12 * 4).reshape(4, 12, 4).float()
     projection = Projection(weight, None)
     sliced, scale = projection.select_heads([1, 2])
     assert scale is None
@@ -58,8 +66,10 @@ def test_predictor_head_selection_keeps_order_and_avoids_contiguous_copy():
 
 
 def test_rotation_is_kitchen_regular_convrot():
-    h4 = torch.tensor([[1, 1, 1, -1], [1, 1, -1, 1],
-                       [1, -1, 1, 1], [-1, 1, 1, 1]], dtype=torch.float32)
+    h4 = torch.tensor(
+        [[1, 1, 1, -1], [1, 1, -1, 1], [1, -1, 1, 1], [-1, 1, 1, 1]],
+        dtype=torch.float32,
+    )
     h = torch.kron(torch.kron(torch.kron(h4, h4), h4), h4) / 16
     x = torch.randn(3, 512)
     rotated = rotate_features(x)
@@ -76,7 +86,9 @@ def test_w8a8_conversion_preserves_projection_basis():
     assert projection.weight.shape == (2, 128, 512)
     assert projection.weight.dtype == torch.int8
     rotated = rotate_features(torch.nn.functional.pad(x, (0, 128)))
-    actual = torch.bmm(rotated, (projection.weight.float() * projection.scale).transpose(1, 2))
+    actual = torch.bmm(
+        rotated, (projection.weight.float() * projection.scale).transpose(1, 2)
+    )
     expected = torch.bmm(x, weight)
     relative = (actual - expected).norm() / expected.norm()
     assert relative < 0.012
@@ -88,17 +100,19 @@ def test_pool_partial_tile_excludes_padding_extrema():
     x = torch.arange(1, 6, dtype=torch.float32).reshape(5, 1, 1)
     heads = torch.tensor([0])
     features = pool_video_tiles(gather_tiles(x, layout, heads), layout)
-    torch.testing.assert_close(features, torch.tensor([[[3., 5., 1.]]]))
+    torch.testing.assert_close(features, torch.tensor([[[3.0, 5.0, 1.0]]]))
     features_negative = pool_video_tiles(gather_tiles(-x, layout, heads), layout)
-    torch.testing.assert_close(features_negative, torch.tensor([[[-3., -1., -5.]]]))
+    torch.testing.assert_close(features_negative, torch.tensor([[[-3.0, -1.0, -5.0]]]))
 
 
 def test_chunked_routing_preserves_diagonal_and_fractional_budget():
     layout = build_tile_layout([TiledSpan(0, (1, 8, 160), TileShape(1, 8, 16))], 1280)
     scores = torch.randn(2, 10, 10)
     whole_index, whole_keep = select_tiles(scores, layout, 0.23, 1.0)
-    chunks = [select_tiles(scores[:, a:b], layout, 0.23, 1.0, row_start=a)
-              for a, b in ((0, 3), (3, 7), (7, 10))]
+    chunks = [
+        select_tiles(scores[:, a:b], layout, 0.23, 1.0, row_start=a)
+        for a, b in ((0, 3), (3, 7), (7, 10))
+    ]
     assert torch.equal(whole_index, torch.cat([i for i, _ in chunks], 1))
     assert torch.equal(whole_keep, torch.cat([k for _, k in chunks], 1))
     for row in range(10):
@@ -107,10 +121,13 @@ def test_chunked_routing_preserves_diagonal_and_fractional_budget():
 
 
 def test_reference_budget_is_independent():
-    layout = build_tile_layout([
-        TiledSpan(0, (1, 8, 32), TileShape(1, 8, 16)),
-        TiledSpan(256, (1, 8, 64), TileShape(1, 8, 16)),
-    ], 768)
+    layout = build_tile_layout(
+        [
+            TiledSpan(0, (1, 8, 32), TileShape(1, 8, 16)),
+            TiledSpan(256, (1, 8, 64), TileShape(1, 8, 16)),
+        ],
+        768,
+    )
     scores = torch.zeros(1, 6, 6)
     scores[..., 2:] = 100
     index, keep = select_tiles(scores, layout, 0.25, 1.0)
@@ -122,13 +139,32 @@ def test_reference_budget_is_independent():
 @pytest.mark.parametrize("precision", PRECISIONS)
 def test_bundle_converts_on_host_and_checks_metadata(tmp_path, precision):
     path = tmp_path / "predictor.safetensors"
-    metadata = dict(format=FORMAT, num_layers="1", num_heads="2", head_dim="4",
-                    keep_ratio="0.1", dtype="bfloat16", plans=json.dumps({"test": {
-                        "geometry": "test", "grid": [1, 8, 16], "shapes": ["1x8x16"],
-                        "head_shape": [[0, 0]],
-                    }}))
-    save_file({f"layers.0.proj_{name}": torch.randn(2, 12, 4).bfloat16()
-               for name in ("q", "k")}, str(path), metadata=metadata)
+    metadata = dict(
+        format=FORMAT,
+        num_layers="1",
+        num_heads="2",
+        head_dim="4",
+        keep_ratio="0.1",
+        dtype="bfloat16",
+        plans=json.dumps(
+            {
+                "test": {
+                    "geometry": "test",
+                    "grid": [1, 8, 16],
+                    "shapes": ["1x8x16"],
+                    "head_shape": [[0, 0]],
+                }
+            }
+        ),
+    )
+    save_file(
+        {
+            f"layers.0.proj_{name}": torch.randn(2, 12, 4).bfloat16()
+            for name in ("q", "k")
+        },
+        str(path),
+        metadata=metadata,
+    )
     bundle = load_bundle(str(path), precision)
     assert bundle.precision == precision
     assert bundle.proj_q[0].weight.device.type == "cpu"

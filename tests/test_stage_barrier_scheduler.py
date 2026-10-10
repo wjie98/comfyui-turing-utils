@@ -12,15 +12,14 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from comfyui_turing_utils.runtime import stage_barrier as stage_barrier_module
+
 BarrierPhase = stage_barrier_module.BarrierPhase
 BarrierPlanError = stage_barrier_module.BarrierPlanError
 BarrierPlanner = stage_barrier_module.BarrierPlanner
 STAGE_BARRIER_NODE_ID = stage_barrier_module.STAGE_BARRIER_NODE_ID
 STAGE_PATH_NODE_ID = stage_barrier_module.STAGE_PATH_NODE_ID
 stage_barrier_candidates = stage_barrier_module.stage_barrier_candidates
-_wait_for_active_barrier_phase = (
-    stage_barrier_module._wait_for_active_barrier_phase
-)
+_wait_for_active_barrier_phase = stage_barrier_module._wait_for_active_barrier_phase
 
 
 class _Prompt:
@@ -58,9 +57,7 @@ def _blocking(nodes, edges):
 
 def _ready_nodes(pending, edges):
     blocked = {
-        target
-        for source, target in edges
-        if source in pending and target in pending
+        target for source, target in edges if source in pending and target in pending
     }
     return [node_id for node_id in pending if node_id not in blocked]
 
@@ -216,15 +213,9 @@ class StageBarrierSchedulerTest(unittest.TestCase):
         )
         order, planner = _schedule(_Prompt(nodes), nodes, edges)
 
-        self.assertEqual(
-            planner.phase_for("a_stage_1"), BarrierPhase(0, 1)
-        )
-        self.assertEqual(
-            planner.phase_for("b_stage_1"), BarrierPhase(0, 1)
-        )
-        self.assertEqual(
-            planner.phase_for("next_stage_0"), BarrierPhase(1, 0)
-        )
+        self.assertEqual(planner.phase_for("a_stage_1"), BarrierPhase(0, 1))
+        self.assertEqual(planner.phase_for("b_stage_1"), BarrierPhase(0, 1))
+        self.assertEqual(planner.phase_for("next_stage_0"), BarrierPhase(1, 0))
         self.assertLess(order.index("a_stage_1"), order.index("next_stage_0"))
         self.assertLess(order.index("b_stage_1"), order.index("next_stage_0"))
 
@@ -258,9 +249,7 @@ class StageBarrierSchedulerTest(unittest.TestCase):
                     BarrierPhase(0, stage),
                 )
         for stage in range(3):
-            self.assertEqual(
-                planner.phase_for(f"c{stage}"), BarrierPhase(1, stage)
-            )
+            self.assertEqual(planner.phase_for(f"c{stage}"), BarrierPhase(1, stage))
         self.assertLess(order.index("b2"), order.index("c0"))
 
     def test_downstream_low_stage_does_not_promote_its_prerequisite(self):
@@ -282,12 +271,8 @@ class StageBarrierSchedulerTest(unittest.TestCase):
         )
 
         self.assertEqual(candidates, ["independent_mid"])
-        self.assertEqual(
-            planner.phase_for("high_dependency"), BarrierPhase(0, 4)
-        )
-        self.assertEqual(
-            planner.phase_for("deferred_low"), BarrierPhase(1, 0)
-        )
+        self.assertEqual(planner.phase_for("high_dependency"), BarrierPhase(0, 4))
+        self.assertEqual(planner.phase_for("deferred_low"), BarrierPhase(1, 0))
 
     def test_equal_stage_dependency_remains_in_the_same_phase(self):
         nodes = {
@@ -299,12 +284,8 @@ class StageBarrierSchedulerTest(unittest.TestCase):
         edges = (("first", "dependent"), ("first", "later"))
         order, planner = _schedule(_Prompt(nodes), nodes, edges)
 
-        self.assertEqual(
-            planner.phase_for("first"), BarrierPhase(0, 1)
-        )
-        self.assertEqual(
-            planner.phase_for("dependent"), BarrierPhase(0, 1)
-        )
+        self.assertEqual(planner.phase_for("first"), BarrierPhase(0, 1))
+        self.assertEqual(planner.phase_for("dependent"), BarrierPhase(0, 1))
         self.assertLess(order.index("dependent"), order.index("later"))
         self.assertLess(order.index("peer"), order.index("later"))
 
@@ -326,9 +307,7 @@ class StageBarrierSchedulerTest(unittest.TestCase):
         nodes["late"] = _barrier(0)
         blocking["late"] = {}
         self.assertEqual(
-            planner.candidates(
-                ["later", "late"], blocking, ["late", "later"]
-            ),
+            planner.candidates(["later", "late"], blocking, ["late", "later"]),
             ["later"],
         )
         self.assertEqual(planner.phase_for("late"), BarrierPhase(1, 0))
@@ -349,9 +328,7 @@ class StageBarrierSchedulerTest(unittest.TestCase):
         )
 
         self.assertEqual(candidates, ["prerequisite"])
-        self.assertEqual(
-            planner.phase_for("prerequisite"), BarrierPhase(0, 2)
-        )
+        self.assertEqual(planner.phase_for("prerequisite"), BarrierPhase(0, 2))
         self.assertEqual(planner.phase_for("target"), BarrierPhase(1, 1))
 
     def test_no_barriers_preserves_comfyui_candidate_order(self):
@@ -367,9 +344,7 @@ class StageBarrierSchedulerTest(unittest.TestCase):
             stage_barrier_candidates(
                 _Prompt(nodes),
                 nodes,
-                _blocking(
-                    nodes, (("first", "second"), ("second", "first"))
-                ),
+                _blocking(nodes, (("first", "second"), ("second", "first"))),
                 [],
             )
 
@@ -387,9 +362,7 @@ class StageBarrierSchedulerTest(unittest.TestCase):
                 if randomizer.random() < 0.18
             )
             order, planner = _schedule(_Prompt(nodes), nodes, edges)
-            positions = {
-                node_id: index for index, node_id in enumerate(order)
-            }
+            positions = {node_id: index for index, node_id in enumerate(order)}
 
             for source, target in edges:
                 self.assertLess(positions[source], positions[target])
@@ -401,9 +374,7 @@ class StageBarrierSchedulerTest(unittest.TestCase):
                 source_stage = nodes[source]["inputs"]["stage"]
                 target_stage = nodes[target]["inputs"]["stage"]
                 if target_stage < source_stage:
-                    self.assertGreater(
-                        target_phase.round, source_phase.round
-                    )
+                    self.assertGreater(target_phase.round, source_phase.round)
 
 
 class _ExternallyBlockedExecutionList:
@@ -424,9 +395,7 @@ class _ExternallyBlockedExecutionList:
 
     def get_ready_nodes(self):
         return [
-            node_id
-            for node_id in self.pendingNodes
-            if self.blockCount[node_id] == 0
+            node_id for node_id in self.pendingNodes if self.blockCount[node_id] == 0
         ]
 
     def unblock_active(self):
@@ -438,9 +407,7 @@ class _ExternallyBlockedExecutionList:
 class StageBarrierAsyncWaitTest(unittest.IsolatedAsyncioTestCase):
     async def test_waits_instead_of_advancing_unrelated_work(self):
         execution_list = _ExternallyBlockedExecutionList()
-        wait_task = asyncio.create_task(
-            _wait_for_active_barrier_phase(execution_list)
-        )
+        wait_task = asyncio.create_task(_wait_for_active_barrier_phase(execution_list))
         await asyncio.sleep(0)
 
         self.assertFalse(wait_task.done())

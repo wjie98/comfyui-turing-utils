@@ -9,33 +9,14 @@ from collections.abc import Sequence
 import torch
 
 from ..kernel_api import load_kernel_package
-
-
-_W8_LAYOUT = "TensorWiseINT8Layout"
-_W4_LAYOUT = "TensorCoreConvRotW4A4Layout"
-_CODEBOOK_W4_LAYOUT = "AsymW4A8Int8Layout"
+from .formats import convrot_storage_kind
 
 
 def convrot_weight_kind(weight: torch.Tensor) -> str | None:
     params = getattr(weight, "_params", None)
     if getattr(params, "orig_dtype", None) is not torch.bfloat16:
         return None
-    if getattr(params, "transposed", False) or getattr(params, "convrot_groupsize", None) != 256:
-        return None
-    layout = getattr(weight, "_layout_cls", None)
-    if layout == _W8_LAYOUT and getattr(params, "convrot", False):
-        return "w8a8"
-    if layout == _W4_LAYOUT and getattr(params, "quant_group_size", None) == 64:
-        linear_dtype = getattr(params, "linear_dtype", None)
-        return f"w4a{linear_dtype[-1]}" if linear_dtype in {"int4", "int8"} else None
-    if (
-        layout == _CODEBOOK_W4_LAYOUT
-        and getattr(params, "group_size", None) >= 4
-        and getattr(params, "codebook", None) is not None
-        and getattr(params, "correction", None) is None
-    ):
-        return "codebook_w4a8"
-    return None
+    return convrot_storage_kind(weight)
 
 
 def is_turing_convrot_linear(linear: torch.nn.Module) -> bool:
@@ -132,7 +113,7 @@ def convrot_linear_input_act_from_weight(
             input_act=input_act,
             output=output,
         )
-    if kind == "codebook_w4a8":
+    if kind in {"codebook_w4a8", "w6a8"}:
         qdata, s_rel, s_channel, correction, codebook = (
             comfy.quant_ops.AsymW4A8Int8Layout.get_plain_tensors(weight)
         )
@@ -200,9 +181,7 @@ def fused_convrot_linear_input_act(
         want_requant=True,
     )
     try:
-        return convrot_linear_input_act_from_weight(
-            weight, bias, x, input_act
-        )
+        return convrot_linear_input_act_from_weight(weight, bias, x, input_act)
     finally:
         comfy.ops.uncast_bias_weight(linear, weight, bias, offload_stream)
 
@@ -222,7 +201,9 @@ def _normalized_segments(
     cursor = 0
     for segment in segments:
         if len(segment) != 3:
-            raise ValueError("each modulation segment must contain start, stop, and row")
+            raise ValueError(
+                "each modulation segment must contain start, stop, and row"
+            )
         try:
             start, stop, modulation_row = (operator.index(value) for value in segment)
         except TypeError as exc:
@@ -240,7 +221,9 @@ def _normalized_segments(
 
 @functools.lru_cache(maxsize=32)
 def _cached_segment_table(flat: tuple[int, ...], device_index: int) -> torch.Tensor:
-    return torch.tensor(flat, dtype=torch.int32, device=torch.device("cuda", device_index)).view(-1, 3)
+    return torch.tensor(
+        flat, dtype=torch.int32, device=torch.device("cuda", device_index)
+    ).view(-1, 3)
 
 
 def _segment_table(
@@ -267,7 +250,8 @@ def indexed_modulation_rows(
     """Pack GPU row indices once per block, shared by its three fused ops."""
     _normalized_segments(
         [(a, b, 0 if isinstance(row, torch.Tensor) else row) for a, b, row in segments],
-        rows, parameter_rows,
+        rows,
+        parameter_rows,
     )
     parts = []
     for start, stop, row in segments:
@@ -275,10 +259,14 @@ def indexed_modulation_rows(
             if row.dtype not in (torch.int32, torch.int64):
                 raise ValueError("per-token modulation indices must be int32 or int64")
             if row.ndim > 1 or row.numel() not in (1, stop - start):
-                raise ValueError("per-token modulation indices must match their segment length")
+                raise ValueError(
+                    "per-token modulation indices must match their segment length"
+                )
             parts.append(row.to(device=device, dtype=torch.int64).expand(stop - start))
         else:
-            parts.append(torch.full((stop - start,), row, device=device, dtype=torch.int64))
+            parts.append(
+                torch.full((stop - start,), row, device=device, dtype=torch.int64)
+            )
     return torch.cat(parts)
 
 
@@ -310,7 +298,9 @@ def segmented_rms_adaln(
             raise RuntimeError(
                 "RMSNorm+AdaLN fusion requires an updated comfyui-turing-utils-kernel; reinstall the kernel package"
             ) from exc
-        return turing_segmented_rms_adaln(x, weight, scale, shift, table, float(norm.eps))
+        return turing_segmented_rms_adaln(
+            x, weight, scale, shift, table, float(norm.eps)
+        )
     finally:
         comfy.ops.uncast_bias_weight(norm, weight, bias, offload_stream)
 
@@ -354,9 +344,7 @@ def segmented_mod_gate_rms_adaln(
             weight = torch.ones(x.shape[-1], dtype=x.dtype, device=x.device)
         table = _segment_table(segments, x.shape[0], scale.shape[0], x.device)
         try:
-            op = getattr(
-                load_kernel_package(), "turing_segmented_mod_gate_rms_adaln"
-            )
+            op = getattr(load_kernel_package(), "turing_segmented_mod_gate_rms_adaln")
         except (ImportError, OSError, AttributeError) as exc:
             raise RuntimeError(
                 "gated residual+RMSNorm fusion requires an updated comfyui-turing-utils-kernel"

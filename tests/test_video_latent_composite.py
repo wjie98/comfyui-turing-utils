@@ -18,33 +18,55 @@ from comfyui_turing_utils.nodes.latent import (  # noqa: E402
     SetVideoLatentNoiseMask,
     VideoLatentCompositeMasked,
 )
-from comfyui_turing_utils.registration import NODE_CLASS_MAPPINGS, NODE_DISPLAY_NAME_MAPPINGS  # noqa: E402
+from comfyui_turing_utils.registration import (
+    NODE_CLASS_MAPPINGS,
+    NODE_DISPLAY_NAME_MAPPINGS,
+)  # noqa: E402
 
 
 class VideoLatentCompositeMaskedTest(unittest.TestCase):
     def setUp(self):
-        self.original = {"samples": torch.randn(2, 24, 7, 2, 3), "metadata": {"original": True}}
-        self.replacement = {"samples": torch.randn(2, 24, 7, 2, 3), "metadata": {"replacement": True}}
+        self.original = {
+            "samples": torch.randn(2, 24, 7, 2, 3),
+            "metadata": {"original": True},
+        }
+        self.replacement = {
+            "samples": torch.randn(2, 24, 7, 2, 3),
+            "metadata": {"replacement": True},
+        }
 
     def composite(self, **kwargs):
-        return VideoLatentCompositeMasked.execute(self.original, self.replacement, **kwargs).result[0]
+        return VideoLatentCompositeMasked.execute(
+            self.original, self.replacement, **kwargs
+        ).result[0]
 
     def assert_composite(self, output, expected_mask):
         expected_mask = expected_mask.expand(2, 1, 7, 2, 3)
-        torch.testing.assert_close(output["noise_mask"], expected_mask.float(), rtol=0, atol=0)
-        expected = torch.where(expected_mask.bool(), self.replacement["samples"].to(self.original["samples"]), self.original["samples"])
+        torch.testing.assert_close(
+            output["noise_mask"], expected_mask.float(), rtol=0, atol=0
+        )
+        expected = torch.where(
+            expected_mask.bool(),
+            self.replacement["samples"].to(self.original["samples"]),
+            self.original["samples"],
+        )
         torch.testing.assert_close(output["samples"], expected, rtol=0, atol=0)
 
     def test_schema_and_registration(self):
         schema = VideoLatentCompositeMasked.define_schema()
         self.assertEqual(schema.node_id, "TuringUtilsVideoLatentCompositeMasked")
-        self.assertEqual([item.id for item in schema.inputs], ["original_latent", "replacement_latent", "mask", "type"])
+        self.assertEqual(
+            [item.id for item in schema.inputs],
+            ["original_latent", "replacement_latent", "mask", "type"],
+        )
         self.assertTrue(schema.inputs[2].optional)
         self.assertEqual(schema.inputs[3].options, list(VIDEO_MASK_SPECS))
         self.assertEqual(schema.inputs[3].default, "minimax")
         self.assertEqual([item.io_type for item in schema.outputs], ["LATENT"])
         self.assertIs(NODE_CLASS_MAPPINGS[schema.node_id], VideoLatentCompositeMasked)
-        self.assertEqual(NODE_DISPLAY_NAME_MAPPINGS[schema.node_id], schema.display_name)
+        self.assertEqual(
+            NODE_DISPLAY_NAME_MAPPINGS[schema.node_id], schema.display_name
+        )
 
     def test_neither_mask_replaces_all_and_ignores_original_mask(self):
         self.original["noise_mask"] = torch.zeros(2, 1, 7, 2, 3)
@@ -103,12 +125,23 @@ class VideoLatentCompositeMaskedTest(unittest.TestCase):
                 self.assert_composite(output, mask[None, None] > 0)
 
     def test_all_profiles_reuse_set_mask_mapping(self):
-        for model_type, count in (("minimax", 22), ("wan", 25), ("ltxv", 49), ("hunyuan_video", 25), ("hunyuan_video_15", 25), ("mochi", 37)):
+        for model_type, count in (
+            ("minimax", 22),
+            ("wan", 25),
+            ("ltxv", 49),
+            ("hunyuan_video", 25),
+            ("hunyuan_video_15", 25),
+            ("mochi", 37),
+        ):
             with self.subTest(model_type=model_type):
                 mask = torch.zeros(count, 4, 6)
                 mask[-1, -1, -1] = 1
-                mapped = SetVideoLatentNoiseMask.execute(self.original, mask, model_type).result[0]["noise_mask"]
-                self.assert_composite(self.composite(mask=mask, type=model_type), mapped)
+                mapped = SetVideoLatentNoiseMask.execute(
+                    self.original, mask, model_type
+                ).result[0]["noise_mask"]
+                self.assert_composite(
+                    self.composite(mask=mask, type=model_type), mapped
+                )
 
     def test_direct_time_mapping_does_not_require_canonical_h3_length(self):
         self.original["samples"] = self.original["samples"][:, :, :3]
@@ -116,8 +149,18 @@ class VideoLatentCompositeMaskedTest(unittest.TestCase):
         mask = torch.zeros(3, 2, 3)
         mask[1] = 1
         output = self.composite(mask=mask)
-        torch.testing.assert_close(output["samples"][:, :, 1], self.replacement["samples"][:, :, 1], rtol=0, atol=0)
-        torch.testing.assert_close(output["samples"][:, :, 0], self.original["samples"][:, :, 0], rtol=0, atol=0)
+        torch.testing.assert_close(
+            output["samples"][:, :, 1],
+            self.replacement["samples"][:, :, 1],
+            rtol=0,
+            atol=0,
+        )
+        torch.testing.assert_close(
+            output["samples"][:, :, 0],
+            self.original["samples"][:, :, 0],
+            rtol=0,
+            atol=0,
+        )
 
     def test_original_dtype_and_metadata_and_input_ownership(self):
         self.original["samples"] = self.original["samples"].half()
@@ -134,8 +177,12 @@ class VideoLatentCompositeMaskedTest(unittest.TestCase):
         self.assert_composite(output, mask[None, None])
         output["samples"].zero_()
         output["noise_mask"].zero_()
-        torch.testing.assert_close(self.original["samples"], original_before, rtol=0, atol=0)
-        torch.testing.assert_close(self.replacement["samples"], replacement_before, rtol=0, atol=0)
+        torch.testing.assert_close(
+            self.original["samples"], original_before, rtol=0, atol=0
+        )
+        torch.testing.assert_close(
+            self.replacement["samples"], replacement_before, rtol=0, atol=0
+        )
         self.assertTrue(torch.all(old_mask == 1))
         self.assertTrue(torch.all(mask[1] == 1))
 
@@ -143,24 +190,50 @@ class VideoLatentCompositeMaskedTest(unittest.TestCase):
         mask = torch.zeros(22, 4, 6)
         mask[4, 1, 1] = 1
         output = self.composite(mask=mask)
-        prepared = comfy.sampler_helpers.prepare_mask(output["noise_mask"], output["samples"].shape, "cpu")
-        torch.testing.assert_close(prepared, output["noise_mask"].expand_as(prepared), rtol=0, atol=0)
+        prepared = comfy.sampler_helpers.prepare_mask(
+            output["noise_mask"], output["samples"].shape, "cpu"
+        )
+        torch.testing.assert_close(
+            prepared, output["noise_mask"].expand_as(prepared), rtol=0, atol=0
+        )
 
     def test_rejects_broadcastable_latent_mismatches(self):
-        for shape in ((1, 24, 7, 2, 3), (2, 1, 7, 2, 3), (2, 24, 1, 2, 3), (2, 24, 7, 1, 3)):
-            with self.subTest(shape=shape), self.assertRaisesRegex(ValueError, "identical"):
-                VideoLatentCompositeMasked.execute(self.original, {"samples": torch.zeros(shape)})
+        for shape in (
+            (1, 24, 7, 2, 3),
+            (2, 1, 7, 2, 3),
+            (2, 24, 1, 2, 3),
+            (2, 24, 7, 1, 3),
+        ):
+            with (
+                self.subTest(shape=shape),
+                self.assertRaisesRegex(ValueError, "identical"),
+            ):
+                VideoLatentCompositeMasked.execute(
+                    self.original, {"samples": torch.zeros(shape)}
+                )
 
     def test_rejects_bad_inherited_mask_shape(self):
-        for shape in ((7, 2, 3), (1, 1, 1, 2, 3), (1, 1, 7, 4, 6), (3, 1, 7, 2, 3), (1, 2, 7, 2, 3)):
-            with self.subTest(shape=shape), self.assertRaisesRegex(ValueError, "noise_mask"):
+        for shape in (
+            (7, 2, 3),
+            (1, 1, 1, 2, 3),
+            (1, 1, 7, 4, 6),
+            (3, 1, 7, 2, 3),
+            (1, 2, 7, 2, 3),
+        ):
+            with (
+                self.subTest(shape=shape),
+                self.assertRaisesRegex(ValueError, "noise_mask"),
+            ):
                 self.replacement["noise_mask"] = torch.ones(shape)
                 self.composite()
 
     def test_rejects_invalid_values_in_either_mask(self):
         for value in (-0.1, 1.1, float("nan"), float("inf")):
             for inherited in (False, True):
-                with self.subTest(value=value, inherited=inherited), self.assertRaisesRegex(ValueError, r"within \[0,1\]"):
+                with (
+                    self.subTest(value=value, inherited=inherited),
+                    self.assertRaisesRegex(ValueError, r"within \[0,1\]"),
+                ):
                     self.replacement.pop("noise_mask", None)
                     mask = torch.full((7, 2, 3), value)
                     if inherited:
@@ -170,13 +243,19 @@ class VideoLatentCompositeMaskedTest(unittest.TestCase):
                         self.composite(mask=mask)
 
     def test_rejects_incompatible_image_frame_count(self):
-        with self.assertRaisesRegex(ValueError, "Expected 7 latent-frame masks or 22 image-frame masks"):
+        with self.assertRaisesRegex(
+            ValueError, "Expected 7 latent-frame masks or 22 image-frame masks"
+        ):
             self.composite(mask=torch.ones(21, 2, 3))
         with self.assertRaisesRegex(ValueError, "Unknown video mask type"):
             self.composite(type="unknown")
 
     def test_rejects_nested_av_inputs(self):
-        av = {"samples": comfy.nested_tensor.NestedTensor((self.original["samples"], torch.zeros(2, 32, 2, 10)))}
+        av = {
+            "samples": comfy.nested_tensor.NestedTensor(
+                (self.original["samples"], torch.zeros(2, 32, 2, 10))
+            )
+        }
         with self.assertRaisesRegex(ValueError, "Separate AV"):
             VideoLatentCompositeMasked.execute(av, self.replacement)
         with self.assertRaisesRegex(ValueError, "Separate AV"):
@@ -191,8 +270,18 @@ class VideoLatentCompositeMaskedTest(unittest.TestCase):
         output = self.composite(mask=mask)
         self.assertEqual(output["samples"].device, self.original["samples"].device)
         self.assertEqual(output["noise_mask"].device, self.original["samples"].device)
-        torch.testing.assert_close(output["samples"][:, :, 0].cpu(), self.replacement["samples"][:, :, 0], rtol=0, atol=0)
-        torch.testing.assert_close(output["samples"][:, :, 1:], self.original["samples"][:, :, 1:], rtol=0, atol=0)
+        torch.testing.assert_close(
+            output["samples"][:, :, 0].cpu(),
+            self.replacement["samples"][:, :, 0],
+            rtol=0,
+            atol=0,
+        )
+        torch.testing.assert_close(
+            output["samples"][:, :, 1:],
+            self.original["samples"][:, :, 1:],
+            rtol=0,
+            atol=0,
+        )
 
 
 if __name__ == "__main__":

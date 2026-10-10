@@ -30,7 +30,7 @@ from ...attention.protocol import (
     RotaryEmbeddingSpec,
 )
 from ...log import get_logger
-from ...quantization.dispatch import register_backend
+from ...quantization.backend import register_backend
 from ...quantization.operator_scope import use_turing_operator_backend
 
 
@@ -126,7 +126,10 @@ def _tile_progress(module, description, total=None, base_batch_size=1):
             increment = 1
             if inputs and torch.is_tensor(inputs[0]) and inputs[0].ndim > 0:
                 input_batch = int(inputs[0].shape[0])
-                if input_batch >= base_batch_size and input_batch % base_batch_size == 0:
+                if (
+                    input_batch >= base_batch_size
+                    and input_batch % base_batch_size == 0
+                ):
                     increment = input_batch // base_batch_size
             submitted += increment
             if total is not None and submitted > total and terminal.total is not None:
@@ -152,9 +155,7 @@ def _norm_weight(module, name, reference):
         return norm.weight
     # Non-affine norms need a unit weight for the fused QK transform contract.
     # Keep it call-local; no device tensors are cached on the shared VAE.
-    return torch.ones(
-        module.dim_head, device=reference.device, dtype=reference.dtype
-    )
+    return torch.ones(module.dim_head, device=reference.device, dtype=reference.dtype)
 
 
 def _projected_attention(module, query, key, value, rotary_pos_emb, options):
@@ -218,12 +219,14 @@ def _attention_forward(
     batch_size, seq_len, _ = x.shape
     with _norm_weight_context(pre_norm, x) as weight:
         qkv = comfy.ops.linear_input_act(
-            module.to_qkv, x, "rms_norm", weight, pre_norm.eps,
+            module.to_qkv,
+            x,
+            "rms_norm",
+            weight,
+            pre_norm.eps,
         ).view(batch_size, seq_len, -1, 3 * module.dim_head)
     query, key, value = torch.chunk(qkv, 3, dim=-1)
-    out = _projected_attention(
-        module, query, key, value, rotary_pos_emb, options
-    )
+    out = _projected_attention(module, query, key, value, rotary_pos_emb, options)
     return comfy.ops.linear_input_act(
         module.to_out,
         out,
@@ -242,7 +245,9 @@ def _norm_weight_context(norm, x):
             yield weight
     elif hasattr(norm, "comfy_cast_weights"):
         with comfy.ops.CastBiasWeightContext(
-            norm if norm.weight is not None else None, x, offloadable=True,
+            norm if norm.weight is not None else None,
+            x,
+            offloadable=True,
         ) as (weight, _):
             yield weight
     else:
@@ -283,10 +288,12 @@ def _decoder_overrides(decoder, attention, device):
     options = _attention_options(attention, device)
     with ExitStack() as stack:
         for block in decoder.transformer_blocks:
-            stack.enter_context(_temporary_forward(
-                block.attn,
-                partial(_attention_forward, block.attn, options=options),
-            ))
+            stack.enter_context(
+                _temporary_forward(
+                    block.attn,
+                    partial(_attention_forward, block.attn, options=options),
+                )
+            )
         yield
 
 
@@ -312,10 +319,3 @@ def decode_video(vae, latent, attention="w8a8"):
         # Includes official dtype/output handling, model loading, tiling and OOM
         # fallback. In particular, do not call first_stage_model.decode directly.
         return vae.decode(latent)
-
-
-def encode_video(vae, pixels):
-    """Compatibility facade for callers importing encode from this module."""
-    from .video_vae_encode import encode_video as implementation
-
-    return implementation(vae, pixels)

@@ -14,11 +14,11 @@ COMFY_ROOT = PLUGIN_ROOT.parents[1]
 sys.path.insert(0, str(COMFY_ROOT))
 sys.path.insert(0, str(PLUGIN_ROOT))
 
-from comfyui_turing_utils.nodes.multimodal_chat import (  # noqa: E402
+from comfyui_turing_utils.nodes.multimodal_chat import MultimodalPromptChat
+from comfyui_turing_utils.prompt.chat import (  # noqa: E402
     ChatOptions,
     DEFAULT_CHAT_OPTIONS,
     build_chat_options,
-    MultimodalPromptChat,
     build_chat_request,
     build_user_content,
     extract_chat_text,
@@ -61,7 +61,9 @@ class MultimodalPromptChatTest(unittest.TestCase):
         encoding = inputs["image_format"]
         self.assertTrue(encoding.as_dict()["advanced"])
         self.assertEqual([option.key for option in encoding.options], ["jpeg", "png"])
-        self.assertEqual([item.id for item in encoding.options[0].inputs], ["jpeg_quality"])
+        self.assertEqual(
+            [item.id for item in encoding.options[0].inputs], ["jpeg_quality"]
+        )
         self.assertEqual(encoding.options[1].inputs, [])
 
     def test_inline_options_preserve_defaults(self):
@@ -146,7 +148,9 @@ class MultimodalPromptChatTest(unittest.TestCase):
         labels = [item["text"] for item in content if item["type"] == "text"]
         self.assertEqual(labels[1:3], ["<Picture 1>", "<Picture 2>"])
         self.assertEqual(metadata["pictures"], 2)
-        self.assertTrue(content[2]["image_url"]["url"].startswith("data:image/jpeg;base64,"))
+        self.assertTrue(
+            content[2]["image_url"]["url"].startswith("data:image/jpeg;base64,")
+        )
 
     def test_image_batches_are_rejected_instead_of_changing_reference_numbers(self):
         with self.assertRaisesRegex(ValueError, "exactly one image"):
@@ -200,7 +204,10 @@ class MultimodalPromptChatTest(unittest.TestCase):
         response = {
             "choices": [
                 {
-                    "message": {"content": "  final prompt  ", "reasoning_content": "hidden"},
+                    "message": {
+                        "content": "  final prompt  ",
+                        "reasoning_content": "hidden",
+                    },
                     "finish_reason": "stop",
                 }
             ]
@@ -228,12 +235,21 @@ class MultimodalPromptChatTest(unittest.TestCase):
 
 class MultimodalPromptChatExecutionTest(unittest.IsolatedAsyncioTestCase):
     async def test_inline_options(self):
-        with patch("comfyui_turing_utils.nodes.multimodal_chat.request_chat_completion",
-                   return_value={"choices": [{"message": {"content": "response"}}]}) as request:
+        with patch(
+            "comfyui_turing_utils.nodes.multimodal_chat.request_chat_completion",
+            return_value={"choices": [{"message": {"content": "response"}}]},
+        ) as request:
             await MultimodalPromptChat.execute(
-                "user", "system", "http://localhost:9200", "test-model", "",
-                temperature=0.25, max_output_tokens=512,
-                image_format={"image_format": "png"}, timeout_seconds=45)
+                "user",
+                "system",
+                "http://localhost:9200",
+                "test-model",
+                "",
+                temperature=0.25,
+                max_output_tokens=512,
+                image_format={"image_format": "png"},
+                timeout_seconds=45,
+            )
             body = request.call_args.args[2]
             self.assertEqual(body["temperature"], 0.25)
             self.assertEqual(body["max_tokens"], 512)
@@ -247,10 +263,13 @@ class MultimodalPromptChatExecutionTest(unittest.IsolatedAsyncioTestCase):
             ("user", " \t\n"),
             ("user", "system"),
         ):
-            with self.subTest(prompt=prompt, system_prompt=system_prompt), patch(
-                "comfyui_turing_utils.nodes.multimodal_chat.request_chat_completion",
-                return_value={"choices": [{"message": {"content": "response"}}]},
-            ) as request:
+            with (
+                self.subTest(prompt=prompt, system_prompt=system_prompt),
+                patch(
+                    "comfyui_turing_utils.nodes.multimodal_chat.request_chat_completion",
+                    return_value={"choices": [{"message": {"content": "response"}}]},
+                ) as request,
+            ):
                 result = await MultimodalPromptChat.execute(
                     prompt=prompt,
                     system_prompt=system_prompt,
@@ -271,10 +290,13 @@ class MultimodalPromptChatExecutionTest(unittest.IsolatedAsyncioTestCase):
     async def test_system_prompt_only_preserves_reference_media(self):
         frame = torch.zeros((1, 8, 8, 3))
         for prompt in ("", " \t\n"):
-            with self.subTest(prompt=prompt), patch(
-                "comfyui_turing_utils.nodes.multimodal_chat.request_chat_completion",
-                return_value={"choices": [{"message": {"content": "response"}}]},
-            ) as request:
+            with (
+                self.subTest(prompt=prompt),
+                patch(
+                    "comfyui_turing_utils.nodes.multimodal_chat.request_chat_completion",
+                    return_value={"choices": [{"message": {"content": "response"}}]},
+                ) as request,
+            ):
                 await MultimodalPromptChat.execute(
                     prompt=prompt,
                     system_prompt="Describe the references.",
@@ -288,24 +310,43 @@ class MultimodalPromptChatExecutionTest(unittest.IsolatedAsyncioTestCase):
                 )
 
                 messages = request.call_args.args[2]["messages"]
-                self.assertEqual(messages[0], {"role": "system", "content": "Describe the references."})
+                self.assertEqual(
+                    messages[0],
+                    {"role": "system", "content": "Describe the references."},
+                )
                 self.assertEqual(messages[1]["role"], "user")
                 content = messages[1]["content"]
                 labels = [item["text"] for item in content if item["type"] == "text"]
                 self.assertEqual(
                     labels[1:],
-                    ["<First Frame>", "<Last Frame>", "<Picture 1>", "<Video 1>, frame at 0.000s"],
+                    [
+                        "<First Frame>",
+                        "<Last Frame>",
+                        "<Picture 1>",
+                        "<Video 1>, frame at 0.000s",
+                    ],
                 )
-                self.assertEqual(sum(item["type"] == "image_url" for item in content), 4)
+                self.assertEqual(
+                    sum(item["type"] == "image_url" for item in content), 4
+                )
 
     async def test_rejects_both_blank_prompts_even_with_media(self):
         for prompt in ("", " \t\n"):
             for system_prompt in ("", " \t\n"):
                 for frame in (None, torch.zeros((1, 8, 8, 3))):
-                    with self.subTest(prompt=prompt, system_prompt=system_prompt, media=frame is not None), patch(
-                        "comfyui_turing_utils.nodes.multimodal_chat.request_chat_completion",
-                    ) as request:
-                        with self.assertRaisesRegex(ValueError, "prompt or system_prompt must not be empty"):
+                    with (
+                        self.subTest(
+                            prompt=prompt,
+                            system_prompt=system_prompt,
+                            media=frame is not None,
+                        ),
+                        patch(
+                            "comfyui_turing_utils.nodes.multimodal_chat.request_chat_completion",
+                        ) as request,
+                    ):
+                        with self.assertRaisesRegex(
+                            ValueError, "prompt or system_prompt must not be empty"
+                        ):
                             await MultimodalPromptChat.execute(
                                 prompt=prompt,
                                 system_prompt=system_prompt,

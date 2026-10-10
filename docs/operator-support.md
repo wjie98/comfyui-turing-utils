@@ -41,14 +41,14 @@ implementation.
 | Family | `turing_utils::` operator | Purpose |
 |---|---|---|
 | Linear | `w4a8_linear` | Packed INT4 weights with INT8 activations on sm75+ Tensor Cores; BF16 output |
-| Linear | `codebook_w4a8_linear` | Grouped-codebook INT4 storage with E4M3 group scales, inline packed-to-shared decode for long sequences, bounded staged fallback, sm75+ INT8 Tensor Core contraction, and BF16 output |
+| Linear | `codebook_w4a8_linear` | Codebook INT4 or uniform INT6 storage with E4M3/FP32 group scales, architecture-selected inline or bounded staged decode, sm75+ INT8 Tensor Core contraction, and BF16 output |
 | Linear | `int8_linear` | Raw prequantized sm75+ W8A8 contraction used by the grouped-codebook path and backend regression gates |
 | Linear | `fp16_int8_linear` | W8A8 with FP16 scale/bias rounding and FP16 output; native `[N,K]` weight layout |
 | Epilogue | `dequantize_int8_bf16` | INT32 GEMM workspace to packed BF16 output |
 | Activation quantization | `swiglu_int8_convrot_quantize`, `swiglu_int4_convrot_quantize` | Fused SwiGLU and ConvRot activation quantization |
 | Activation quantization | `gelu_int8_convrot_quantize`, `gelu_int4_convrot_quantize` | Fused tanh-GELU and ConvRot activation quantization |
 | Activation quantization | `bf16_int8_convrot_quantize`, `bf16_int4_convrot_quantize` | BF16 row-buffer ConvRot quantization, optionally with SwiGLU |
-| Activation quantization | `fp16_int8_quantize` | FP16 row quantization after native activation/rotation; eager scale and rounding boundaries |
+| Activation quantization | `fp16_int8_convrot_quantize` | FP16 input storage; fused FP32 activation (optional RMSNorm/SwiGLU/tanh-GELU), ConvRot, row scale and INT8 rounding; no floating-point rotated-row buffer |
 | Activation quantization | `swiglu_int8_convrot_quantize_scaled` | Quantize one aligned FFN channel interval with a precomputed whole-row scale |
 | Activation quantization | `swiglu_convrot_shard_inplace`, `int8_convrot_quantize_from_partials` | Single-pass half-width FC1 staging with in-place SwiGLU+ConvRot and exact whole-row quantization |
 | Activation quantization | `bf16_gelu_int8_convrot_quantize`, `bf16_gelu_int4_convrot_quantize` | BF16 row-buffer GELU and ConvRot quantization |
@@ -119,11 +119,23 @@ another GPU's launch policy.
 | W4A4 | packed INT4 | INT4 | Kitchen | sm75+ BF16 input/output compatibility and fused activation quantization |
 | Legacy W4A8 | signed packed INT4 | INT8 | local sm75+ kernel | packed-weight shared-tile expansion, INT8 Tensor Core MMA, BF16 output |
 | Grouped-codebook W4A8 | 4-bit codebook indices + E4M3 g16 scales + FP32 channel scales | INT8 | local sm75+ kernel | register decode directly into the shared W8A8 tile for long sequences, bounded staged fallback, BF16 output; covers the symmetric `asym_w4a8_int8` MiniMax-H3 files |
+| Uniform W6A8 | 6-bit two-plane packing + E4M3 group scales + FP32 channel scales | INT8 | same local sm75+ kernel family | uniform signed levels, no codebook; spill-free g16 inline tile for long SM75 sequences, bounded staged decode on newer GPUs/other shapes |
 
 ConvRot group size 256 is the optimized H3 path. Unsupported layouts, group
 sizes, devices, or dtypes are rejected or delegated to Kitchen according to the
 format contract; dense checkpoint weights are never silently quantized at
 runtime.
+Both grouped layouts accept E4M3 or FP32 group scales through the local kernel.
+The ConvRot loader rejects correction tensors rather than let ComfyUI's native
+grouped loader discard unsupported checkpoint state.
+
+W6A8 requires comfy-kitchen >=0.2.37 and kernel >=0.45.0. The existing ConvRot
+DiT/CLIP loaders detect packed geometry automatically, including mixed W4/W6/W8
+checkpoints. No new node or workflow parameter is introduced. LoRA merging uses
+the native Kitchen requantization contract, which preserves the original packed
+bit width, group size, scale dtype and codebook choice. Requantization is still
+lossy; preservation of the storage format does not imply lossless LoRA merging.
+Do not upgrade Torch/CUDA as part of this dependency change.
 
 ## MiniMax H3 activation scheduling
 

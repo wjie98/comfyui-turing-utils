@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import ast
+import importlib.util
 import sys
 import unittest
 from pathlib import Path
@@ -14,19 +15,38 @@ if str(ROOT) not in sys.path:
 class PackageArchitectureTest(unittest.TestCase):
     def test_canvas_routes_have_no_retired_duplicate_entrypoints(self):
         source = ROOT / "comfyui_turing_utils/workspace/routes.py"
-        routes = {node.args[1].value for node in ast.walk(ast.parse(source.read_text()))
-                  if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
-                  and node.func.id == "endpoint"}
-        retired = {"/protocol", "/project/statistics", "/project", "/card/connect",
-                   "/text", "/run", "/metadata"}
+        routes = {
+            node.args[1].value
+            for node in ast.walk(ast.parse(source.read_text()))
+            if isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Name)
+            and node.func.id == "endpoint"
+        }
+        retired = {
+            "/protocol",
+            "/project/statistics",
+            "/project",
+            "/card/connect",
+            "/text",
+            "/run",
+            "/metadata",
+        }
         self.assertFalse(routes & retired)
-        self.assertTrue({"/select", "/selection", "/project/save", "/compile"} <= routes)
+        self.assertTrue(
+            {"/select", "/selection", "/project/save", "/compile"} <= routes
+        )
 
     def test_frontend_extension_is_registered(self):
         source = (ROOT / "__init__.py").read_text(encoding="utf-8")
         self.assertIn('WEB_DIRECTORY = "./web"', source)
         self.assertTrue((ROOT / "web" / "chat_advanced.js").is_file())
-        for filename in ("keyframe_outputs.js", "stage_barrier_outputs.js", "node_configuration.js", "lib/stable_inputs.js", "lib/node_migrations.js"):
+        for filename in (
+            "keyframe_outputs.js",
+            "stage_barrier_outputs.js",
+            "node_configuration.js",
+            "lib/stable_inputs.js",
+            "lib/node_migrations.js",
+        ):
             self.assertFalse((ROOT / "web" / filename).exists())
 
     def test_kernel_package_is_accessed_only_through_facade(self):
@@ -91,18 +111,16 @@ class PackageArchitectureTest(unittest.TestCase):
         self.assertFalse(any("adapters" in name for name in imported))
         self.assertFalse(any("attention" in name for name in imported))
         self.assertFalse(any(name == "folder_paths" for name in imported))
-        self.assertTrue((ROOT / "comfyui_turing_utils" / "loading" / "convrot.py").is_file())
+        self.assertTrue(
+            (ROOT / "comfyui_turing_utils" / "loading" / "convrot.py").is_file()
+        )
 
     def test_h3_services_are_separate_from_node_schemas(self):
         node_source = (
             ROOT / "comfyui_turing_utils" / "nodes" / "minimax_references.py"
         ).read_text(encoding="utf-8")
         service_source = (
-            ROOT
-            / "comfyui_turing_utils"
-            / "adapters"
-            / "minimax"
-            / "references.py"
+            ROOT / "comfyui_turing_utils" / "adapters" / "minimax" / "references.py"
         ).read_text(encoding="utf-8")
         self.assertNotIn("torchaudio", node_source)
         self.assertNotIn("@dataclass", node_source)
@@ -225,15 +243,86 @@ class PackageArchitectureTest(unittest.TestCase):
                 "_TuringUtilsSeCLoader",
                 "TuringUtilsSeCTrackVisualConcept",
                 "_TuringUtilsSeCApply",
-                "TuringMaterialText", "TuringMaterialImage", "TuringMaterialVideo", "TuringMaterialAudio",
-                "TuringCanvasInputs", "TuringCanvasOutputs",
-                "_TuringMaterialReadText", "_TuringMaterialWriteText",
-                "_TuringMaterialReadImage", "_TuringMaterialWriteImage",
-                "_TuringMaterialReadVideo", "_TuringMaterialWriteVideo",
-                "_TuringMaterialReadAudio", "_TuringMaterialWriteAudio",
+                "TuringMaterialText",
+                "TuringMaterialImage",
+                "TuringMaterialVideo",
+                "TuringMaterialAudio",
+                "TuringCanvasInputs",
+                "TuringCanvasOutputs",
+                "_TuringMaterialReadText",
+                "_TuringMaterialWriteText",
+                "_TuringMaterialReadImage",
+                "_TuringMaterialWriteImage",
+                "_TuringMaterialReadVideo",
+                "_TuringMaterialWriteVideo",
+                "_TuringMaterialReadAudio",
+                "_TuringMaterialWriteAudio",
             ),
         )
 
 
 if __name__ == "__main__":
     unittest.main()
+
+
+PACKAGE = Path(__file__).resolve().parents[1] / "comfyui_turing_utils"
+
+
+def imports(path):
+    relative = path.relative_to(PACKAGE).with_suffix("")
+    parts = list(relative.parts)
+    if parts[-1] == "__init__":
+        parts.pop()
+    else:
+        parts.pop()
+    package = ".".join(["comfyui_turing_utils", *parts])
+    for node in ast.walk(ast.parse(path.read_text())):
+        if isinstance(node, ast.Import):
+            yield from (alias.name for alias in node.names)
+        elif isinstance(node, ast.ImportFrom):
+            module = node.module or ""
+            if node.level:
+                module = importlib.util.resolve_name("." * node.level + module, package)
+            yield module
+            yield from (module + "." + alias.name for alias in node.names)
+
+
+def test_shared_domains_do_not_import_node_schemas_or_canvas():
+    forbidden = (
+        "comfyui_turing_utils.nodes",
+        "comfyui_turing_utils.workspace",
+        "comfyui_turing_utils.registration",
+    )
+    for domain in ("media", "prompt", "attention", "quantization"):
+        for path in (PACKAGE / domain).rglob("*.py"):
+            for module in imports(path):
+                assert not module.startswith(forbidden), (path, module)
+
+
+def test_generic_attention_and_quantization_do_not_import_model_adapters():
+    for domain in ("attention", "quantization"):
+        for path in (PACKAGE / domain).rglob("*.py"):
+            for module in imports(path):
+                assert not module.startswith("comfyui_turing_utils.adapters"), (
+                    path,
+                    module,
+                )
+
+
+def test_shared_execution_does_not_depend_on_its_consumers():
+    boundaries = {
+        "attention/execution.py": (
+            "comfyui_turing_utils.attention.dense",
+            "comfyui_turing_utils.attention.sol",
+            "comfyui_turing_utils.attention.sla",
+            "comfyui_turing_utils.attention.patches",
+        ),
+        "adapters/minimax/execution.py": (
+            "comfyui_turing_utils.adapters.minimax.acceleration",
+            "comfyui_turing_utils.adapters.minimax.attention_ops",
+            "comfyui_turing_utils.adapters.minimax.mlp",
+        ),
+    }
+    for file, forbidden in boundaries.items():
+        for module in imports(PACKAGE / file):
+            assert not module.startswith(forbidden), (file, module)

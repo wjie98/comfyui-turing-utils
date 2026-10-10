@@ -150,9 +150,15 @@ from .workspace.cache import install_task_cleanup
 NODE_CLASS_MAPPINGS.update(MATERIAL_NODES)
 NODE_CLASS_MAPPINGS.update(MATERIAL_INTERNAL_NODES)
 for _name in MATERIAL_INTERNAL_NODES:
-    NODE_DISPLAY_NAME_MAPPINGS[_name] = f"Material {_name.removeprefix('_TuringMaterial')} (Internal)"
+    NODE_DISPLAY_NAME_MAPPINGS[_name] = (
+        f"Material {_name.removeprefix('_TuringMaterial')} (Internal)"
+    )
 for _name in MATERIAL_NODES:
-    NODE_DISPLAY_NAME_MAPPINGS[_name] = f"{_name.removeprefix('TuringMaterial')} Material"
+    NODE_DISPLAY_NAME_MAPPINGS[_name] = (
+        f"{_name.removeprefix('TuringMaterial')} Material"
+    )
 install_routes()
 install_task_cleanup()
-NODE_DISPLAY_NAME_MAPPINGS.update({"TuringCanvasInputs": "Canvas Inputs", "TuringCanvasOutputs": "Canvas Outputs"})
+NODE_DISPLAY_NAME_MAPPINGS.update(
+    {"TuringCanvasInputs": "Canvas Inputs", "TuringCanvasOutputs": "Canvas Outputs"}
+)

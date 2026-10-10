@@ -14,19 +14,7 @@ import torch
 
 from ...log import get_logger
 from ...hardware import device_capabilities
-from .memory_state import (
-    ActivationRuntimePlan,
-    current_model_is_dynamic as _current_model_is_dynamic,
-    dynamic_vram_reclaimable as _dynamic_vram_reclaimable,
-    dynamic_vbars as _dynamic_vbars,
-    dynamic_weight_prefetch_reserve as _dynamic_weight_prefetch_reserve,
-    log_memory_diagnostics as _log_memory_diagnostics,
-    memory_diagnostics as _memory_diagnostics,
-    planning_available as _planning_available,
-    runtime_memory as _runtime_memory,
-    should_log as _should_log,
-)
-from .memory_state import ensure_dynamic_vram_headroom as _ensure_headroom
+from . import memory_state
 from .policy_config import activation_mode as _mode
 
 
@@ -38,6 +26,8 @@ _ATTENTION_CTAS_PER_SM = 2
 _MAX_BALANCED_SHARDS = 4
 _MIN_SATURATED_ROW_TILES = 4
 _MIN_SATURATED_GEMM_WIDTH = 1024
+
+
 @dataclasses.dataclass(frozen=True, slots=True)
 class ActivationDecision:
     operation: str
@@ -101,29 +91,6 @@ class FFNChannelDecision:
         return 1 if 0 < self.chunk_rows < self.rows else 0
 
 
-def ensure_dynamic_vram_headroom(
-    base_model,
-    device: torch.device,
-    *,
-    rows: int,
-    operation: str,
-    estimated_peak_bytes: int,
-    runtime_plan: ActivationRuntimePlan | None = None,
-) -> int:
-    """Compatibility facade over the shared DynamicVRAM state service."""
-    return _ensure_headroom(
-        base_model,
-        device,
-        rows=rows,
-        operation=operation,
-        estimated_peak_bytes=estimated_peak_bytes,
-        runtime_plan=runtime_plan,
-        _runtime_memory_fn=_runtime_memory,
-        _dynamic_vbars_fn=_dynamic_vbars,
-        _diagnostics_fn=_log_memory_diagnostics,
-    )
-
-
 def _align_rows(value: int, alignment: int, minimum: int) -> int:
     value = value // alignment * alignment
     return max(value, minimum) if value >= minimum else 0
@@ -154,7 +121,7 @@ def _prefer_saturated_row_streaming(
         operation == "qkv"
         and cap > 0
         and math.ceil(int(rows) / int(cap)) >= _MIN_SATURATED_ROW_TILES
-        and _current_model_is_dynamic(base_model, device)
+        and memory_state.current_model_is_dynamic(base_model, device)
     )
 
 
@@ -207,16 +174,13 @@ def _attention_saturation_group(
         1,
     )
     grid_heads = math.ceil(
-        sm_count * _ATTENTION_CTAS_PER_SM * _ATTENTION_TARGET_WAVES
-        / query_blocks
+        sm_count * _ATTENTION_CTAS_PER_SM * _ATTENTION_TARGET_WAVES / query_blocks
     )
     gemm_heads = math.ceil(_MIN_SATURATED_GEMM_WIDTH / int(head_dim))
     pass_heads = math.ceil(int(heads) / _MAX_BALANCED_SHARDS)
     minimum = max(grid_heads, gemm_heads, pass_heads, 1)
     balanced = [
-        group
-        for group in legal_groups
-        if group >= minimum and heads % group == 0
+        group for group in legal_groups if group >= minimum and heads % group == 0
     ]
     if balanced:
         return min(balanced)
@@ -259,10 +223,9 @@ def estimate_attention_lifecycle_peak(
     if not compact_qk:
         if key_rows != rows and (quantized_value or residual_subblocks):
             qkv_projection = 3 * features * element_size
-            qk_scales = (
-                ((rows + 63) // 64) * group * 4 * 4
-                + ((key_rows + 63) // 64) * group * 4
-            )
+            qk_scales = ((rows + 63) // 64) * group * 4 * 4 + (
+                (key_rows + 63) // 64
+            ) * group * 4
             qk_compact = features + key_features + qk_scales
             value_int8 = features + key_features if quantized_value else 0
             summaries = 0
@@ -271,9 +234,7 @@ def estimate_attention_lifecycle_peak(
                 padded_key_blocks = ((key_blocks + 15) // 16) * 16
                 residual_tokens = 64 // residual_subblocks
                 residual_summaries = (key_rows + residual_tokens - 1) // residual_tokens
-                padded_residual_summaries = (
-                    (residual_summaries + 15) // 16
-                ) * 16
+                padded_residual_summaries = ((residual_summaries + 15) // 16) * 16
                 summaries = (
                     group * padded_key_blocks * head_dim * 2
                     + 2 * group * padded_residual_summaries * head_dim * 2
@@ -284,10 +245,7 @@ def estimate_attention_lifecycle_peak(
                 key_features if quantized_value else features * element_size
             )
             execution_peak = (
-                qk_compact
-                + retained_value
-                + summaries
-                + features * element_size
+                qk_compact + retained_value + summaries + features * element_size
             )
             return destination + max(preparation_peak, execution_peak) + input_cache
         return destination + features * 8 + input_cache
@@ -301,9 +259,7 @@ def estimate_attention_lifecycle_peak(
     if residual_subblocks:
         residual_tokens = 64 // residual_subblocks
         residual_summary_count = (key_rows + residual_tokens - 1) // residual_tokens
-        padded_residual_summaries = (
-            (residual_summary_count + 15) // 16
-        ) * 16
+        padded_residual_summaries = ((residual_summary_count + 15) // 16) * 16
         summaries = (
             group * padded_blocks * head_dim * 2
             + 2 * group * padded_residual_summaries * head_dim * 2
@@ -311,21 +267,17 @@ def estimate_attention_lifecycle_peak(
         )
     else:
         summaries = (
-            3 * group * padded_blocks * head_dim * 2
-            + 2 * group * head_dim * 4
-        ) if quantized_value else 0
+            (3 * group * padded_blocks * head_dim * 2 + 2 * group * head_dim * 4)
+            if quantized_value
+            else 0
+        )
     result = features * element_size
     execution_peak = compact + value_int8 + summaries + result
     tile_rows = min(rows, 16_384)
-    projected_tile = (
-        tile_rows * group * head_dim * element_size * 2
-        + tile_rows * (hidden_size + 4)
+    projected_tile = tile_rows * group * head_dim * element_size * 2 + tile_rows * (
+        hidden_size + 4
     )
-    return (
-        destination
-        + max(compact + projected_tile, execution_peak)
-        + input_cache
-    )
+    return destination + max(compact + projected_tile, execution_peak) + input_cache
 
 
 def decide_activation_chunks(
@@ -336,7 +288,7 @@ def decide_activation_chunks(
     expanded_size: int,
     heads: int | None = None,
     chunk_rows_override: int | None = None,  # Benchmark-only; runtime leaves automatic.
-    runtime_plan: ActivationRuntimePlan | None = None,
+    runtime_plan: memory_state.ActivationRuntimePlan | None = None,
     base_model=None,
 ) -> ActivationDecision:
     """Select the full or streamed H3 activation path.
@@ -349,8 +301,8 @@ def decide_activation_chunks(
     if x.device.type != "cuda" or rows <= 0:
         return ActivationDecision(operation, mode, rows, 0, 0, 0, 0, 0)
 
-    available, reserve, usable = _runtime_memory(x.device, base_model)
-    planned_available = _planning_available(
+    available, reserve, usable = memory_state.runtime_memory(x.device, base_model)
+    planned_available = memory_state.planning_available(
         runtime_plan,
         x.device,
         rows,
@@ -366,7 +318,7 @@ def decide_activation_chunks(
     # CUDA graph/kernel scratch, and the desktop compositor.  The compositor's
     # long-lived allocation is separately represented by --reserve-vram.
     safety = max(768 * _MIB, int(usable * 0.075))
-    weight_scratch = _dynamic_weight_prefetch_reserve(base_model, x.device)
+    weight_scratch = memory_state.dynamic_weight_prefetch_reserve(base_model, x.device)
     working = max(planned_available - safety - weight_scratch, 0)
 
     if operation == "mlp":
@@ -387,20 +339,11 @@ def decide_activation_chunks(
         # ``expanded_size`` is heads*head_dim. There are five FP32 scale lanes
         # per head block; infer heads from H3's 128-wide heads when possible.
         inferred_heads = (
-            max(int(heads), 1)
-            if heads is not None
-            else max(expanded_size // 128, 1)
+            max(int(heads), 1) if heads is not None else max(expanded_size // 128, 1)
         )
         scale_bytes = ((rows + 63) // 64) * inferred_heads * 5 * 4
-        persistent = (
-            rows * (2 * expanded_size + expanded_size * element)
-            + scale_bytes
-        )
-        per_row = (
-            3 * expanded_size * element
-            + hidden_size
-            + 4
-        )
+        persistent = rows * (2 * expanded_size + expanded_size * element) + scale_bytes
+        per_row = 3 * expanded_size * element + hidden_size + 4
         cap, alignment, minimum = 16384, 64, 1024
     else:
         raise ValueError(f"unknown H3 activation operation: {operation}")
@@ -424,11 +367,7 @@ def decide_activation_chunks(
     elif override is not None:
         chunk_rows = min(rows, _align_rows(override, alignment, minimum))
         selection = "override"
-    elif (
-        mode == "auto"
-        and not saturation_limited
-        and full_peak <= int(working * 0.86)
-    ):
+    elif mode == "auto" and not saturation_limited and full_peak <= int(working * 0.86):
         chunk_rows = 0
         selection = "full_fit"
     else:
@@ -465,7 +404,7 @@ def decide_activation_chunks(
         selection,
         reserve // (256 * _MIB),
     )
-    if LOG.isEnabledFor(10) and _should_log(runtime_plan, key):
+    if LOG.isEnabledFor(10) and memory_state.should_log(runtime_plan, key):
         LOG.debug(
             "MiniMax H3 activation policy: op=%s mode=%s tier=%d rows=%d path=%s "
             "chunk_rows=%d selection=%s available=%.2f GiB reserve=%.2f GiB "
@@ -484,7 +423,7 @@ def decide_activation_chunks(
             weight_scratch / 1024**3,
             full_peak / 1024**3,
             streamed_peak / 1024**3,
-            _log_memory_diagnostics(x.device, base_model),
+            memory_state.log_memory_diagnostics(x.device, base_model),
         )
     return decision
 
@@ -497,7 +436,7 @@ def decide_attention_heads(
     compact_qk: bool,
     quantized_input: bool,
     quantized_value: bool = False,
-    runtime_plan: ActivationRuntimePlan | None = None,
+    runtime_plan: memory_state.ActivationRuntimePlan | None = None,
     base_model=None,
     logical_key_rows: int | None = None,
     residual_subblocks: int = 0,
@@ -522,8 +461,8 @@ def decide_attention_heads(
             0,
         )
 
-    available, reserve, usable = _runtime_memory(x.device, base_model)
-    planned_available = _planning_available(
+    available, reserve, usable = memory_state.runtime_memory(x.device, base_model)
+    planned_available = memory_state.planning_available(
         runtime_plan,
         x.device,
         rows,
@@ -533,23 +472,26 @@ def decide_attention_heads(
     )
     element = int(x.element_size())
     safety = max(768 * _MIB, int(usable * 0.075))
-    weight_scratch = _dynamic_weight_prefetch_reserve(base_model, x.device)
+    weight_scratch = memory_state.dynamic_weight_prefetch_reserve(base_model, x.device)
     working = max(planned_available - safety - weight_scratch, 0)
 
     def peak(group: int, cache_input: bool) -> int:
-        return estimate_attention_lifecycle_peak(
-            rows=rows,
-            heads=heads,
-            head_dim=head_dim,
-            hidden_size=int(x.shape[-1]),
-            element_size=element,
-            head_group=group,
-            compact_qk=compact_qk,
-            cache_quantized_input=cache_input and group != heads,
-            quantized_value=quantized_value,
-            logical_key_rows=logical_key_rows,
-            residual_subblocks=residual_subblocks,
-        ) + group * extra_workspace_per_head
+        return (
+            estimate_attention_lifecycle_peak(
+                rows=rows,
+                heads=heads,
+                head_dim=head_dim,
+                hidden_size=int(x.shape[-1]),
+                element_size=element,
+                head_group=group,
+                compact_qk=compact_qk,
+                cache_quantized_input=cache_input and group != heads,
+                quantized_value=quantized_value,
+                logical_key_rows=logical_key_rows,
+                residual_subblocks=residual_subblocks,
+            )
+            + group * extra_workspace_per_head
+        )
 
     # A cut is legal whenever both sides cover complete ConvRot-256 blocks.
     # This is the TP-style gcd boundary: D128 permits every two heads, for
@@ -558,8 +500,7 @@ def decide_attention_heads(
     groups = [
         group
         for group in range(heads, 0, -1)
-        if group % block_heads == 0
-        and (heads - group) % block_heads == 0
+        if group % block_heads == 0 and (heads - group) % block_heads == 0
     ]
     if not groups:
         groups = [heads]
@@ -586,7 +527,8 @@ def decide_attention_heads(
     fit_limit = int(working * 0.96)
     full_fits = peak(heads, False) <= fit_limit
     allow_input_cache = bool(
-        quantized_input and not _current_model_is_dynamic(base_model, x.device)
+        quantized_input
+        and not memory_state.current_model_is_dynamic(base_model, x.device)
     )
     if (mode == "throughput" or full_fits) and override is None:
         head_group = heads
@@ -596,20 +538,12 @@ def decide_attention_heads(
         cache_input = False
         fitting = []
         for group in groups:
-            cached_fits = (
-                allow_input_cache and peak(group, True) <= fit_limit
-            )
+            cached_fits = allow_input_cache and peak(group, True) <= fit_limit
             plain_fits = peak(group, False) <= fit_limit
             if cached_fits or plain_fits:
                 fitting.append((group, cached_fits))
-        saturated = [
-            item for item in fitting if item[0] == saturation_group
-        ]
-        selected = (
-            saturated[0]
-            if saturated
-            else (fitting[0] if fitting else None)
-        )
+        saturated = [item for item in fitting if item[0] == saturation_group]
+        selected = saturated[0] if saturated else (fitting[0] if fitting else None)
         if selected is not None:
             head_group = selected[0]
             cache_input = bool(selected[1])
@@ -636,7 +570,7 @@ def decide_attention_heads(
         cache_input,
         reserve // (256 * _MIB),
     )
-    if LOG.isEnabledFor(10) and _should_log(runtime_plan, key):
+    if LOG.isEnabledFor(10) and memory_state.should_log(runtime_plan, key):
         LOG.debug(
             "MiniMax H3 attention policy: mode=%s tier=%d rows=%d heads=%d "
             "head_group=%d saturation_group=%d input_cache=%s available=%.2f GiB "
@@ -654,7 +588,7 @@ def decide_attention_heads(
             planned_available / 1024**3,
             weight_scratch / 1024**3,
             estimated / 1024**3,
-            _log_memory_diagnostics(x.device, base_model),
+            memory_state.log_memory_diagnostics(x.device, base_model),
         )
     return decision
 
@@ -666,7 +600,7 @@ def decide_ffn_channels(
     chunk_rows: int,
     half_width: bool = False,
     channel_override: int | None = None,  # Benchmark-only.
-    runtime_plan: ActivationRuntimePlan | None = None,
+    runtime_plan: memory_state.ActivationRuntimePlan | None = None,
     base_model=None,
 ) -> FFNChannelDecision:
     """Select an exact ConvRot-aligned FFN intermediate shard."""
@@ -674,11 +608,9 @@ def decide_ffn_channels(
     expanded_size = int(expanded_size)
     mode = _mode()
     if x.device.type != "cuda" or rows <= 0 or expanded_size <= 0:
-        return FFNChannelDecision(
-            mode, rows, expanded_size, chunk_rows, 0, 0, 0, 0
-        )
-    available, reserve, usable = _runtime_memory(x.device, base_model)
-    planned_available = _planning_available(
+        return FFNChannelDecision(mode, rows, expanded_size, chunk_rows, 0, 0, 0, 0)
+    available, reserve, usable = memory_state.runtime_memory(x.device, base_model)
+    planned_available = memory_state.planning_available(
         runtime_plan,
         x.device,
         rows,
@@ -687,7 +619,7 @@ def decide_ffn_channels(
         "mlp",
     )
     safety = max(768 * _MIB, int(usable * 0.075))
-    weight_scratch = _dynamic_weight_prefetch_reserve(base_model, x.device)
+    weight_scratch = memory_state.dynamic_weight_prefetch_reserve(base_model, x.device)
     working = max(planned_available - safety - weight_scratch, 0)
     tile_rows = min(rows, chunk_rows or rows)
     hidden = int(x.shape[-1])
@@ -711,19 +643,12 @@ def decide_ffn_channels(
         # ABIs retain a 2*C gate/up shard and a small A8 scratch during their
         # exact two-pass reconstruction.
         if half_width:
-            fixed_per_row = (
-                expanded_size * 3
-                + expanded_size // 64
-                + hidden * 3
-                + 8
-            )
+            fixed_per_row = expanded_size * 3 + expanded_size // 64 + hidden * 3 + 8
             channel_bytes = 2
         else:
             fixed_per_row = expanded_size + hidden * 3
             channel_bytes = 5
-        budget = max(
-            working - persistent - tile_rows * fixed_per_row, 0
-        )
+        budget = max(working - persistent - tile_rows * fixed_per_row, 0)
         automatic = max(
             (budget // max(tile_rows * channel_bytes, 1)) // 256 * 256,
             256,
@@ -734,19 +659,14 @@ def decide_ffn_channels(
             minimum=_MIN_SATURATED_GEMM_WIDTH,
         )
         requested = (
-            min(automatic, saturation_channels)
-            if override is None
-            else override
+            min(automatic, saturation_channels) if override is None else override
         )
         chunk_channels = min(
             expanded_size,
             max((requested // 256) * 256, 256),
         )
-        estimated = (
-            persistent
-            + tile_rows * (
-                fixed_per_row + chunk_channels * channel_bytes
-            )
+        estimated = persistent + tile_rows * (
+            fixed_per_row + chunk_channels * channel_bytes
         )
     decision = FFNChannelDecision(
         mode,
@@ -767,7 +687,7 @@ def decide_ffn_channels(
         chunk_channels,
         reserve // (256 * _MIB),
     )
-    if LOG.isEnabledFor(10) and _should_log(runtime_plan, key):
+    if LOG.isEnabledFor(10) and memory_state.should_log(runtime_plan, key):
         LOG.debug(
             "MiniMax H3 FFN policy: mode=%s tier=%d rows=%d row_chunk=%d "
             "channel_chunk=%d available=%.2f GiB reserve=%.2f GiB "
@@ -784,13 +704,12 @@ def decide_ffn_channels(
             weight_scratch / 1024**3,
             half_width,
             estimated / 1024**3,
-            _log_memory_diagnostics(x.device, base_model),
+            memory_state.log_memory_diagnostics(x.device, base_model),
         )
     return decision
 
 
 __all__ = [
-    "ActivationRuntimePlan",
     "ActivationDecision",
     "AttentionDecision",
     "FFNChannelDecision",
@@ -798,6 +717,5 @@ __all__ = [
     "decide_activation_chunks",
     "decide_attention_heads",
     "decide_ffn_channels",
-    "ensure_dynamic_vram_headroom",
     "estimate_attention_lifecycle_peak",
 ]

@@ -14,11 +14,15 @@ ROOT_LOGGER = "comfyui-turing-utils"
 def profile_level() -> int:
     """Process-start diagnostics: 0=off, 1=summary, 2=detail. Restart to change."""
     retired = (
-        "COMFYUI_TURING_UTILS_PROFILE_CALLS", "COMFYUI_TURING_UTILS_PROFILE_BUCKETS",
-        "COMFYUI_TURING_UTILS_TIMELINE", "SEC_DEBUG",
+        "COMFYUI_TURING_UTILS_PROFILE_CALLS",
+        "COMFYUI_TURING_UTILS_PROFILE_BUCKETS",
+        "COMFYUI_TURING_UTILS_TIMELINE",
+        "SEC_DEBUG",
         "COMFYUI_TURING_UTILS_H3_ACTIVATION_CHUNK_ROWS",
-        "COMFYUI_TURING_UTILS_H3_QKV_CHUNK_ROWS", "COMFYUI_TURING_UTILS_H3_MLP_CHUNK_ROWS",
-        "COMFYUI_TURING_UTILS_H3_HEAD_GROUP", "COMFYUI_TURING_UTILS_H3_FFN_CHUNK_CHANNELS",
+        "COMFYUI_TURING_UTILS_H3_QKV_CHUNK_ROWS",
+        "COMFYUI_TURING_UTILS_H3_MLP_CHUNK_ROWS",
+        "COMFYUI_TURING_UTILS_H3_HEAD_GROUP",
+        "COMFYUI_TURING_UTILS_H3_FFN_CHUNK_CHANNELS",
     )
     present = [name for name in retired if name in os.environ]
     if present:
@@ -30,7 +34,8 @@ def profile_level() -> int:
     if raw in {"0", "1", "2"}:
         return int(raw)
     logging.getLogger(ROOT_LOGGER).warning(
-        "[Turing/config] Invalid COMFYUI_TURING_UTILS_PROFILE=%r; using 0 (expected 0/1/2)", raw
+        "[Turing/config] Invalid COMFYUI_TURING_UTILS_PROFILE=%r; using 0 (expected 0/1/2)",
+        raw,
     )
     return 0
 

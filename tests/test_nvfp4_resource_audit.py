@@ -10,12 +10,20 @@ class NVFP4ResourceAuditTest(unittest.TestCase):
     def setUpClass(cls):
         scripts = Path(__file__).resolve().parents[1] / "kernel" / "scripts"
         with mock.patch.object(sys, "path", [str(scripts), *sys.path]):
-            cls.describe = staticmethod(runpy.run_path(str(scripts / "audit_nvfp4_resources.py"))["describe"])
+            cls.describe = staticmethod(
+                runpy.run_path(str(scripts / "audit_nvfp4_resources.py"))["describe"]
+            )
 
     def test_weight_specializations(self):
         info = self.describe("nvfp4_convrot_s8_kernelILi7EE", 75)
-        self.assertEqual((info["groups_per_warp"], info["threads"], info["dynamic_shared"]), (7, 256, 0))
-        self.assertEqual(self.describe("nvfp4_convrot_s8_large_kernel", 75)["family"], "nvfp4_weight_large_k")
+        self.assertEqual(
+            (info["groups_per_warp"], info["threads"], info["dynamic_shared"]),
+            (7, 256, 0),
+        )
+        self.assertEqual(
+            self.describe("nvfp4_convrot_s8_large_kernel", 75)["family"],
+            "nvfp4_weight_large_k",
+        )
 
     def test_unreachable_ampere_excluded_from_sm75(self):
         name = "DefaultGemmWithVisitor4Sm80GemmShapeILi128ELi256ELi64EEGemmShapeILi64ELi64ELi64EEbfloat16_tGemmIdentityThreadblockSwizzleILi1EEELi4E"

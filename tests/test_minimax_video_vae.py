@@ -28,8 +28,14 @@ from comfyui_turing_utils.nodes import minimax_vae as nodes
 def make_decoder(patch_size_t=4):
     torch.manual_seed(26)
     decoder = ViT3DDecoder(
-        patch_size=2, patch_size_t=patch_size_t, in_channels=4, out_channels=3,
-        num_layers=2, heads=1, dim_head=64, operations=torch.nn,
+        patch_size=2,
+        patch_size_t=patch_size_t,
+        in_channels=4,
+        out_channels=3,
+        num_layers=2,
+        heads=1,
+        dim_head=64,
+        operations=torch.nn,
     ).eval()
     for name, parameter in decoder.named_parameters():
         if "norm" in name and name.endswith("weight"):
@@ -132,7 +138,9 @@ class MiniMaxVideoVAETest(unittest.TestCase):
         vae = make_vae()
         pixels = torch.rand(5, 7, 9, 4)
         with ExitStack() as stack:
-            stack.enter_context(mock.patch.object(video_vae, "register_backend", return_value=False))
+            stack.enter_context(
+                mock.patch.object(video_vae, "register_backend", return_value=False)
+            )
             # Official methods are mocked in this test: only plugin-owned calls
             # would trip these guards. Real native entry points are tested below.
             for owner, name in (
@@ -145,19 +153,29 @@ class MiniMaxVideoVAETest(unittest.TestCase):
                 (torch.cuda, "Event"),
                 (torch.cuda, "synchronize"),
             ):
-                stack.enter_context(mock.patch.object(
-                    owner, name, side_effect=AssertionError("plugin must not own " + name)
-                ))
+                stack.enter_context(
+                    mock.patch.object(
+                        owner,
+                        name,
+                        side_effect=AssertionError("plugin must not own " + name),
+                    )
+                )
             for dtype in (torch.float16, torch.bfloat16, torch.float32):
                 with self.subTest(dtype=dtype):
                     latent = torch.zeros(1, 4, 2, 3, 4, dtype=dtype)
                     encoded = object()
                     decoded = object()
                     with (
-                        mock.patch.object(vae, "encode", return_value=encoded) as encode,
-                        mock.patch.object(vae, "decode", return_value=decoded) as decode,
+                        mock.patch.object(
+                            vae, "encode", return_value=encoded
+                        ) as encode,
+                        mock.patch.object(
+                            vae, "decode", return_value=decoded
+                        ) as decode,
                     ):
-                        self.assertIs(video_vae_encode.encode_video(vae, pixels), encoded)
+                        self.assertIs(
+                            video_vae_encode.encode_video(vae, pixels), encoded
+                        )
                         self.assertIs(video_vae.decode_video(vae, latent), decoded)
                         encode.assert_called_once_with(pixels)
                         decode.assert_called_once_with(latent)
@@ -175,8 +193,12 @@ class MiniMaxVideoVAETest(unittest.TestCase):
             )
             try:
                 with (
-                    mock.patch.object(video_vae, "register_backend", return_value=False),
-                    mock.patch.object(video_vae.comfy.model_management, "load_models_gpu"),
+                    mock.patch.object(
+                        video_vae, "register_backend", return_value=False
+                    ),
+                    mock.patch.object(
+                        video_vae.comfy.model_management, "load_models_gpu"
+                    ),
                     torch.inference_mode(),
                 ):
                     expected = vae.encode(pixels)
@@ -193,8 +215,10 @@ class MiniMaxVideoVAETest(unittest.TestCase):
     def test_native_decoder_spatial_temporal_batch_and_dtype_parity(self):
         vae = make_vae()
         for batch, frames, output_dtype in (
-            (1, 1, torch.float32), (1, 2, torch.float16),
-            (2, 7, torch.float32), (1, 12, torch.bfloat16),
+            (1, 1, torch.float32),
+            (1, 2, torch.float16),
+            (2, 7, torch.float32),
+            (1, 12, torch.bfloat16),
         ):
             with self.subTest(batch=batch, frames=frames, output_dtype=output_dtype):
                 latent = torch.randn(batch, 4, frames, 3, 4)
@@ -205,9 +229,15 @@ class MiniMaxVideoVAETest(unittest.TestCase):
                 )
                 try:
                     with (
-                        mock.patch.object(video_vae, "register_backend", return_value=False),
-                        mock.patch.object(video_vae.comfy.model_management, "load_models_gpu"),
-                        mock.patch.object(vae, "vae_output_dtype", return_value=output_dtype),
+                        mock.patch.object(
+                            video_vae, "register_backend", return_value=False
+                        ),
+                        mock.patch.object(
+                            video_vae.comfy.model_management, "load_models_gpu"
+                        ),
+                        mock.patch.object(
+                            vae, "vae_output_dtype", return_value=output_dtype
+                        ),
                         torch.inference_mode(),
                     ):
                         expected = vae.decode(latent)
@@ -236,11 +266,18 @@ class MiniMaxVideoVAETest(unittest.TestCase):
                     result = torch.zeros(1, 3, 5, 6, 8)
                     run = video_vae.decode_video
                 with (
-                    mock.patch.object(video_vae, "register_backend", return_value=False),
-                    mock.patch.object(video_vae.comfy.model_management, "load_models_gpu"),
-                    mock.patch.object(video_vae.comfy.model_management, "soft_empty_cache"),
                     mock.patch.object(
-                        vae.first_stage_model, operation,
+                        video_vae, "register_backend", return_value=False
+                    ),
+                    mock.patch.object(
+                        video_vae.comfy.model_management, "load_models_gpu"
+                    ),
+                    mock.patch.object(
+                        video_vae.comfy.model_management, "soft_empty_cache"
+                    ),
+                    mock.patch.object(
+                        vae.first_stage_model,
+                        operation,
                         side_effect=[torch.cuda.OutOfMemoryError("native OOM"), result],
                     ) as native,
                     torch.inference_mode(),
@@ -255,7 +292,8 @@ class MiniMaxVideoVAETest(unittest.TestCase):
         model = vae.first_stage_model
         for operation in ("encode", "decode"):
             for error in (
-                RuntimeError("VRAM grow failed"), torch.cuda.OutOfMemoryError("OOM"),
+                RuntimeError("VRAM grow failed"),
+                torch.cuda.OutOfMemoryError("OOM"),
                 KeyboardInterrupt(),
             ):
                 with self.subTest(operation=operation, error=type(error)):
@@ -266,16 +304,26 @@ class MiniMaxVideoVAETest(unittest.TestCase):
                     existing = lambda value, rotary_pos_emb=None: value
                     model.decoder.transformer_blocks[0].attn.forward = existing
                     with (
-                        mock.patch.object(video_vae, "register_backend", return_value=False),
+                        mock.patch.object(
+                            video_vae, "register_backend", return_value=False
+                        ),
                         mock.patch.object(video_vae, "tqdm", factory),
                         mock.patch.object(vae, operation, side_effect=error) as native,
                     ):
-                        run = video_vae_encode.encode_video if operation == "encode" else video_vae.decode_video
+                        run = (
+                            video_vae_encode.encode_video
+                            if operation == "encode"
+                            else video_vae.decode_video
+                        )
                         with self.assertRaises(type(error)):
                             run(vae, torch.zeros(1))
                     native.assert_called_once()
-                    self.assertIs(model.decoder.transformer_blocks[0].attn.forward, existing)
-                    self.assertNotIn("forward", model.decoder.transformer_blocks[1].attn.__dict__)
+                    self.assertIs(
+                        model.decoder.transformer_blocks[0].attn.forward, existing
+                    )
+                    self.assertNotIn(
+                        "forward", model.decoder.transformer_blocks[1].attn.__dict__
+                    )
                     for block in model.decoder.transformer_blocks:
                         self.assertNotIn("forward", block.ff.__dict__)
                     self.assertFalse(model.decoder._forward_hooks)
@@ -309,9 +357,15 @@ class MiniMaxVideoVAETest(unittest.TestCase):
         decoder, other = make_decoder(), make_decoder()
         original = other.transformer_blocks[0].attn.forward
         for backend in ("sdpa", "w8a8", "sage", "sdpa"):
-            with mock.patch.object(video_vae, "_attention_options", return_value={}) as options:
-                with video_vae._decoder_overrides(decoder, backend, torch.device("cpu")):
-                    self.assertIn("forward", decoder.transformer_blocks[0].attn.__dict__)
+            with mock.patch.object(
+                video_vae, "_attention_options", return_value={}
+            ) as options:
+                with video_vae._decoder_overrides(
+                    decoder, backend, torch.device("cpu")
+                ):
+                    self.assertIn(
+                        "forward", decoder.transformer_blocks[0].attn.__dict__
+                    )
                     self.assertEqual(other.transformer_blocks[0].attn.forward, original)
                 options.assert_called_once_with(backend, torch.device("cpu"))
             for block in decoder.transformer_blocks:
@@ -320,7 +374,9 @@ class MiniMaxVideoVAETest(unittest.TestCase):
     def test_native_attention_never_replaces_upstream_forward(self):
         decoder = make_decoder()
         original = [block.attn.forward for block in decoder.transformer_blocks]
-        with mock.patch.object(video_vae, "_attention_options", side_effect=AssertionError("no override")):
+        with mock.patch.object(
+            video_vae, "_attention_options", side_effect=AssertionError("no override")
+        ):
             with video_vae._decoder_overrides(decoder, "native", torch.device("cpu")):
                 for block, forward in zip(decoder.transformer_blocks, original):
                     self.assertEqual(block.attn.forward, forward)
@@ -329,7 +385,7 @@ class MiniMaxVideoVAETest(unittest.TestCase):
     def test_pre_norm_cast_lives_through_fused_linear_and_releases_on_error(self):
         x = torch.rand(1, 3, 4)
         norm = SimpleNamespace(weight=torch.ones(4), eps=1e-5, comfy_cast_weights=True)
-        cast_weight = torch.full((4,), 2.)
+        cast_weight = torch.full((4,), 2.0)
         active = []
 
         @contextmanager
@@ -354,8 +410,15 @@ class MiniMaxVideoVAETest(unittest.TestCase):
             mock.patch.object(video_vae.comfy.ops, "linear_input_act", linear),
         ):
             with self.assertRaisesRegex(RuntimeError, "linear failed"):
-                video_vae._attention_forward(SimpleNamespace(to_qkv=object()), x, None, norm,
-                                             x, torch.ones(4), options={})
+                video_vae._attention_forward(
+                    SimpleNamespace(to_qkv=object()),
+                    x,
+                    None,
+                    norm,
+                    x,
+                    torch.ones(4),
+                    options={},
+                )
         self.assertEqual(active, [])
 
     def test_modern_norm_owns_its_cast_context(self):
@@ -384,14 +447,14 @@ class MiniMaxVideoVAETest(unittest.TestCase):
     @unittest.skipUnless(torch.cuda.is_available(), "CUDA required")
     def test_comfy_cpu_norm_weight_is_cast_without_moving_owned_parameter(self):
         norm = video_vae.comfy.ops.disable_weight_init.RMSNorm(4, eps=1e-5)
-        norm.weight.data.fill_(2.)
+        norm.weight.data.fill_(2.0)
         original = norm.weight
         for dtype in (torch.float16, torch.bfloat16, torch.float32):
             x = torch.rand(1, 3, 4, device="cuda", dtype=dtype)
             with video_vae._norm_weight_context(norm, x) as weight:
                 self.assertEqual(weight.device, x.device)
                 self.assertEqual(weight.dtype, x.dtype)
-                torch.testing.assert_close(weight, torch.full_like(weight, 2.))
+                torch.testing.assert_close(weight, torch.full_like(weight, 2.0))
             self.assertIs(norm.weight, original)
             self.assertEqual(norm.weight.device.type, "cpu")
 
@@ -452,8 +515,11 @@ class MiniMaxVideoVAETest(unittest.TestCase):
 
     def test_decoder_attention_uses_containers_and_prepared_qk_transform(self):
         module = SimpleNamespace(
-            heads=1, dim_head=4, to_qkv=torch.nn.Linear(4, 12),
-            to_out=torch.nn.Linear(4, 4), norm_q=SimpleNamespace(weight=None, eps=1e-5),
+            heads=1,
+            dim_head=4,
+            to_qkv=torch.nn.Linear(4, 12),
+            to_out=torch.nn.Linear(4, 4),
+            norm_q=SimpleNamespace(weight=None, eps=1e-5),
             norm_k=SimpleNamespace(weight=None, eps=1e-5),
         )
         value = torch.randn(1, 3, 4)
@@ -484,8 +550,12 @@ class MiniMaxVideoVAETest(unittest.TestCase):
         override.assert_not_called()
 
         def execute(request):
-            self.assertTrue(torch.equal(request.qk_transform.query_norm.weight, torch.ones(4)))
-            self.assertTrue(torch.equal(request.qk_transform.key_norm.weight, torch.ones(4)))
+            self.assertTrue(
+                torch.equal(request.qk_transform.query_norm.weight, torch.ones(4))
+            )
+            self.assertTrue(
+                torch.equal(request.qk_transform.key_norm.weight, torch.ones(4))
+            )
             request.consume_qkv()
             return AttentionExecutionOutcome(torch.zeros(1, 3, 4))
 
@@ -530,13 +600,22 @@ class MiniMaxVideoVAETest(unittest.TestCase):
             mock.patch.object(nodes, "require_h3_video_vae"),
             mock.patch.object(nodes, "decode_video", return_value=decoded) as decode,
             mock.patch.object(nodes, "encode_video", return_value=latent) as encode,
-            mock.patch.object(nodes.comfy.model_management, "cuda_device_context", return_value=nullcontext()),
+            mock.patch.object(
+                nodes.comfy.model_management,
+                "cuda_device_context",
+                return_value=nullcontext(),
+            ),
         ):
-            output = nodes.MiniMaxH3VideoVAEDecode().decode({"samples": nested}, vae, "sdpa")[0]
+            output = nodes.MiniMaxH3VideoVAEDecode().decode(
+                {"samples": nested}, vae, "sdpa"
+            )[0]
             self.assertEqual(output.shape, (10, 6, 8, 3))
             decode.assert_called_once_with(vae, latent, "sdpa")
             pixels = torch.rand(5, 6, 8, 3)
-            self.assertIs(nodes.MiniMaxH3VideoVAEEncode().encode(pixels, vae)[0]["samples"], latent)
+            self.assertIs(
+                nodes.MiniMaxH3VideoVAEEncode().encode(pixels, vae)[0]["samples"],
+                latent,
+            )
             encode.assert_called_once_with(vae, pixels)
 
 

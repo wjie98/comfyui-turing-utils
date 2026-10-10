@@ -207,12 +207,16 @@ class H3LatentResizer3D(nn.Module):
         )
         self.register_buffer(
             "latent_mean",
-            torch.tensor(LATENTS_MEAN, dtype=dtype or torch.float32).view(1, -1, 1, 1, 1),
+            torch.tensor(LATENTS_MEAN, dtype=dtype or torch.float32).view(
+                1, -1, 1, 1, 1
+            ),
             persistent=False,
         )
         self.register_buffer(
             "latent_std",
-            torch.tensor(LATENTS_STD, dtype=dtype or torch.float32).view(1, -1, 1, 1, 1),
+            torch.tensor(LATENTS_STD, dtype=dtype or torch.float32).view(
+                1, -1, 1, 1, 1
+            ),
             persistent=False,
         )
 
@@ -321,9 +325,13 @@ def detect_h3_latent_upscaler_architecture(
     in_channels = int(conv.shape[1])
     channels = int(conv.shape[0])
     if in_channels != 24:
-        raise ValueError(f"H3 latent upscaler must use 24 input channels, got {in_channels}")
+        raise ValueError(
+            f"H3 latent upscaler must use 24 input channels, got {in_channels}"
+        )
     if channels % 32:
-        raise ValueError(f"H3 latent upscaler width must be divisible by 32, got {channels}")
+        raise ValueError(
+            f"H3 latent upscaler width must be divisible by 32, got {channels}"
+        )
 
     in_residual, in_temporal = _block_indices(state_dict, "in_blocks")
     out_residual, out_temporal = _block_indices(state_dict, "out_blocks")
@@ -332,7 +340,9 @@ def detect_h3_latent_upscaler_architecture(
     if in_every != out_every:
         raise ValueError("input and output stages use different temporal block layouts")
     if any(".q.weight" in key or ".k.weight" in key for key in state_dict):
-        raise ValueError("attention-enabled H3 latent upscaler checkpoints are unsupported")
+        raise ValueError(
+            "attention-enabled H3 latent upscaler checkpoints are unsupported"
+        )
 
     temporal_kernel = 5
     temporal_keys = [key for key in state_dict if key.endswith(".dwconv.weight")]
@@ -342,7 +352,9 @@ def detect_h3_latent_upscaler_architecture(
             raise ValueError("checkpoint contains inconsistent temporal kernel sizes")
         temporal_kernel = kernels.pop()
         if temporal_kernel < 1 or temporal_kernel % 2 == 0:
-            raise ValueError(f"temporal kernel must be a positive odd number, got {temporal_kernel}")
+            raise ValueError(
+                f"temporal kernel must be a positive odd number, got {temporal_kernel}"
+            )
 
     return H3LatentUpscaleArchitecture(
         in_channels=in_channels,
@@ -358,7 +370,9 @@ def _extract_state_dict(loaded) -> dict[str, torch.Tensor]:
     if isinstance(loaded, dict) and isinstance(loaded.get("model"), dict):
         loaded = loaded["model"]
     if not isinstance(loaded, dict) or not loaded:
-        raise ValueError("H3 latent upscaler checkpoint does not contain a state dictionary")
+        raise ValueError(
+            "H3 latent upscaler checkpoint does not contain a state dictionary"
+        )
     if any(key.startswith("upscaler.") for key in loaded):
         loaded = {
             key.removeprefix("upscaler."): value
@@ -366,12 +380,16 @@ def _extract_state_dict(loaded) -> dict[str, torch.Tensor]:
             if key.startswith("upscaler.")
         }
     if not loaded or not all(isinstance(key, str) for key in loaded):
-        raise ValueError("H3 latent upscaler checkpoint has an invalid state dictionary")
+        raise ValueError(
+            "H3 latent upscaler checkpoint has an invalid state dictionary"
+        )
     return loaded
 
 
 def _automatic_dtype(device: torch.device, state_dict: dict[str, torch.Tensor]):
-    model_params = sum(value.numel() for value in state_dict.values() if torch.is_tensor(value))
+    model_params = sum(
+        value.numel() for value in state_dict.values() if torch.is_tensor(value)
+    )
     if comfy.model_management.should_use_fp16(device, model_params=model_params):
         return torch.float16
     if comfy.model_management.should_use_bf16(device, model_params=model_params):
@@ -380,7 +398,9 @@ def _automatic_dtype(device: torch.device, state_dict: dict[str, torch.Tensor]):
 
 
 def load_h3_latent_upscaler(model_name: str, precision: str):
-    model_path = folder_paths.get_full_path_or_raise("latent_upscale_models", model_name)
+    model_path = folder_paths.get_full_path_or_raise(
+        "latent_upscale_models", model_name
+    )
     loaded = comfy.utils.load_torch_file(model_path, safe_load=True)
     state_dict = _extract_state_dict(loaded)
     architecture = detect_h3_latent_upscaler_architecture(state_dict)
@@ -391,7 +411,11 @@ def load_h3_latent_upscaler(model_name: str, precision: str):
         else _PRECISION_DTYPES[precision]
     )
     for key, value in tuple(state_dict.items()):
-        if torch.is_tensor(value) and value.is_floating_point() and value.dtype != dtype:
+        if (
+            torch.is_tensor(value)
+            and value.is_floating_point()
+            and value.dtype != dtype
+        ):
             state_dict[key] = value.to(dtype=dtype)
 
     model = H3LatentResizer3D(
@@ -431,7 +455,9 @@ def estimate_upscale_memory(
     dtype: torch.dtype,
 ) -> int:
     element_size = torch.empty((), dtype=dtype).element_size()
-    source_voxels = int(video.shape[0] * video.shape[2] * video.shape[3] * video.shape[4])
+    source_voxels = int(
+        video.shape[0] * video.shape[2] * video.shape[3] * video.shape[4]
+    )
     target_voxels = int(video.shape[0] * video.shape[2] * target_height * target_width)
     # Two neighboring feature volumes plus cuDNN workspace and normalized input.
     return max(source_voxels, target_voxels) * channels * element_size * 3 + (
@@ -444,12 +470,18 @@ def _validate_video(video: torch.Tensor):
         shape = tuple(video.shape) if hasattr(video, "shape") else type(video).__name__
         raise ValueError(f"Expected H3 video latent [B,24,T,H,W], got {shape}")
     if int(video.shape[0]) < 1 or int(video.shape[2]) < 1:
-        raise ValueError(f"H3 video latent dimensions must be non-empty, got {tuple(video.shape)}")
+        raise ValueError(
+            f"H3 video latent dimensions must be non-empty, got {tuple(video.shape)}"
+        )
     return video
 
 
 def _validate_audio(audio: torch.Tensor):
-    if not torch.is_tensor(audio) or audio.ndim != 4 or tuple(audio.shape[1:3]) != (32, 2):
+    if (
+        not torch.is_tensor(audio)
+        or audio.ndim != 4
+        or tuple(audio.shape[1:3]) != (32, 2)
+    ):
         shape = tuple(audio.shape) if hasattr(audio, "shape") else type(audio).__name__
         raise ValueError(f"Expected H3 audio latent [B,32,2,T], got {shape}")
     return audio
@@ -476,7 +508,11 @@ def _conditioning_keyframes(conditioning, source_height: int, source_width: int)
     keyframe_tensors = []
     seen = set()
     for entry in conditioning:
-        if not isinstance(entry, (list, tuple)) or len(entry) != 2 or not isinstance(entry[1], dict):
+        if (
+            not isinstance(entry, (list, tuple))
+            or len(entry) != 2
+            or not isinstance(entry[1], dict)
+        ):
             raise ValueError("conditioning must contain [embedding, options] entries")
         keyframes = entry[1].get("minimax_keyframes")
         if keyframes is None:
@@ -526,6 +562,7 @@ def _upscale_tensors(
         for group in groups.values()
     )
     device = upscale_model.load_device
+
     def execute():
         comfy.model_management.load_models_gpu(
             [upscale_model],
@@ -552,9 +589,7 @@ def _upscale_tensors(
                 )
         return outputs
 
-    return WORKFLOW_TIMELINE.call(
-        "latent_upscale", device, execute
-    )
+    return WORKFLOW_TIMELINE.call("latent_upscale", device, execute)
 
 
 def _sync_conditioning(conditioning, outputs: dict[int, torch.Tensor]):
@@ -610,7 +645,11 @@ def upscale_h3_latent(upscale_model, latent, conditioning, scale: float):
     linear_scale = math.sqrt(float(scale))
     target_height = _target_axis(source_height, linear_scale)
     target_width = _target_axis(source_width, linear_scale)
-    keyframes = [] if conditioning is None else _conditioning_keyframes(conditioning, source_height, source_width)
+    keyframes = (
+        []
+        if conditioning is None
+        else _conditioning_keyframes(conditioning, source_height, source_width)
+    )
     outputs = _upscale_tensors(
         upscale_model,
         [video, *keyframes],
@@ -624,18 +663,24 @@ def upscale_h3_latent(upscale_model, latent, conditioning, scale: float):
     if audio is None:
         output_latent["samples"] = output_video
     else:
-        output_latent["samples"] = comfy.nested_tensor.NestedTensor((output_video, audio))
+        output_latent["samples"] = comfy.nested_tensor.NestedTensor(
+            (output_video, audio)
+        )
 
     noise_mask = latent.get("noise_mask")
     if noise_mask is not None:
         if getattr(noise_mask, "is_nested", False):
             streams = list(noise_mask.unbind())
             if len(streams) != 2:
-                raise ValueError(f"Expected exactly two H3 noise-mask streams, got {len(streams)}")
-            output_latent["noise_mask"] = comfy.nested_tensor.NestedTensor((
-                _resize_video_mask(streams[0], target_height, target_width),
-                streams[1],
-            ))
+                raise ValueError(
+                    f"Expected exactly two H3 noise-mask streams, got {len(streams)}"
+                )
+            output_latent["noise_mask"] = comfy.nested_tensor.NestedTensor(
+                (
+                    _resize_video_mask(streams[0], target_height, target_width),
+                    streams[1],
+                )
+            )
         else:
             output_latent["noise_mask"] = _resize_video_mask(
                 noise_mask,
@@ -643,7 +688,9 @@ def upscale_h3_latent(upscale_model, latent, conditioning, scale: float):
                 target_width,
             )
 
-    output_conditioning = None if conditioning is None else _sync_conditioning(conditioning, outputs)
+    output_conditioning = (
+        None if conditioning is None else _sync_conditioning(conditioning, outputs)
+    )
     return (
         output_latent,
         output_conditioning,

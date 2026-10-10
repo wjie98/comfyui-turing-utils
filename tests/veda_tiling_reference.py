@@ -1,11 +1,13 @@
 """Tensor gather/scatter oracle for the CUDA preparation kernels."""
+
 import torch
 
 from comfyui_turing_utils.adapters.minimax.veda.tiling import TileLayout
 
 
-def gather_tiles(x: torch.Tensor, layout: TileLayout,
-                 heads: torch.Tensor) -> torch.Tensor:
+def gather_tiles(
+    x: torch.Tensor, layout: TileLayout, heads: torch.Tensor
+) -> torch.Tensor:
     """Permutes rows of x into tile order, zeroing padding slots.
 
     Args:
@@ -22,8 +24,9 @@ def gather_tiles(x: torch.Tensor, layout: TileLayout,
     return out
 
 
-def scatter_tiles_(out: torch.Tensor, tiled: torch.Tensor,
-                   layout: TileLayout, heads: torch.Tensor) -> None:
+def scatter_tiles_(
+    out: torch.Tensor, tiled: torch.Tensor, layout: TileLayout, heads: torch.Tensor
+) -> None:
     """Writes tile-ordered rows back into out[S + 1, H, D] in place.
 
     Padding slots land in the spare row out[S], so the inverse permutation

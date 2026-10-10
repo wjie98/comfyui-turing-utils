@@ -165,15 +165,11 @@ class WanMemoryPlanningTest(unittest.TestCase):
         for dtype in (torch.float16, torch.bfloat16, torch.float32):
             with self.subTest(dtype=dtype):
                 self.assertEqual(
-                    wan_adapter._convrot_planning_kind(
-                        self._w4_weight(dtype, "int4")
-                    ),
+                    wan_adapter._convrot_planning_kind(self._w4_weight(dtype, "int4")),
                     "w4a4",
                 )
                 self.assertEqual(
-                    wan_adapter._convrot_planning_kind(
-                        self._w4_weight(dtype, "int8")
-                    ),
+                    wan_adapter._convrot_planning_kind(self._w4_weight(dtype, "int8")),
                     "w4a8",
                 )
 
@@ -245,12 +241,18 @@ class WanMemoryPlanningTest(unittest.TestCase):
         patcher = SimpleNamespace(model=base)
         context = [torch.empty(1, 16, 3, 8, 8)]
         with (
-            mock.patch("comfyui_turing_utils.adapters.wan.is_supported_attention_device", return_value=True),
+            mock.patch(
+                "comfyui_turing_utils.adapters.wan.is_supported_attention_device",
+                return_value=True,
+            ),
             mock.patch(
                 "comfyui_turing_utils.adapters.wan._quantized_wan_summary",
                 return_value=(Counter({"w8a8": 2}), (4096,), ()),
             ),
-            mock.patch("comfyui_turing_utils.adapters.wan.turing_int8_workspace_bytes", return_value=64.0),
+            mock.patch(
+                "comfyui_turing_utils.adapters.wan.turing_int8_workspace_bytes",
+                return_value=64.0,
+            ),
         ):
             count = wan_adapter.apply_wan_adapter(patcher, torch.device("cuda", 0))
 
@@ -317,6 +319,7 @@ class WanMemoryPlanningTest(unittest.TestCase):
         base.extra_conds = wan_adapter._make_extra_conds(base, (1, 2, 2))
         cond = base.extra_conds()["context_latents"].process_cond(3)
         self.assertEqual(cond.size(), [1, 16, 3 * 2 * 1 * 4 * 4])
+
 
 if __name__ == "__main__":
     unittest.main()

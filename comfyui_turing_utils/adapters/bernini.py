@@ -26,7 +26,11 @@ def _validate_source_video(source_video: torch.Tensor) -> torch.Tensor:
         or int(source_video.shape[-1]) < 3
         or any(int(size) < 1 for size in source_video.shape[:3])
     ):
-        shape = tuple(source_video.shape) if torch.is_tensor(source_video) else type(source_video).__name__
+        shape = (
+            tuple(source_video.shape)
+            if torch.is_tensor(source_video)
+            else type(source_video).__name__
+        )
         raise ValueError(
             "source_video must be a non-empty IMAGE tensor [frames,height,width,channels], "
             f"got {shape}"
@@ -53,9 +57,9 @@ def _resize_source_video_and_mask(
         crop_height = max(1, round(source_width / target_aspect))
     left = (source_width - crop_width) // 2
     top = (source_height - crop_height) // 2
-    source_video = source_video[:, top:top + crop_height, left:left + crop_width]
+    source_video = source_video[:, top : top + crop_height, left : left + crop_width]
     if mask is not None:
-        mask = mask[:, top:top + crop_height, left:left + crop_width]
+        mask = mask[:, top : top + crop_height, left : left + crop_width]
 
     source_video = F.interpolate(
         source_video.movedim(-1, 1),
@@ -86,15 +90,23 @@ def _context_roles(value, count: int) -> tuple[str, ...] | None:
     return roles
 
 
-def _slice_context_latents_for_estimate(value, full_length: int, estimate_length: int, dim: int, roles=None):
+def _slice_context_latents_for_estimate(
+    value, full_length: int, estimate_length: int, dim: int, roles=None
+):
     if not isinstance(value, (list, tuple)):
         return value
     roles = _context_roles(roles, len(value))
     changed = False
     sliced = []
     for index, latent in enumerate(value):
-        aligned = roles[index] == "aligned" if roles is not None else (
-            torch.is_tensor(latent) and latent.ndim > dim and latent.shape[dim] == full_length
+        aligned = (
+            roles[index] == "aligned"
+            if roles is not None
+            else (
+                torch.is_tensor(latent)
+                and latent.ndim > dim
+                and latent.shape[dim] == full_length
+            )
         )
         if aligned and torch.is_tensor(latent) and latent.ndim > dim:
             latent = latent.narrow(dim, 0, min(estimate_length, int(latent.shape[dim])))
@@ -114,7 +126,9 @@ def _estimate_conditioning(conds, full_length: int, estimate_length: int, dim: i
             new_entry = entry
             raw = entry.get("context_latents")
             raw_roles = entry.get(_CONTEXT_ROLES_KEY)
-            sliced = _slice_context_latents_for_estimate(raw, full_length, estimate_length, dim, raw_roles)
+            sliced = _slice_context_latents_for_estimate(
+                raw, full_length, estimate_length, dim, raw_roles
+            )
             if sliced is not raw:
                 new_entry = dict(entry)
                 new_entry["context_latents"] = sliced
@@ -125,7 +139,9 @@ def _estimate_conditioning(conds, full_length: int, estimate_length: int, dim: i
                 cond = model_conds["context_latents"]
                 value = getattr(cond, "cond", None)
                 roles = model_conds.get(_CONTEXT_ROLES_KEY)
-                sliced = _slice_context_latents_for_estimate(value, full_length, estimate_length, dim, roles)
+                sliced = _slice_context_latents_for_estimate(
+                    value, full_length, estimate_length, dim, roles
+                )
                 if sliced is not value:
                     if new_entry is entry:
                         new_entry = dict(entry)
@@ -138,10 +154,14 @@ def _estimate_conditioning(conds, full_length: int, estimate_length: int, dim: i
     return estimated if changed else conds
 
 
-def _bernini_prepare_sampling_wrapper(executor, model, noise_shape, conds, *args, **kwargs):
+def _bernini_prepare_sampling_wrapper(
+    executor, model, noise_shape, conds, *args, **kwargs
+):
     model_options = kwargs.get("model_options")
     if model_options is None:
-        raise RuntimeError("model_options not found in Bernini prepare-sampling wrapper")
+        raise RuntimeError(
+            "model_options not found in Bernini prepare-sampling wrapper"
+        )
     handler = model_options.get("context_handler")
     if handler is None or handler.dim >= len(noise_shape):
         return executor(model, noise_shape, conds, *args, **kwargs)
@@ -170,13 +190,19 @@ def _bernini_prepare_sampling_wrapper(executor, model, noise_shape, conds, *args
     return result
 
 
-def _validate_context_window_frames(context_length: int, context_overlap: int) -> tuple[int, int]:
+def _validate_context_window_frames(
+    context_length: int, context_overlap: int
+) -> tuple[int, int]:
     context_length = int(context_length)
     context_overlap = int(context_overlap)
     if context_length < 1:
-        raise ValueError(f"context_length must be at least 1 real frame; got {context_length}.")
+        raise ValueError(
+            f"context_length must be at least 1 real frame; got {context_length}."
+        )
     if context_overlap < 0:
-        raise ValueError(f"context_overlap must be non-negative; got {context_overlap}.")
+        raise ValueError(
+            f"context_overlap must be non-negative; got {context_overlap}."
+        )
 
     latent_context_length = max(((context_length - 1) // 4) + 1, 1)
     latent_context_overlap = max(context_overlap // 4, 0)
@@ -233,7 +259,9 @@ def _wan_forward_with_optional_absolute_indices(
             **kwargs,
         )
 
-    if time_dim_concat is not None or (self.ref_conv is not None and "reference_latent" in kwargs):
+    if time_dim_concat is not None or (
+        self.ref_conv is not None and "reference_latent" in kwargs
+    ):
         LOG.warning(
             "Bernini absolute context RoPE indices were ignored for a Wan path with "
             "time_dim_concat/reference_latent; falling back to ComfyUI RoPE."
@@ -266,10 +294,15 @@ def _wan_forward_with_optional_absolute_indices(
     context_latents = kwargs.get("context_latents", None)
     if context_latents is not None:
         roles = _context_roles(kwargs.get(_CONTEXT_ROLES_KEY), len(context_latents))
-        context_latents = [comfy.ldm.common_dit.pad_to_patch_size(lat, self.patch_size) for lat in context_latents]
+        context_latents = [
+            comfy.ldm.common_dit.pad_to_patch_size(lat, self.patch_size)
+            for lat in context_latents
+        ]
         for i, lat in enumerate(context_latents):
             if roles is None:
-                context_indices = target_indices if lat.shape[-3] == len(target_indices) else None
+                context_indices = (
+                    target_indices if lat.shape[-3] == len(target_indices) else None
+                )
             else:
                 context_indices = target_indices if roles[i] == "aligned" else None
             freqs = torch.cat(
@@ -326,10 +359,12 @@ def _rope_encode_with_absolute_indices(
         )
 
     patch_size = model.patch_size
-    steps_t = ((t + (patch_size[0] // 2)) // patch_size[0])
-    steps_h = ((h + (patch_size[1] // 2)) // patch_size[1])
-    steps_w = ((w + (patch_size[2] // 2)) // patch_size[2])
-    temporal = _normalize_temporal_indices(indices, steps_t).to(device=device, dtype=dtype)
+    steps_t = (t + (patch_size[0] // 2)) // patch_size[0]
+    steps_h = (h + (patch_size[1] // 2)) // patch_size[1]
+    steps_w = (w + (patch_size[2] // 2)) // patch_size[2]
+    temporal = _normalize_temporal_indices(indices, steps_t).to(
+        device=device, dtype=dtype
+    )
 
     h_len = steps_h
     w_len = steps_w
@@ -337,7 +372,9 @@ def _rope_encode_with_absolute_indices(
     w_start = 0.0
     rope_options = transformer_options.get("rope_options", None)
     if rope_options is not None:
-        temporal = temporal * float(rope_options.get("scale_t", 1.0)) + float(rope_options.get("shift_t", 0.0))
+        temporal = temporal * float(rope_options.get("scale_t", 1.0)) + float(
+            rope_options.get("shift_t", 0.0)
+        )
         h_len = (h_len - 1.0) * float(rope_options.get("scale_y", 1.0)) + 1.0
         w_len = (w_len - 1.0) * float(rope_options.get("scale_x", 1.0)) + 1.0
         h_start += float(rope_options.get("shift_y", 0.0))
@@ -345,8 +382,12 @@ def _rope_encode_with_absolute_indices(
 
     img_ids = torch.zeros((steps_t, steps_h, steps_w, 3), device=device, dtype=dtype)
     img_ids[:, :, :, 0] = temporal.reshape(-1, 1, 1)
-    img_ids[:, :, :, 1] = torch.linspace(h_start, h_len - 1 + h_start, steps_h, device=device, dtype=dtype).reshape(1, -1, 1)
-    img_ids[:, :, :, 2] = torch.linspace(w_start, w_len - 1 + w_start, steps_w, device=device, dtype=dtype).reshape(1, 1, -1)
+    img_ids[:, :, :, 1] = torch.linspace(
+        h_start, h_len - 1 + h_start, steps_h, device=device, dtype=dtype
+    ).reshape(1, -1, 1)
+    img_ids[:, :, :, 2] = torch.linspace(
+        w_start, w_len - 1 + w_start, steps_w, device=device, dtype=dtype
+    ).reshape(1, 1, -1)
     img_ids = img_ids.reshape(1, steps_t * steps_h * steps_w, img_ids.shape[-1])
     freqs = model.rope_embedder(img_ids).movedim(1, 2)
 
@@ -354,15 +395,21 @@ def _rope_encode_with_absolute_indices(
         from comfy.ldm.flux.math import rope
 
         head_dim = model.dim // model.num_heads
-        pos = torch.tensor([[float(source_id)]], device=freqs.device, dtype=torch.float32)
-        id_rot = rope(pos, head_dim, model.rope_embedder.theta).reshape(
-            1,
-            1,
-            1,
-            head_dim // 2,
-            2,
-            2,
-        ).to(freqs.dtype)
+        pos = torch.tensor(
+            [[float(source_id)]], device=freqs.device, dtype=torch.float32
+        )
+        id_rot = (
+            rope(pos, head_dim, model.rope_embedder.theta)
+            .reshape(
+                1,
+                1,
+                1,
+                head_dim // 2,
+                2,
+                2,
+            )
+            .to(freqs.dtype)
+        )
         freqs = torch.einsum("...ij,...jk->...ik", freqs, id_rot)
     return freqs
 
@@ -401,7 +448,9 @@ def _bernini_context_rope_wrapper(executor, *args, **kwargs):
         if anchor_idx is not None and anchor_idx >= 0:
             indices = [int(anchor_idx)] + indices
         new_transformer_options = dict(transformer_options)
-        new_transformer_options[_ABSOLUTE_INDEX_KEY] = tuple(int(index) for index in indices)
+        new_transformer_options[_ABSOLUTE_INDEX_KEY] = tuple(
+            int(index) for index in indices
+        )
         args, kwargs = _with_transformer_options(args, kwargs, new_transformer_options)
         return executor(*args, **kwargs)
     return executor(*args, **kwargs)
@@ -415,12 +464,16 @@ class BerniniScheduledContextHandler(comfy.context_windows.IndexListContextHandl
     def get_context_windows(self, model, x_in: torch.Tensor, model_options: dict[str]):
         windows = super().get_context_windows(model, x_in, model_options)
         for window in windows:
-            window.turing_utils_use_absolute_indices = self.turing_utils_absolute_positions
+            window.turing_utils_use_absolute_indices = (
+                self.turing_utils_absolute_positions
+            )
         return windows
 
 
 def _resize_bernini_context(cond_key, cond_value, window, x_in, device, new_cond_item):
-    if cond_key != "context_latents" or not isinstance(getattr(cond_value, "cond", None), list):
+    if cond_key != "context_latents" or not isinstance(
+        getattr(cond_value, "cond", None), list
+    ):
         return None
     roles = _context_roles(new_cond_item.get(_CONTEXT_ROLES_KEY), len(cond_value.cond))
     if roles is None:
@@ -428,7 +481,11 @@ def _resize_bernini_context(cond_key, cond_value, window, x_in, device, new_cond
 
     resized = []
     for role, latent in zip(roles, cond_value.cond):
-        if role == "aligned" and latent.ndim > window.dim and latent.shape[window.dim] > 1:
+        if (
+            role == "aligned"
+            and latent.ndim > window.dim
+            and latent.shape[window.dim] > 1
+        ):
             resized.append(window.get_tensor(latent, device, dim=window.dim))
         else:
             resized.append(latent.to(device))
@@ -472,7 +529,9 @@ def _align_source_video_and_mask(source_video, mask, length: int):
             mask = mask[:length]
     elif source_length < length:
         pad = length - source_length
-        source_video = torch.cat((source_video, source_video[-1:].repeat(pad, 1, 1, 1)), dim=0)
+        source_video = torch.cat(
+            (source_video, source_video[-1:].repeat(pad, 1, 1, 1)), dim=0
+        )
         if mask is not None:
             mask = torch.cat((mask, mask[-1:].repeat(pad, 1, 1)), dim=0)
     return source_video, mask

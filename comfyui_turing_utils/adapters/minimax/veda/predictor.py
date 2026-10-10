@@ -43,8 +43,12 @@ def rotate_features(x: torch.Tensor) -> torch.Tensor:
     while stride < CONVROT_GROUP:
         y = y.reshape(*original[:-1], -1, 4, stride)
         a, b, c, d = y.unbind(-2)
-        y = torch.stack((a + b + c - d, a + b - c + d,
-                         a - b + c + d, -a + b + c + d), dim=-2) * 0.5
+        y = (
+            torch.stack(
+                (a + b + c - d, a + b - c + d, a - b + c + d, -a + b + c + d), dim=-2
+            )
+            * 0.5
+        )
         stride *= 4
     return y.reshape(original)
 
@@ -59,20 +63,32 @@ class Projection:
         if heads and heads == list(range(heads[0], heads[0] + len(heads))):
             if heads[0] < 0 or heads[-1] >= self.weight.shape[0]:
                 raise IndexError("Veda predictor head index out of range")
-            return tuple(None if t is None else t[heads[0]:heads[-1]+1]
-                         for t in (self.weight, self.scale))
+            return tuple(
+                None if t is None else t[heads[0] : heads[-1] + 1]
+                for t in (self.weight, self.scale)
+            )
         index = torch.tensor(heads, dtype=torch.long)
-        return tuple(None if t is None else t.index_select(0, index)
-                     for t in (self.weight, self.scale))
+        return tuple(
+            None if t is None else t.index_select(0, index)
+            for t in (self.weight, self.scale)
+        )
 
     def stage(self, heads: list[int], device: torch.device) -> Projection:
-        return Projection(*(None if t is None else t.to(device, copy=True)
-                            for t in self.select_heads(heads)))
+        return Projection(
+            *(
+                None if t is None else t.to(device, copy=True)
+                for t in self.select_heads(heads)
+            )
+        )
 
     @property
     def bytes_per_head(self) -> int:
         size = self.weight[0].numel() * self.weight.element_size()
-        return size + (0 if self.scale is None else self.scale[0].numel() * self.scale.element_size())
+        return size + (
+            0
+            if self.scale is None
+            else self.scale[0].numel() * self.scale.element_size()
+        )
 
 
 class ProjectionTransfer:
@@ -86,12 +102,22 @@ class ProjectionTransfer:
         self.sources = []
         self.outputs = []
         for projection in projections:
-            self.sources.append(tuple(None if t is None else
-                                      t.pin_memory() for t in projection.select_heads(heads)))
+            self.sources.append(
+                tuple(
+                    None if t is None else t.pin_memory()
+                    for t in projection.select_heads(heads)
+                )
+            )
         with torch.cuda.stream(stream):
             for pair in self.sources:
-                self.outputs.append(Projection(*(None if t is None else
-                                    t.to(device, non_blocking=True) for t in pair)))
+                self.outputs.append(
+                    Projection(
+                        *(
+                            None if t is None else t.to(device, non_blocking=True)
+                            for t in pair
+                        )
+                    )
+                )
             self.ready = torch.cuda.Event()
             self.ready.record(stream)
 
@@ -118,7 +144,9 @@ def convert_projection(weight: torch.Tensor, precision: str) -> Projection:
     w = F.pad(w, (0, (-w.shape[-1]) % CONVROT_GROUP))
     w = rotate_features(w)
     scale = w.abs().amax(-1, keepdim=True).clamp_min(1e-12) / 127.0
-    return Projection((w / scale).round().clamp(-127, 127).to(torch.int8).contiguous(), scale)
+    return Projection(
+        (w / scale).round().clamp(-127, 127).to(torch.int8).contiguous(), scale
+    )
 
 
 @dataclass(frozen=True)
@@ -150,22 +178,39 @@ def load_bundle(path: str, precision: str = "w8a8") -> PredictorBundle:
         metadata = source.metadata() or {}
         if metadata.get("format") != FORMAT:
             raise ValueError(f"Not a Veda predictor bundle: expected {FORMAT}")
-        layers, heads, dim = (int(metadata[k]) for k in ("num_layers", "num_heads", "head_dim"))
+        layers, heads, dim = (
+            int(metadata[k]) for k in ("num_layers", "num_heads", "head_dim")
+        )
         if min(layers, heads, dim) <= 0:
             raise ValueError("Veda predictor dimensions must be positive")
         stored = metadata.get("dtype", "float32")
-        storage_types = {"float32": torch.float32, "bfloat16": torch.bfloat16,
-                         "float8_e4m3fn": torch.float8_e4m3fn}
+        storage_types = {
+            "float32": torch.float32,
+            "bfloat16": torch.bfloat16,
+            "float8_e4m3fn": torch.float8_e4m3fn,
+        }
         if stored not in storage_types:
             raise ValueError(f"Unsupported Veda bundle storage dtype: {stored}")
-        table = PlanTable([TilePlan.from_json(p) for p in json.loads(metadata["plans"]).values()])
+        table = PlanTable(
+            [TilePlan.from_json(p) for p in json.loads(metadata["plans"]).values()]
+        )
         for plan in table.plans.values():
-            if len(plan.grid) != 3 or any(not isinstance(n, int) or n <= 0 for n in plan.grid):
+            if len(plan.grid) != 3 or any(
+                not isinstance(n, int) or n <= 0 for n in plan.grid
+            ):
                 raise ValueError(f"Veda tile plan {plan.name} has an invalid grid")
-            if plan.num_layers != layers or any(len(row) != heads for row in plan.head_shape):
-                raise ValueError(f"Veda tile plan {plan.name} disagrees with predictor dimensions")
-            if any(i < 0 or i >= len(plan.shapes) for row in plan.head_shape for i in row):
-                raise ValueError(f"Veda tile plan {plan.name} contains an invalid shape index")
+            if plan.num_layers != layers or any(
+                len(row) != heads for row in plan.head_shape
+            ):
+                raise ValueError(
+                    f"Veda tile plan {plan.name} disagrees with predictor dimensions"
+                )
+            if any(
+                i < 0 or i >= len(plan.shapes) for row in plan.head_shape for i in row
+            ):
+                raise ValueError(
+                    f"Veda tile plan {plan.name} contains an invalid shape index"
+                )
         remaining = set(source.keys())
         projections = {"proj_q": [], "proj_k": []}
         for layer in range(layers):
@@ -173,13 +218,20 @@ def load_bundle(path: str, precision: str = "w8a8") -> PredictorBundle:
                 key = f"layers.{layer}.{name}"
                 value = source.get_tensor(key)
                 remaining.remove(key)
-                if tuple(value.shape) != (heads, 3 * dim, dim) or value.dtype != storage_types[stored]:
+                if (
+                    tuple(value.shape) != (heads, 3 * dim, dim)
+                    or value.dtype != storage_types[stored]
+                ):
                     raise ValueError(f"Veda {key}: invalid shape or storage dtype")
                 if stored == "float8_e4m3fn":
                     scale_key = key + ".__scale"
                     scale = source.get_tensor(scale_key).float()
                     remaining.remove(scale_key)
-                    if tuple(scale.shape) != (heads,) or not torch.isfinite(scale).all() or (scale < 0).any():
+                    if (
+                        tuple(scale.shape) != (heads,)
+                        or not torch.isfinite(scale).all()
+                        or (scale < 0).any()
+                    ):
                         raise ValueError(f"Veda {key}: invalid per-head FP8 scale")
                     value = value.float() * scale[:, None, None]
                 output.append(convert_projection(value, precision))
@@ -189,12 +241,25 @@ def load_bundle(path: str, precision: str = "w8a8") -> PredictorBundle:
     ratio = float(metadata["keep_ratio"])
     if not math.isfinite(ratio) or not 0 < ratio <= 1:
         raise ValueError("Veda bundle keep_ratio must be in (0, 1]")
-    return PredictorBundle(precision, layers, heads, dim, ratio, table,
-                           tuple(projections["proj_q"]), tuple(projections["proj_k"]))
+    return PredictorBundle(
+        precision,
+        layers,
+        heads,
+        dim,
+        ratio,
+        table,
+        tuple(projections["proj_q"]),
+        tuple(projections["proj_k"]),
+    )
 
 
-def project_features(features: torch.Tensor, projection: Projection, precision: str,
-                     *, capability: tuple[int, int] | None = None) -> torch.Tensor:
+def project_features(
+    features: torch.Tensor,
+    projection: Projection,
+    precision: str,
+    *,
+    capability: tuple[int, int] | None = None,
+) -> torch.Tensor:
     if capability is None and features.device.type == "cuda":
         capability = torch.cuda.get_device_capability(features.device)
     compute_dtype = predictor_compute_dtype(precision, capability)
@@ -204,11 +269,14 @@ def project_features(features: torch.Tensor, projection: Projection, precision: 
         ops = load_kernel_extension("ops")
         x = features.to(torch.bfloat16)
         padded = F.pad(x, (0, projection.weight.shape[-1] - x.shape[-1]))
-        quantized, scales = ops.turing_bf16_int8_convrot_quantize(padded.flatten(0, 1).contiguous())
+        quantized, scales = ops.turing_bf16_int8_convrot_quantize(
+            padded.flatten(0, 1).contiguous()
+        )
         quantized = quantized.reshape(*x.shape[:2], -1)
         scales = scales.reshape(*x.shape[:2], 1)
-        return ops.turing_int8_batched_residual(quantized, projection.weight, scales,
-                                               projection.scale, x.contiguous())
+        return ops.turing_int8_batched_residual(
+            quantized, projection.weight, scales, projection.scale, x.contiguous()
+        )
     output_dtype = FLOAT_DTYPES[precision]
     # SM75 emulates BF16 operands in FP32, but still returns BF16. Add the
     # residual before the final conversion, without a rounded GEMM temporary.

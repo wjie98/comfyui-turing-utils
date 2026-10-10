@@ -20,6 +20,7 @@ sys.path.insert(0, str(COMFY_ROOT))
 sys.path.insert(0, str(PLUGIN_ROOT))
 
 
+from comfyui_turing_utils.media import segments, prefix_noise
 from comfyui_turing_utils.nodes import video_sequence as nodes  # noqa: E402
 
 
@@ -28,14 +29,18 @@ class VideoSequenceTest(unittest.TestCase):
         frames = torch.zeros(3, 8, 12, 3)
         masks = torch.zeros(3, 8, 12)
         for index in range(3):
-            masks[index, 2:5, 1 + index * 3:3 + index * 3] = 1
+            masks[index, 2:5, 1 + index * 3 : 3 + index * 3] = 1
         for mode in ("concat", "replace"):
             repeated = nodes.VideoContinuationConcat.execute(
-                body_images=frames, body_mask=masks[:1], mode=mode,
+                body_images=frames,
+                body_mask=masks[:1],
+                mode=mode,
             ).result[1]
             torch.testing.assert_close(repeated, masks[:1].expand_as(masks))
             tracked = nodes.VideoContinuationConcat.execute(
-                body_images=frames, body_mask=masks, mode=mode,
+                body_images=frames,
+                body_mask=masks,
+                mode=mode,
             ).result[1]
             torch.testing.assert_close(tracked, masks)
 
@@ -55,7 +60,10 @@ class VideoSequenceTest(unittest.TestCase):
                 self.assertEqual(schema.node_id, node_id)
                 self.assertNotIn("preview", [output.id for output in schema.outputs])
 
-        loader_inputs = {input_.id: input_ for input_ in nodes.LoadIndexedVideoSegment.define_schema().inputs}
+        loader_inputs = {
+            input_.id: input_
+            for input_ in nodes.LoadIndexedVideoSegment.define_schema().inputs
+        }
         self.assertEqual(loader_inputs["segment_index"].min, -1)
         self.assertEqual(loader_inputs["tail_frames"].default, 22)
 
@@ -70,13 +78,29 @@ class VideoSequenceTest(unittest.TestCase):
         concat_schema = nodes.VideoContinuationConcat.define_schema()
         self.assertEqual(
             [input_.id for input_ in concat_schema.inputs[:6]],
-            ["prefix_images", "prefix_mask", "prefix_audio", "body_images", "body_mask", "body_audio"],
+            [
+                "prefix_images",
+                "prefix_mask",
+                "prefix_audio",
+                "body_images",
+                "body_mask",
+                "body_audio",
+            ],
         )
         concat_inputs = {input_.id: input_ for input_ in concat_schema.inputs}
-        self.assertEqual(set(concat_inputs), {
-            "prefix_images", "prefix_mask", "prefix_audio", "body_images", "body_mask",
-            "body_audio", "frame_rate", "mode",
-        })
+        self.assertEqual(
+            set(concat_inputs),
+            {
+                "prefix_images",
+                "prefix_mask",
+                "prefix_audio",
+                "body_images",
+                "body_mask",
+                "body_audio",
+                "frame_rate",
+                "mode",
+            },
+        )
         self.assertEqual(concat_inputs["mode"].default, "concat")
 
         noise_inputs = {
@@ -92,64 +116,94 @@ class VideoSequenceTest(unittest.TestCase):
         self.assertFalse(noise_inputs["end_strength"].advanced)
         self.assertFalse(noise_inputs["transition_frames"].advanced)
         self.assertEqual(concat_schema.outputs[-1].display_name, "trim_info")
-        self.assertEqual(nodes.TrimVideoContinuationPrefix.define_schema().inputs[-1].id, "trim_info")
-        self.assertEqual(nodes.H3SetAudioPrefixNoiseMask.define_schema().inputs[-1].id, "trim_info")
+        self.assertEqual(
+            nodes.TrimVideoContinuationPrefix.define_schema().inputs[-1].id, "trim_info"
+        )
+        self.assertEqual(
+            nodes.H3SetAudioPrefixNoiseMask.define_schema().inputs[-1].id, "trim_info"
+        )
 
         concat_schema.finalize()
         concat_v1 = concat_schema.get_v1_info(nodes.VideoContinuationConcat)
         self.assertEqual(
             concat_v1.input_order["optional"],
-            ["prefix_images", "prefix_mask", "prefix_audio", "body_images", "body_mask", "body_audio"],
+            [
+                "prefix_images",
+                "prefix_mask",
+                "prefix_audio",
+                "body_images",
+                "body_mask",
+                "body_audio",
+            ],
         )
         trim_schema = nodes.TrimVideoContinuationPrefix.define_schema()
         trim_schema.finalize()
         self.assertEqual(
-            trim_schema.get_v1_info(nodes.TrimVideoContinuationPrefix).input_order["optional"],
+            trim_schema.get_v1_info(nodes.TrimVideoContinuationPrefix).input_order[
+                "optional"
+            ],
             ["audio", "trim_info"],
         )
         audio_mask_schema = nodes.H3SetAudioPrefixNoiseMask.define_schema()
         audio_mask_schema.finalize()
         self.assertEqual(
-            audio_mask_schema.get_v1_info(nodes.H3SetAudioPrefixNoiseMask).input_order["optional"],
+            audio_mask_schema.get_v1_info(nodes.H3SetAudioPrefixNoiseMask).input_order[
+                "optional"
+            ],
             ["trim_info"],
         )
 
-    def test_segment_paths_are_six_digit_and_relative_paths_are_confined_to_output(self):
-        with tempfile.TemporaryDirectory() as directory, mock.patch.object(
-            nodes.folder_paths, "get_output_directory", return_value=directory
+    def test_segment_paths_are_six_digit_and_relative_paths_are_confined_to_output(
+        self,
+    ):
+        with (
+            tempfile.TemporaryDirectory() as directory,
+            mock.patch.object(
+                segments.folder_paths, "get_output_directory", return_value=directory
+            ),
         ):
-            path = nodes._segment_path("series/a", 324, create=True)
+            path = segments._segment_path("series/a", 324, create=True)
             self.assertEqual(path, Path(directory) / "series" / "a" / "000324.mp4")
             self.assertTrue(path.parent.is_dir())
             with self.assertRaisesRegex(ValueError, "inside"):
-                nodes._segment_path("../outside", 0)
+                segments._segment_path("../outside", 0)
 
     def test_segment_paths_accept_absolute_root_directory(self):
         with (
             tempfile.TemporaryDirectory() as output_directory,
             tempfile.TemporaryDirectory() as root_directory,
             mock.patch.object(
-                nodes.folder_paths, "get_output_directory", return_value=output_directory
+                segments.folder_paths,
+                "get_output_directory",
+                return_value=output_directory,
             ),
         ):
-            path = nodes._segment_path(root_directory, 324, create=True)
+            path = segments._segment_path(root_directory, 324, create=True)
             self.assertEqual(path, Path(root_directory) / "000324.mp4")
             self.assertTrue(path.parent.is_dir())
 
     def test_missing_segment_returns_empty_without_preview(self):
-        with tempfile.TemporaryDirectory() as directory, mock.patch.object(
-            nodes.folder_paths, "get_output_directory", return_value=directory
+        with (
+            tempfile.TemporaryDirectory() as directory,
+            mock.patch.object(
+                segments.folder_paths, "get_output_directory", return_value=directory
+            ),
         ):
             output = nodes.LoadIndexedVideoSegment.execute("segments", 8, 21)
             self.assertEqual(output.result, (None, None, 0.0))
             self.assertIsNone(output.ui)
 
     def test_loader_zero_returns_empty_without_reading_or_scanning(self):
-        with mock.patch.object(nodes.InputImpl, "VideoFromFile") as video_from_file, mock.patch.object(
-            nodes.folder_paths, "get_output_directory"
-        ) as get_output_directory:
+        with (
+            mock.patch.object(nodes.InputImpl, "VideoFromFile") as video_from_file,
+            mock.patch.object(
+                segments.folder_paths, "get_output_directory"
+            ) as get_output_directory,
+        ):
             output = nodes.LoadIndexedVideoSegment.execute("ignored", 0, 21)
-            fingerprint = nodes.LoadIndexedVideoSegment.fingerprint_inputs("ignored", 0, 21)
+            fingerprint = nodes.LoadIndexedVideoSegment.fingerprint_inputs(
+                "ignored", 0, 21
+            )
         self.assertEqual(output.result, (None, None, 0.0))
         self.assertEqual(fingerprint, (0, None, 21))
         video_from_file.assert_not_called()
@@ -158,9 +212,7 @@ class VideoSequenceTest(unittest.TestCase):
     def test_loader_fingerprint_conservatively_reloads_linked_inputs(self):
         self.assertTrue(
             math.isnan(
-                nodes.LoadIndexedVideoSegment.fingerprint_inputs(
-                    None, None, None, True
-                )
+                nodes.LoadIndexedVideoSegment.fingerprint_inputs(None, None, None, True)
             )
         )
 
@@ -173,50 +225,77 @@ class VideoSequenceTest(unittest.TestCase):
         segment_path.assert_not_called()
 
     def test_loader_positive_index_reads_previous_saved_segment(self):
-        with tempfile.TemporaryDirectory() as directory, mock.patch.object(
-            nodes.folder_paths, "get_output_directory", return_value=directory
+        with (
+            tempfile.TemporaryDirectory() as directory,
+            mock.patch.object(
+                segments.folder_paths, "get_output_directory", return_value=directory
+            ),
         ):
             target = Path(directory) / "segments" / "000006.mp4"
             target.parent.mkdir()
             target.write_bytes(b"video")
-            self.assertEqual(nodes._segment_path_for_load("segments", 7), target)
-            self.assertEqual(nodes._segment_path_for_load("segments", 1).name, "000000.mp4")
-            self.assertEqual(nodes._segment_path_for_load("segments", 1_000_000).name, "999999.mp4")
+            self.assertEqual(segments._segment_path_for_load("segments", 7), target)
+            self.assertEqual(
+                segments._segment_path_for_load("segments", 1).name, "000000.mp4"
+            )
+            self.assertEqual(
+                segments._segment_path_for_load("segments", 1_000_000).name,
+                "999999.mp4",
+            )
 
     def test_loader_minus_one_selects_highest_six_digit_segment(self):
-        with tempfile.TemporaryDirectory() as directory, mock.patch.object(
-            nodes.folder_paths, "get_output_directory", return_value=directory
+        with (
+            tempfile.TemporaryDirectory() as directory,
+            mock.patch.object(
+                segments.folder_paths, "get_output_directory", return_value=directory
+            ),
         ):
             segment_directory = Path(directory) / "segments"
             segment_directory.mkdir()
-            for name in ("000002.mp4", "000117.mp4", "999999.mp4", "1000000.mp4", "999998.MP4", "notes.mp4"):
+            for name in (
+                "000002.mp4",
+                "000117.mp4",
+                "999999.mp4",
+                "1000000.mp4",
+                "999998.MP4",
+                "notes.mp4",
+            ):
                 (segment_directory / name).write_bytes(b"video")
             self.assertEqual(
-                nodes._segment_path_for_load("segments", -1),
+                segments._segment_path_for_load("segments", -1),
                 segment_directory / "999999.mp4",
             )
 
     def test_loader_minus_one_returns_empty_when_no_segment_exists(self):
-        with tempfile.TemporaryDirectory() as directory, mock.patch.object(
-            nodes.folder_paths, "get_output_directory", return_value=directory
+        with (
+            tempfile.TemporaryDirectory() as directory,
+            mock.patch.object(
+                segments.folder_paths, "get_output_directory", return_value=directory
+            ),
         ):
             output = nodes.LoadIndexedVideoSegment.execute("segments", -1, 21)
             self.assertEqual(output.result, (None, None, 0.0))
 
     def test_segment_merger_rejects_numbering_gaps(self):
-        with tempfile.TemporaryDirectory() as directory, mock.patch.object(
-            nodes.folder_paths, "get_output_directory", return_value=directory
+        with (
+            tempfile.TemporaryDirectory() as directory,
+            mock.patch.object(
+                segments.folder_paths, "get_output_directory", return_value=directory
+            ),
         ):
             segment_directory = Path(directory) / "segments"
             segment_directory.mkdir()
             (segment_directory / "000000.mp4").write_bytes(b"video")
             (segment_directory / "000002.mp4").write_bytes(b"video")
             with self.assertRaisesRegex(ValueError, "000001.mp4"):
-                nodes._indexed_segment_paths("segments")
+                segments._indexed_segment_paths("segments")
 
     def test_segment_merger_max_index_is_inclusive_and_ignores_later_segments(self):
-        with tempfile.TemporaryDirectory() as directory, mock.patch.object(
-            nodes.folder_paths, "get_output_directory", return_value=directory
+        with (
+            tempfile.TemporaryDirectory() as directory,
+            mock.patch.object(
+                segments.folder_paths, "get_output_directory", return_value=directory
+            ),
         ):
             segment_directory = Path(directory) / "segments"
             segment_directory.mkdir()
@@ -224,32 +303,35 @@ class VideoSequenceTest(unittest.TestCase):
                 (segment_directory / f"{index:06d}.mp4").write_bytes(b"video")
 
             self.assertEqual(
-                [path.name for path in nodes._indexed_segment_paths("segments", 0)],
+                [path.name for path in segments._indexed_segment_paths("segments", 0)],
                 ["000000.mp4"],
             )
             self.assertEqual(
-                [path.name for path in nodes._indexed_segment_paths("segments", 1)],
+                [path.name for path in segments._indexed_segment_paths("segments", 1)],
                 ["000000.mp4", "000001.mp4"],
             )
             self.assertEqual(
-                [path.name for path in nodes._indexed_segment_paths("segments", -1)],
+                [path.name for path in segments._indexed_segment_paths("segments", -1)],
                 ["000000.mp4", "000001.mp4", "000002.mp4"],
             )
             with self.assertRaisesRegex(ValueError, "000003.mp4"):
-                nodes._indexed_segment_paths("segments", 3)
+                segments._indexed_segment_paths("segments", 3)
 
     def test_merged_filename_stays_inside_root_and_avoids_segment_namespace(self):
-        with tempfile.TemporaryDirectory() as directory, mock.patch.object(
-            nodes.folder_paths, "get_output_directory", return_value=directory
+        with (
+            tempfile.TemporaryDirectory() as directory,
+            mock.patch.object(
+                segments.folder_paths, "get_output_directory", return_value=directory
+            ),
         ):
             self.assertEqual(
-                nodes._merged_segment_path("segments", "merged.mp4"),
+                segments._merged_segment_path("segments", "merged.mp4"),
                 Path(directory) / "segments" / "merged.mp4",
             )
             with self.assertRaisesRegex(ValueError, "inside root_directory"):
-                nodes._merged_segment_path("segments", "../merged.mp4")
+                segments._merged_segment_path("segments", "../merged.mp4")
             with self.assertRaisesRegex(ValueError, "reserved"):
-                nodes._merged_segment_path("segments", "000123.mp4")
+                segments._merged_segment_path("segments", "000123.mp4")
 
     def test_merger_pads_a_small_legacy_aac_shortfall(self):
         class FakeAudioFrame:
@@ -272,10 +354,14 @@ class VideoSequenceTest(unittest.TestCase):
             def decode(self, stream):
                 return [object()]
 
-        with mock.patch.object(nodes.av, "open", return_value=FakeContainer()), mock.patch.object(
-            nodes.av, "AudioResampler", return_value=FakeResampler()
-        ), self.assertLogs(level="WARNING"):
-            waveform = nodes._decode_segment_audio(
+        with (
+            mock.patch.object(segments.av, "open", return_value=FakeContainer()),
+            mock.patch.object(
+                segments.av, "AudioResampler", return_value=FakeResampler()
+            ),
+            self.assertLogs(level="WARNING"),
+        ):
+            waveform = segments._decode_segment_audio(
                 Path("000000.mp4"),
                 sample_rate=48_000,
                 layout="stereo",
@@ -284,8 +370,12 @@ class VideoSequenceTest(unittest.TestCase):
             )
 
         self.assertEqual(waveform.shape, (2, 1_000))
-        np.testing.assert_array_equal(waveform[:, :530], np.ones((2, 530), dtype=np.float32))
-        np.testing.assert_array_equal(waveform[:, 530:], np.zeros((2, 470), dtype=np.float32))
+        np.testing.assert_array_equal(
+            waveform[:, :530], np.ones((2, 530), dtype=np.float32)
+        )
+        np.testing.assert_array_equal(
+            waveform[:, 530:], np.zeros((2, 470), dtype=np.float32)
+        )
 
     def test_merger_rejects_audio_shortfall_larger_than_one_aac_frame(self):
         class FakeContainer:
@@ -304,10 +394,14 @@ class VideoSequenceTest(unittest.TestCase):
             def resample(self, frame):
                 return []
 
-        with mock.patch.object(nodes.av, "open", return_value=FakeContainer()), mock.patch.object(
-            nodes.av, "AudioResampler", return_value=FakeResampler()
-        ), self.assertRaisesRegex(ValueError, "1025.*1024"):
-            nodes._decode_segment_audio(
+        with (
+            mock.patch.object(segments.av, "open", return_value=FakeContainer()),
+            mock.patch.object(
+                segments.av, "AudioResampler", return_value=FakeResampler()
+            ),
+            self.assertRaisesRegex(ValueError, "1025.*1024"),
+        ):
+            segments._decode_segment_audio(
                 Path("000000.mp4"),
                 sample_rate=48_000,
                 layout="stereo",
@@ -316,8 +410,13 @@ class VideoSequenceTest(unittest.TestCase):
             )
 
     def test_loader_keeps_tail_frames_and_matching_audio(self):
-        images = torch.arange(10, dtype=torch.float32)[:, None, None, None].expand(10, 2, 2, 3)
-        audio = {"waveform": torch.arange(20, dtype=torch.float32).reshape(1, 1, 20), "sample_rate": 48}
+        images = torch.arange(10, dtype=torch.float32)[:, None, None, None].expand(
+            10, 2, 2, 3
+        )
+        audio = {
+            "waveform": torch.arange(20, dtype=torch.float32).reshape(1, 1, 20),
+            "sample_rate": 48,
+        }
 
         class FakeVideo:
             def get_frame_rate(self):
@@ -333,17 +432,25 @@ class VideoSequenceTest(unittest.TestCase):
             def get_components(self):
                 return SimpleNamespace(images=images, audio=audio)
 
-        with tempfile.TemporaryDirectory() as directory, mock.patch.object(
-            nodes.folder_paths, "get_output_directory", return_value=directory
-        ), mock.patch.object(nodes.InputImpl, "VideoFromFile", return_value=FakeVideo()):
+        with (
+            tempfile.TemporaryDirectory() as directory,
+            mock.patch.object(
+                segments.folder_paths, "get_output_directory", return_value=directory
+            ),
+            mock.patch.object(
+                nodes.InputImpl, "VideoFromFile", return_value=FakeVideo()
+            ),
+        ):
             target = Path(directory) / "segments" / "000001.mp4"
             target.parent.mkdir()
             target.write_bytes(b"video")
-            output_images, output_audio, frame_rate = nodes.LoadIndexedVideoSegment.execute(
-                "segments", 2, 5
-            ).result
+            output_images, output_audio, frame_rate = (
+                nodes.LoadIndexedVideoSegment.execute("segments", 2, 5).result
+            )
         torch.testing.assert_close(output_images, images[-5:])
-        torch.testing.assert_close(output_audio["waveform"], audio["waveform"][..., -10:])
+        torch.testing.assert_close(
+            output_audio["waveform"], audio["waveform"][..., -10:]
+        )
         self.assertEqual(output_audio["sample_rate"], 48)
         self.assertEqual(frame_rate, 24.0)
 
@@ -353,9 +460,15 @@ class VideoSequenceTest(unittest.TestCase):
                 Path(path).write_bytes(b"encoded")
 
         images = torch.zeros(2, 4, 6, 3)
-        with tempfile.TemporaryDirectory() as directory, mock.patch.object(
-            nodes.folder_paths, "get_output_directory", return_value=directory
-        ), mock.patch.object(nodes.InputImpl, "VideoFromComponents", return_value=FakeVideo()):
+        with (
+            tempfile.TemporaryDirectory() as directory,
+            mock.patch.object(
+                segments.folder_paths, "get_output_directory", return_value=directory
+            ),
+            mock.patch.object(
+                nodes.InputImpl, "VideoFromComponents", return_value=FakeVideo()
+            ),
+        ):
             result = nodes.SaveIndexedVideoSegment.execute(
                 images, "segments", 12, 24.0, False
             )
@@ -365,7 +478,9 @@ class VideoSequenceTest(unittest.TestCase):
             self.assertFalse(any(target.parent.glob(".*.tmp.mp4")))
             self.assertIsNone(result.ui)
             with self.assertRaises(FileExistsError):
-                nodes.SaveIndexedVideoSegment.execute(images, "segments", 12, 24.0, False)
+                nodes.SaveIndexedVideoSegment.execute(
+                    images, "segments", 12, 24.0, False
+                )
             nodes.SaveIndexedVideoSegment.execute(images, "segments", 12, 24.0, True)
 
     def test_saver_fits_audio_to_the_exact_video_frame_duration(self):
@@ -384,10 +499,16 @@ class VideoSequenceTest(unittest.TestCase):
             "waveform": torch.ones(1, 2, 1_030),
             "sample_rate": 8_000,
         }
-        with tempfile.TemporaryDirectory() as directory, mock.patch.object(
-            nodes.folder_paths, "get_output_directory", return_value=directory
-        ), mock.patch.object(
-            nodes.InputImpl, "VideoFromComponents", side_effect=video_from_components
+        with (
+            tempfile.TemporaryDirectory() as directory,
+            mock.patch.object(
+                segments.folder_paths, "get_output_directory", return_value=directory
+            ),
+            mock.patch.object(
+                nodes.InputImpl,
+                "VideoFromComponents",
+                side_effect=video_from_components,
+            ),
         ):
             nodes.SaveIndexedVideoSegment.execute(
                 images,
@@ -408,8 +529,11 @@ class VideoSequenceTest(unittest.TestCase):
         sample_rate = 8000
         frames_per_segment = 3
         samples_per_segment = 1500
-        with tempfile.TemporaryDirectory() as directory, mock.patch.object(
-            nodes.folder_paths, "get_output_directory", return_value=directory
+        with (
+            tempfile.TemporaryDirectory() as directory,
+            mock.patch.object(
+                segments.folder_paths, "get_output_directory", return_value=directory
+            ),
         ):
             for index, value in enumerate((0.1, 0.2)):
                 images = torch.zeros(frames_per_segment, 32, 32, 3)
@@ -429,9 +553,14 @@ class VideoSequenceTest(unittest.TestCase):
 
             segment_directory = Path(directory) / "segments"
             source_audio_samples = 0
-            for path in sorted(segment_directory.glob("[0-9][0-9][0-9][0-9][0-9][0-9].mp4")):
+            for path in sorted(
+                segment_directory.glob("[0-9][0-9][0-9][0-9][0-9][0-9].mp4")
+            ):
                 source_audio_samples += int(
-                    nodes.InputImpl.VideoFromFile(str(path)).get_components().audio["waveform"].shape[-1]
+                    nodes.InputImpl.VideoFromFile(str(path))
+                    .get_components()
+                    .audio["waveform"]
+                    .shape[-1]
                 )
 
             filename, segment_count = nodes.MergeIndexedVideoSegments.execute(
@@ -449,7 +578,9 @@ class VideoSequenceTest(unittest.TestCase):
             self.assertEqual(merged.get_frame_rate(), Fraction(16, 1))
             self.assertEqual(tuple(components.images.shape), (6, 32, 32, 3))
             self.assertEqual(components.audio["sample_rate"], sample_rate)
-            self.assertLess(int(components.audio["waveform"].shape[-1]), source_audio_samples)
+            self.assertLess(
+                int(components.audio["waveform"].shape[-1]), source_audio_samples
+            )
             self.assertFalse(any(segment_directory.glob(".*.tmp.mp4")))
             with self.assertRaises(FileExistsError):
                 nodes.MergeIndexedVideoSegments.execute(
@@ -489,7 +620,10 @@ class VideoSequenceTest(unittest.TestCase):
 
     def test_replace_mode_overwrites_prefix_without_extending_timeline(self):
         prefix_images = torch.full((2, 4, 4, 3), 0.75)
-        body_images = torch.arange(5, dtype=torch.float32)[:, None, None, None].expand(5, 4, 4, 3) / 10
+        body_images = (
+            torch.arange(5, dtype=torch.float32)[:, None, None, None].expand(5, 4, 4, 3)
+            / 10
+        )
         prefix_audio = {
             "waveform": torch.tensor([[[0.7, 0.8]]]),
             "sample_rate": 1,
@@ -524,14 +658,18 @@ class VideoSequenceTest(unittest.TestCase):
         masked_audio_latent = nodes.H3SetAudioPrefixNoiseMask.execute(
             audio_latent, info, "protect_prefix_generate_body"
         ).result[0]
-        self.assertEqual(masked_audio_latent["noise_mask"][..., :2].count_nonzero().item(), 0)
+        self.assertEqual(
+            masked_audio_latent["noise_mask"][..., :2].count_nonzero().item(), 0
+        )
         self.assertTrue(torch.all(masked_audio_latent["noise_mask"][..., 2:] == 1))
 
         trimmed_images, trimmed_audio = nodes.TrimVideoContinuationPrefix.execute(
             images, info, audio
         ).result
         torch.testing.assert_close(trimmed_images, images[2:])
-        torch.testing.assert_close(trimmed_audio["waveform"], audio["waveform"][..., 2:])
+        torch.testing.assert_close(
+            trimmed_audio["waveform"], audio["waveform"][..., 2:]
+        )
 
     def test_replace_mode_rejects_prefix_longer_than_body(self):
         with self.assertRaisesRegex(ValueError, "cannot fit"):
@@ -574,8 +712,12 @@ class VideoSequenceTest(unittest.TestCase):
 
     def test_prefix_noise_short_batches_prioritize_the_clean_tail(self):
         images = torch.ones(3, 8, 8, 3)
-        zero_grid = lambda pattern, width, height, palette_rng, generator: torch.zeros(height, width, 3)
-        with mock.patch.object(nodes, "_coarse_noise_frame", side_effect=zero_grid):
+        zero_grid = lambda pattern, width, height, palette_rng, generator: torch.zeros(
+            height, width, 3
+        )
+        with mock.patch.object(
+            prefix_noise, "_coarse_noise_frame", side_effect=zero_grid
+        ):
             output = nodes.VideoPrefixContextNoise.execute(
                 images,
                 tail_protection_frames=5,
@@ -588,8 +730,12 @@ class VideoSequenceTest(unittest.TestCase):
 
     def test_prefix_noise_short_batches_shrink_transition_before_protected_tail(self):
         images = torch.ones(7, 8, 8, 3)
-        zero_grid = lambda pattern, width, height, palette_rng, generator: torch.zeros(height, width, 3)
-        with mock.patch.object(nodes, "_coarse_noise_frame", side_effect=zero_grid):
+        zero_grid = lambda pattern, width, height, palette_rng, generator: torch.zeros(
+            height, width, 3
+        )
+        with mock.patch.object(
+            prefix_noise, "_coarse_noise_frame", side_effect=zero_grid
+        ):
             output = nodes.VideoPrefixContextNoise.execute(
                 images,
                 tail_protection_frames=5,
@@ -602,7 +748,7 @@ class VideoSequenceTest(unittest.TestCase):
         torch.testing.assert_close(output[2:], images[2:], rtol=0, atol=0)
 
     def test_validated_noise_schedule_is_flat_then_tapers_to_point_one(self):
-        schedule = nodes._noise_alpha_schedule(17, 0.45, 0.10, 4)
+        schedule = prefix_noise._noise_alpha_schedule(17, 0.45, 0.10, 4)
         self.assertEqual(schedule[:13], [0.45] * 13)
         self.assertAlmostEqual(schedule[13], 0.3625, places=12)
         self.assertAlmostEqual(schedule[14], 0.275, places=12)
@@ -611,8 +757,12 @@ class VideoSequenceTest(unittest.TestCase):
 
     def test_prefix_noise_uses_blend_alpha_and_only_changes_initial_frames(self):
         images = torch.ones(22, 8, 8, 3)
-        zero_grid = lambda pattern, width, height, palette_rng, generator: torch.zeros(height, width, 3)
-        with mock.patch.object(nodes, "_coarse_noise_frame", side_effect=zero_grid):
+        zero_grid = lambda pattern, width, height, palette_rng, generator: torch.zeros(
+            height, width, 3
+        )
+        with mock.patch.object(
+            prefix_noise, "_coarse_noise_frame", side_effect=zero_grid
+        ):
             output = nodes.VideoPrefixContextNoise.execute(
                 images,
                 tail_protection_frames=5,
@@ -665,7 +815,9 @@ class VideoSequenceTest(unittest.TestCase):
             "total_audio_samples": 18,
             "audio_sample_rate": 48,
         }
-        images = torch.arange(9, dtype=torch.float32)[:, None, None, None].expand(9, 2, 2, 3)
+        images = torch.arange(9, dtype=torch.float32)[:, None, None, None].expand(
+            9, 2, 2, 3
+        )
         waveform = torch.arange(18, dtype=torch.float32).reshape(1, 1, 18)
         output_images, output_audio = nodes.TrimVideoContinuationPrefix.execute(
             images, info, {"waveform": waveform, "sample_rate": 48}
@@ -697,8 +849,12 @@ class VideoSequenceTest(unittest.TestCase):
         self.assertTrue(torch.all(output["noise_mask"][..., 9:] == 1))
         self.assertNotIn("noise_mask", latent)
 
-        protected = nodes.H3SetAudioPrefixNoiseMask.execute(latent, info, "protect_all").result[0]
-        generated = nodes.H3SetAudioPrefixNoiseMask.execute(latent, info, "generate_all").result[0]
+        protected = nodes.H3SetAudioPrefixNoiseMask.execute(
+            latent, info, "protect_all"
+        ).result[0]
+        generated = nodes.H3SetAudioPrefixNoiseMask.execute(
+            latent, info, "generate_all"
+        ).result[0]
         self.assertEqual(protected["noise_mask"].count_nonzero().item(), 0)
         self.assertTrue(torch.all(generated["noise_mask"] == 1))
 

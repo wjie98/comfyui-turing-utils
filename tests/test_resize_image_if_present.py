@@ -12,7 +12,8 @@ COMFY_ROOT = PLUGIN_ROOT.parents[1]
 sys.path.insert(0, str(COMFY_ROOT))
 sys.path.insert(0, str(PLUGIN_ROOT))
 
-from comfyui_turing_utils.nodes.media import ResizeImageIfPresent, resize_image_if_present  # noqa: E402
+from comfyui_turing_utils.nodes.media import ResizeImageIfPresent
+from comfyui_turing_utils.media.images import resize_image_if_present  # noqa: E402
 
 
 def _run(image=None, mask=None, **overrides):
@@ -81,7 +82,9 @@ class ResizeImageIfPresentTest(unittest.TestCase):
         mask = torch.zeros(1, 4, 8)
         image[:, :, :4] = 1.0
         mask[:, :, :4] = 1.0
-        output, output_mask, width, height = _run(image, mask, width=6, height=6, crop_position="left")
+        output, output_mask, width, height = _run(
+            image, mask, width=6, height=6, crop_position="left"
+        )
         self.assertEqual(tuple(output.shape), (1, 6, 6, 3))
         self.assertEqual(tuple(output_mask.shape), (1, 6, 6))
         self.assertEqual((width, height), (6, 6))
@@ -106,17 +109,25 @@ class ResizeImageIfPresentTest(unittest.TestCase):
         )
         self.assertEqual((width, height), (8, 8))
         self.assertTrue(torch.equal(output[:, :4], torch.ones_like(output[:, :4])))
-        self.assertTrue(torch.equal(output[:, 4:, :, 0], torch.ones_like(output[:, 4:, :, 0])))
-        self.assertTrue(torch.equal(output[:, 4:, :, 1:], torch.zeros_like(output[:, 4:, :, 1:])))
+        self.assertTrue(
+            torch.equal(output[:, 4:, :, 0], torch.ones_like(output[:, 4:, :, 0]))
+        )
+        self.assertTrue(
+            torch.equal(output[:, 4:, :, 1:], torch.zeros_like(output[:, 4:, :, 1:]))
+        )
 
     def test_rgb_pad_color_keeps_opaque_alpha(self):
         image = torch.ones(1, 4, 8, 4)
-        output, _, _, _ = _run(image, width=8, height=8, resize_mode="pad", pad_color="255, 0, 0")
+        output, _, _, _ = _run(
+            image, width=8, height=8, resize_mode="pad", pad_color="255, 0, 0"
+        )
         self.assertTrue(torch.equal(output[..., 3], torch.ones_like(output[..., 3])))
 
     def test_divisibility_rounds_target_down(self):
         image = torch.rand(1, 8, 12, 3)
-        output, _, width, height = _run(image, width=31, height=23, resize_mode="stretch", divisible_by=8)
+        output, _, width, height = _run(
+            image, width=31, height=23, resize_mode="stretch", divisible_by=8
+        )
         self.assertEqual(tuple(output.shape), (1, 16, 24, 3))
         self.assertEqual((width, height), (24, 16))
 

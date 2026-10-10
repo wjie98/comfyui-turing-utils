@@ -117,14 +117,22 @@ class Krea2IdentityEditTest(unittest.TestCase):
             background_image=image(0.25, 512, 512),
         )
 
-        self.assertEqual([round(float(value.mean()), 2) for value in vae.images], [0.25, 0.75])
-        self.assertEqual([tuple(value.shape[1:3]) for value in vae.images], [(512, 512), (256, 512)])
+        self.assertEqual(
+            [round(float(value.mean()), 2) for value in vae.images], [0.25, 0.75]
+        )
+        self.assertEqual(
+            [tuple(value.shape[1:3]) for value in vae.images], [(512, 512), (256, 512)]
+        )
         grounded = clip.tokenize_calls[0][1]["images"]
-        self.assertEqual([round(float(value.mean()), 2) for value in grounded], [0.25, 0.75])
+        self.assertEqual(
+            [round(float(value.mean()), 2) for value in grounded], [0.25, 0.75]
+        )
 
         metadata = conditioning[0][1]
         references = metadata["reference_latents"]
-        self.assertEqual([round(float(value.mean()), 2) for value in references], [0.25, 0.75])
+        self.assertEqual(
+            [round(float(value.mean()), 2) for value in references], [0.25, 0.75]
+        )
         self.assertEqual(metadata["reference_latents_method"], "index")
         self.assertIsNotNone(patched.post_input_patch)
 

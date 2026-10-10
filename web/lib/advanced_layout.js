@@ -25,8 +25,8 @@ export function enableAdvancedLayout(node) {
   const layout = node.getLayoutWidgets;
   node.getLayoutWidgets = function (...args) {
     syncFlags(); // Includes newly created native DynamicCombo branch widgets.
-    return layout.apply(this, args).filter(
-      (widget) => !widget.advanced || this.showAdvanced,
-    );
+    return layout
+      .apply(this, args)
+      .filter((widget) => !widget.advanced || this.showAdvanced);
   };
 }

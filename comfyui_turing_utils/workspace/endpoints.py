@@ -32,9 +32,17 @@ def parse_ports(value):
         raise ValueError("Endpoint ports must be a list")
     identities, slots = set(), set()
     for port in result:
-        if not isinstance(port, dict) or not isinstance(port.get("name"), str) or not isinstance(port.get("type"), str):
+        if (
+            not isinstance(port, dict)
+            or not isinstance(port.get("name"), str)
+            or not isinstance(port.get("type"), str)
+        ):
             raise ValueError("Each endpoint needs a name and ComfyUI type")
-        if not isinstance(port.get("id"), str) or not port["id"] or port["id"] in identities:
+        if (
+            not isinstance(port.get("id"), str)
+            or not port["id"]
+            or port["id"] in identities
+        ):
             raise ValueError("Endpoint port IDs must be unique")
         slot = port.get("slot")
         if type(slot) is not int or slot < 0 or slot in slots:
@@ -44,8 +52,12 @@ def parse_ports(value):
         if port["kind"] == "position" and port["type"] != POSITION:
             raise ValueError("Position markers must use the position type")
         if port["kind"] == "value" and port["type"] not in DATA_TYPES:
-            raise ValueError("Canvas endpoints only support IMAGE, VIDEO, AUDIO and STRING materials")
-        if "default" in port and (port["type"] != "STRING" or not isinstance(port["default"], str)):
+            raise ValueError(
+                "Canvas endpoints only support IMAGE, VIDEO, AUDIO and STRING materials"
+            )
+        if "default" in port and (
+            port["type"] != "STRING" or not isinstance(port["default"], str)
+        ):
             raise ValueError("Only text materials may have an inline default")
         identities.add(port["id"])
         slots.add(slot)
@@ -61,7 +73,15 @@ class CanvasInputs:
 
     @classmethod
     def INPUT_TYPES(cls):
-        return {"required": {"ports": ("STRING", {"default": "[]", "hidden": True, "socketless": True})}, "optional": PortInputs()}
+        return {
+            "required": {
+                "ports": (
+                    "STRING",
+                    {"default": "[]", "hidden": True, "socketless": True},
+                )
+            },
+            "optional": PortInputs(),
+        }
 
     @classmethod
     def VALIDATE_INPUTS(cls, ports, input_types):
@@ -69,22 +89,31 @@ class CanvasInputs:
             entries = parse_ports(ports)
         except ValueError as error:
             return str(error)
-        allowed = {f"port_{p['slot']}": p["type"] for p in entries if p["kind"] == "value"}
+        allowed = {
+            f"port_{p['slot']}": p["type"] for p in entries if p["kind"] == "value"
+        }
         for name, received in input_types.items():
             if name not in allowed or received not in {allowed[name], "*"}:
                 return "Connected input does not match its material port"
         return True
 
     def check_lazy_status(self, ports, **kwargs):
-        return [f"port_{p['slot']}" for p in parse_ports(ports)
-                if p["kind"] == "value" and f"port_{p['slot']}" in kwargs and kwargs[f"port_{p['slot']}"] is None]
+        return [
+            f"port_{p['slot']}"
+            for p in parse_ports(ports)
+            if p["kind"] == "value"
+            and f"port_{p['slot']}" in kwargs
+            and kwargs[f"port_{p['slot']}"] is None
+        ]
 
     def forward(self, ports, **kwargs):
         entries = parse_ports(ports)
         result = [None] * (max((p["slot"] for p in entries), default=-1) + 1)
         for port in entries:
             if port["kind"] == "value":
-                result[port["slot"]] = kwargs.get(f"port_{port['slot']}", port.get("default"))
+                result[port["slot"]] = kwargs.get(
+                    f"port_{port['slot']}", port.get("default")
+                )
         return tuple(result)
 
 

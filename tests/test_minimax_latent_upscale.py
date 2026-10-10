@@ -24,7 +24,10 @@ from comfyui_turing_utils.adapters.minimax.latent_upscaler import (  # noqa: E40
     detect_h3_latent_upscaler_architecture,
     load_h3_latent_upscaler,
 )
-from comfyui_turing_utils.nodes.latent import SetVideoLatentNoiseMask, VideoLatentCompositeMasked  # noqa: E402
+from comfyui_turing_utils.nodes.latent import (
+    SetVideoLatentNoiseMask,
+    VideoLatentCompositeMasked,
+)  # noqa: E402
 from comfyui_turing_utils.nodes.minimax import (  # noqa: E402
     _H3UpscaleApply as MiniMaxH3LatentUpscale,
     MiniMaxH3LatentUpscale as UnifiedLatentUpscale,
@@ -40,7 +43,9 @@ class _FakeUpscaler(nn.Module):
 
     def forward(self, latent, scale, target_size):
         self.calls.append((tuple(latent.shape), float(scale), tuple(target_size)))
-        return F.interpolate(latent, size=target_size, mode="trilinear", align_corners=False)
+        return F.interpolate(
+            latent, size=target_size, mode="trilinear", align_corners=False
+        )
 
 
 class _FakePatcher:
@@ -55,25 +60,43 @@ class _FakePatcher:
 
 class MiniMaxH3LatentUpscaleTest(unittest.TestCase):
     def test_mask_resize_matches_positive_area_intersections(self):
-        for source_size, target_size in (((2, 6), (4, 10)), ((3, 5), (2, 2)), ((4, 6), (6, 8)), ((2, 3), (4, 6))):
+        for source_size, target_size in (
+            ((2, 6), (4, 10)),
+            ((3, 5), (2, 2)),
+            ((4, 6), (6, 8)),
+            ((2, 3), (4, 6)),
+        ):
             sh, sw = source_size
             th, tw = target_size
             for sy in range(sh):
                 for sx in range(sw):
-                    with self.subTest(source=source_size, target=target_size, cell=(sy, sx)):
+                    with self.subTest(
+                        source=source_size, target=target_size, cell=(sy, sx)
+                    ):
                         mask = torch.zeros(1, 1, 2, sh, sw)
                         mask[0, 0, 1, sy, sx] = 1
                         actual = _resize_video_mask(mask, th, tw)
                         expected = torch.zeros(1, 1, 2, th, tw)
                         for dy in range(th):
                             for dx in range(tw):
-                                overlaps = sy * th < (dy + 1) * sh and (sy + 1) * th > dy * sh and sx * tw < (dx + 1) * sw and (sx + 1) * tw > dx * sw
+                                overlaps = (
+                                    sy * th < (dy + 1) * sh
+                                    and (sy + 1) * th > dy * sh
+                                    and sx * tw < (dx + 1) * sw
+                                    and (sx + 1) * tw > dx * sw
+                                )
                                 expected[0, 0, 1, dy, dx] = overlaps
                         torch.testing.assert_close(actual, expected, rtol=0, atol=0)
 
     def test_mask_resize_retains_soft_maxima_dtype_and_batch_time(self):
-        for device in (["cpu", "cuda"] if torch.cuda.is_available() else ["cpu"]):
-            for dtype in (torch.bool, torch.float16, torch.bfloat16, torch.float32, torch.float64):
+        for device in ["cpu", "cuda"] if torch.cuda.is_available() else ["cpu"]:
+            for dtype in (
+                torch.bool,
+                torch.float16,
+                torch.bfloat16,
+                torch.float32,
+                torch.float64,
+            ):
                 with self.subTest(device=device, dtype=dtype):
                     mask = torch.zeros(2, 1, 2, 2, 6, dtype=dtype, device=device)
                     mask[1, 0, 1, 1, 2] = True if dtype == torch.bool else 0.25
@@ -90,17 +113,29 @@ class MiniMaxH3LatentUpscaleTest(unittest.TestCase):
         input_mask = torch.zeros(5, 4, 12)
         input_mask[4, 3, 4] = 0.25
         low = SetVideoLatentNoiseMask.execute(low, input_mask, "minimax").result[0]
-        replacement = MiniMaxH3LatentUpscale.execute(_FakePatcher(), low, scale=2.5).result[0]
+        replacement = MiniMaxH3LatentUpscale.execute(
+            _FakePatcher(), low, scale=2.5
+        ).result[0]
         self.assertEqual(replacement["samples"].shape, (1, 24, 2, 4, 10))
-        original = {"samples": torch.randn_like(replacement["samples"]), "noise_mask": torch.ones(1, 1, 2, 4, 10)}
+        original = {
+            "samples": torch.randn_like(replacement["samples"]),
+            "noise_mask": torch.ones(1, 1, 2, 4, 10),
+        }
         additional = torch.zeros(5, 8, 20)
         additional[0, 0, 0] = 1
-        output = VideoLatentCompositeMasked.execute(original, replacement, mask=additional).result[0]
+        output = VideoLatentCompositeMasked.execute(
+            original, replacement, mask=additional
+        ).result[0]
         expected = torch.zeros(1, 1, 2, 4, 10)
         expected[0, 0, 0, 0, 0] = 1
         expected[0, 0, 1, 2:4, 3:5] = 1
         torch.testing.assert_close(output["noise_mask"], expected, rtol=0, atol=0)
-        torch.testing.assert_close(output["samples"], torch.where(expected.bool(), replacement["samples"], original["samples"]), rtol=0, atol=0)
+        torch.testing.assert_close(
+            output["samples"],
+            torch.where(expected.bool(), replacement["samples"], original["samples"]),
+            rtol=0,
+            atol=0,
+        )
         self.assertTrue(torch.all(original["noise_mask"] == 1))
         self.assertEqual(low["noise_mask"].count_nonzero().item(), 1)
 
@@ -124,13 +159,16 @@ class MiniMaxH3LatentUpscaleTest(unittest.TestCase):
         upscale = UnifiedLatentUpscale.define_schema()
         self.assertEqual(loader.node_id, "_TuringUtilsH3UpscaleLoader")
         self.assertEqual(upscale.node_id, "TuringUtilsMiniMaxH3LatentUpscale")
-        self.assertEqual([item.id for item in upscale.inputs], [
-            "model_name",
-            "precision",
-            "latent",
-            "conditioning",
-            "scale",
-        ])
+        self.assertEqual(
+            [item.id for item in upscale.inputs],
+            [
+                "model_name",
+                "precision",
+                "latent",
+                "conditioning",
+                "scale",
+            ],
+        )
         self.assertTrue(upscale.inputs[3].optional)
         self.assertTrue(loader.is_dev_only)
 
@@ -148,7 +186,14 @@ class MiniMaxH3LatentUpscaleTest(unittest.TestCase):
         }
         first = torch.randn(1, 24, 1, 4, 6)
         last = torch.randn(1, 24, 1, 4, 6)
-        refs = [{"kind": "image", "latent_h": 3, "latent_w": 5, "latent": torch.randn(1, 24, 1, 3, 5)}]
+        refs = [
+            {
+                "kind": "image",
+                "latent_h": 3,
+                "latent_w": 5,
+                "latent": torch.randn(1, 24, 1, 3, 5),
+            }
+        ]
         options = {
             "minimax_keyframes": [
                 {"resolved_frame_index": 0, "latent": first},
@@ -160,12 +205,14 @@ class MiniMaxH3LatentUpscaleTest(unittest.TestCase):
         embedding = torch.randn(1, 5, 8)
         conditioning = [[embedding, options]]
 
-        output_latent, output_conditioning, width, height = MiniMaxH3LatentUpscale.execute(
-            patcher,
-            latent,
-            conditioning,
-            2.0,
-        ).result
+        output_latent, output_conditioning, width, height = (
+            MiniMaxH3LatentUpscale.execute(
+                patcher,
+                latent,
+                conditioning,
+                2.0,
+            ).result
+        )
 
         output_video, output_audio = output_latent["samples"].unbind()
         output_video_mask, output_audio_mask = output_latent["noise_mask"].unbind()
@@ -178,15 +225,23 @@ class MiniMaxH3LatentUpscaleTest(unittest.TestCase):
 
         synced_options = output_conditioning[0][1]
         self.assertIs(output_conditioning[0][0], embedding)
-        self.assertEqual(tuple(synced_options["minimax_keyframes"][0]["latent"].shape), (1, 24, 1, 6, 8))
-        self.assertEqual(tuple(synced_options["minimax_keyframes"][1]["latent"].shape), (1, 24, 1, 6, 8))
+        self.assertEqual(
+            tuple(synced_options["minimax_keyframes"][0]["latent"].shape),
+            (1, 24, 1, 6, 8),
+        )
+        self.assertEqual(
+            tuple(synced_options["minimax_keyframes"][1]["latent"].shape),
+            (1, 24, 1, 6, 8),
+        )
         self.assertIs(synced_options["minimax_refs"], refs)
         self.assertNotIn("layout", synced_options)
 
         self.assertIs(latent["samples"].unbind()[0], video)
         self.assertIs(options["minimax_keyframes"][0]["latent"], first)
         self.assertIn("layout", options)
-        self.assertEqual(len(patcher.model.calls), 2)  # main video and batched keyframes
+        self.assertEqual(
+            len(patcher.model.calls), 2
+        )  # main video and batched keyframes
         self.assertAlmostEqual(patcher.model.calls[0][1], 2.0**0.5)
         load_models_gpu.assert_called_once()
 
@@ -196,23 +251,27 @@ class MiniMaxH3LatentUpscaleTest(unittest.TestCase):
         video = torch.randn(1, 24, 2, 4, 6)
         audio = torch.randn(1, 32, 2, 8)
         reference = torch.randn(1, 24, 7, 10, 14)
-        refs = [{
-            "kind": "video",
-            "latent_t": 7,
-            "latent_h": 10,
-            "latent_w": 14,
-            "latent": reference,
-            "ref_audio_t": 0,
-            "audio_latent": None,
-        }]
+        refs = [
+            {
+                "kind": "video",
+                "latent_t": 7,
+                "latent_h": 10,
+                "latent_w": 14,
+                "latent": reference,
+                "ref_audio_t": 0,
+                "audio_latent": None,
+            }
+        ]
         conditioning = [[torch.randn(1, 3, 4), {"minimax_refs": refs}]]
 
-        output_latent, output_conditioning, width, height = MiniMaxH3LatentUpscale.execute(
-            patcher,
-            {"samples": comfy.nested_tensor.NestedTensor((video, audio))},
-            conditioning,
-            1.5,
-        ).result
+        output_latent, output_conditioning, width, height = (
+            MiniMaxH3LatentUpscale.execute(
+                patcher,
+                {"samples": comfy.nested_tensor.NestedTensor((video, audio))},
+                conditioning,
+                1.5,
+            ).result
+        )
 
         output_video, output_audio = output_latent["samples"].unbind()
         self.assertEqual(tuple(output_video.shape), (1, 24, 2, 6, 8))
@@ -244,11 +303,13 @@ class MiniMaxH3LatentUpscaleTest(unittest.TestCase):
         patcher = _FakePatcher()
         video = torch.randn(1, 24, 2, 4, 6)
 
-        output_latent, output_conditioning, width, height = MiniMaxH3LatentUpscale.execute(
-            upscale_model=patcher,
-            latent={"samples": video},
-            scale=1.5,
-        ).result
+        output_latent, output_conditioning, width, height = (
+            MiniMaxH3LatentUpscale.execute(
+                upscale_model=patcher,
+                latent={"samples": video},
+                scale=1.5,
+            ).result
+        )
 
         self.assertEqual(tuple(output_latent["samples"].shape), (1, 24, 2, 6, 8))
         self.assertIsNone(output_conditioning)
@@ -281,22 +342,37 @@ class MiniMaxH3LatentUpscaleTest(unittest.TestCase):
     def test_loader_builds_a_comfy_managed_patcher(self):
         state_dict = self._tiny_model().state_dict()
         with (
-            mock.patch("folder_paths.get_full_path_or_raise", return_value="model.safetensors"),
+            mock.patch(
+                "folder_paths.get_full_path_or_raise", return_value="model.safetensors"
+            ),
             mock.patch("comfy.utils.load_torch_file", return_value=state_dict),
-            mock.patch("comfy.model_management.get_torch_device", return_value=torch.device("cpu")),
-            mock.patch("comfy.model_management.unet_offload_device", return_value=torch.device("cpu")),
+            mock.patch(
+                "comfy.model_management.get_torch_device",
+                return_value=torch.device("cpu"),
+            ),
+            mock.patch(
+                "comfy.model_management.unet_offload_device",
+                return_value=torch.device("cpu"),
+            ),
         ):
             patcher = load_h3_latent_upscaler("model.safetensors", "fp32")
         self.assertEqual(patcher.load_device, torch.device("cpu"))
         self.assertEqual(patcher.offload_device, torch.device("cpu"))
         self.assertEqual(patcher.model_dtype(), torch.float32)
-        self.assertFalse(any(parameter.is_meta for parameter in patcher.model.parameters()))
+        self.assertFalse(
+            any(parameter.is_meta for parameter in patcher.model.parameters())
+        )
 
     def test_rejects_mismatched_fl2av_keyframe_geometry(self):
         patcher = _FakePatcher()
-        conditioning = [[torch.randn(1, 2, 3), {
-            "minimax_keyframes": [{"latent": torch.randn(1, 24, 1, 2, 3)}],
-        }]]
+        conditioning = [
+            [
+                torch.randn(1, 2, 3),
+                {
+                    "minimax_keyframes": [{"latent": torch.randn(1, 24, 1, 2, 3)}],
+                },
+            ]
+        ]
         with self.assertRaisesRegex(ValueError, "must match the source video latent"):
             MiniMaxH3LatentUpscale.execute(
                 patcher,

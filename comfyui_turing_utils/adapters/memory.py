@@ -43,7 +43,7 @@ def scan_quantized_workspaces(
         formats[kind] += 1
         if kind == "w8a8" and getattr(weight, "ndim", 0) == 2:
             outputs.add(int(weight.shape[0]))
-        elif kind == "codebook_w4a8" and getattr(weight, "ndim", 0) == 2:
+        elif kind in {"codebook_w4a8", "w6a8"} and getattr(weight, "ndim", 0) == 2:
             fixed.add(
                 turing_codebook_w4a8_workspace_bytes(
                     int(weight.shape[1]),

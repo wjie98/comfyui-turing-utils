@@ -20,7 +20,8 @@ class _SeCLoader(io.ComfyNode):
             display_name="SeC Loader (Internal)",
             is_dev_only=True,
             category="",
-            description=INTERNAL_NODE_NOTE + (
+            description=INTERNAL_NODE_NOTE
+            + (
                 "Load a SeC visual-concept tracking model through ComfyUI's model "
                 "lifecycle. Device placement, residency, and unloading are managed by ComfyUI."
             ),
@@ -57,7 +58,8 @@ class _SeCApply(io.ComfyNode):
             is_dev_only=True,
             display_name="SeC Track Visual Concept Apply (Internal)",
             category="",
-            description=INTERNAL_NODE_NOTE + (
+            description=INTERNAL_NODE_NOTE
+            + (
                 "Track one visual concept through a video. With mask connected, the mask is "
                 "authoritative and points must agree with it; the bounding box limits its region. "
                 "Without a mask, the box and positive/negative coordinates form one SAM2 prompt."
@@ -179,7 +181,8 @@ class SeCTrackVisualConcept(io.ComfyNode):
     @classmethod
     def execute(cls, model_name, frames, attention="auto", **kwargs):
         return _SeCApply.execute(
-            load_sec_model(model_name, attention), frames, **kwargs)
+            load_sec_model(model_name, attention), frames, **kwargs
+        )
 
 
 __all__ = ["_SeCLoader", "SeCTrackVisualConcept", "_SeCApply"]

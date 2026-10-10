@@ -58,18 +58,21 @@ class RotaryEmbeddingSpec:
         if self.pairing not in {"none", "split_half", "interleaved"}:
             return f"RoPE pairing {self.pairing!r} is unsupported"
         if self.pairing == "none":
-            if self.freqs is not None or self.key_freqs is not None or self.rot_dim != 0:
-                return (
-                    "RoPE pairing 'none' requires query/key freqs=None and "
-                    "rot_dim=0"
-                )
+            if (
+                self.freqs is not None
+                or self.key_freqs is not None
+                or self.rot_dim != 0
+            ):
+                return "RoPE pairing 'none' requires query/key freqs=None and rot_dim=0"
             return None
         if not torch.is_tensor(self.freqs):
             return "query RoPE frequencies are unavailable"
         if self.key_freqs is not None and not torch.is_tensor(self.key_freqs):
             return "key RoPE frequencies are invalid"
         if self.rot_dim <= 0 or self.rot_dim > int(head_dim) or self.rot_dim % 2:
-            return f"RoPE rot_dim={self.rot_dim} is incompatible with head_dim={head_dim}"
+            return (
+                f"RoPE rot_dim={self.rot_dim} is incompatible with head_dim={head_dim}"
+            )
         return None
 
 
@@ -141,9 +144,7 @@ class AttentionBackendCapabilities:
     head_dims: frozenset[int] = frozenset((64, 128))
     tensor_layouts: frozenset[str] = frozenset(("HND",))
     norm_scopes: frozenset[str] = frozenset(("head", "row"))
-    rope_pairings: frozenset[str] = frozenset(
-        ("none", "split_half", "interleaved")
-    )
+    rope_pairings: frozenset[str] = frozenset(("none", "split_half", "interleaved"))
     supports_gqa: bool = True
     supports_asymmetric_qk: bool = True
     supports_mask: bool = False
@@ -163,7 +164,10 @@ class AttentionBackendCapabilities:
             return f"head_dim={request.head_dim} is unsupported"
         if request.heads != request.kv_heads and not self.supports_gqa:
             return "GQA is unsupported"
-        if request.query_tokens != request.key_tokens and not self.supports_asymmetric_qk:
+        if (
+            request.query_tokens != request.key_tokens
+            and not self.supports_asymmetric_qk
+        ):
             return "asymmetric Q/K lengths are unsupported"
         if request.mask is not None and not self.supports_mask:
             return "an attention mask was supplied"
@@ -187,14 +191,10 @@ class AttentionBackendCapabilities:
         query_norm_elements = request.qk_transform.query_norm.weight.numel()
         key_norm_elements = request.qk_transform.key_norm.weight.numel()
         expected_query = (
-            request.head_dim
-            if scope == "head"
-            else request.heads * request.head_dim
+            request.head_dim if scope == "head" else request.heads * request.head_dim
         )
         expected_key = (
-            request.head_dim
-            if scope == "head"
-            else request.kv_heads * request.head_dim
+            request.head_dim if scope == "head" else request.kv_heads * request.head_dim
         )
         if query_norm_elements != expected_query:
             return (
@@ -330,7 +330,9 @@ class AttentionExecutionOutcome:
 PreparedAttentionExecutor = Callable[[PreparedAttention], AttentionExecutionOutcome]
 
 
-def prepared_attention_executor(transformer_options) -> PreparedAttentionExecutor | None:
+def prepared_attention_executor(
+    transformer_options,
+) -> PreparedAttentionExecutor | None:
     if not isinstance(transformer_options, dict):
         return None
     executor = transformer_options.get(ATTENTION_EXECUTOR_KEY)

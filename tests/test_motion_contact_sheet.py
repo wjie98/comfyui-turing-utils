@@ -14,10 +14,10 @@ COMFY_ROOT = PLUGIN_ROOT.parents[1]
 sys.path.insert(0, str(COMFY_ROOT))
 sys.path.insert(0, str(PLUGIN_ROOT))
 
-from comfyui_turing_utils.nodes.media import (  # noqa: E402
-    VideoMotionContactSheet,
+from comfyui_turing_utils.nodes.media import VideoMotionContactSheet
+from comfyui_turing_utils.media.contact_sheet import render_contact_sheet
+from comfyui_turing_utils.media.sampling import (
     motion_weighted_frame_indices,
-    render_contact_sheet,
     uniform_frame_indices,
 )
 

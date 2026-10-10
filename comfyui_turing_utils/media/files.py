@@ -36,7 +36,11 @@ def read_audio(path, start, end):
             data = converted.to_ndarray()
             cursor = t + data.shape[1] / rate
             lo = max(0, round((start - t) * rate))
-            hi = min(data.shape[1], round((end - t) * rate)) if math.isfinite(end) else data.shape[1]
+            hi = (
+                min(data.shape[1], round((end - t) * rate))
+                if math.isfinite(end)
+                else data.shape[1]
+            )
             if hi > lo:
                 chunks.append((max(0, round((t - start) * rate) + lo), data[:, lo:hi]))
 
@@ -50,8 +54,41 @@ def read_audio(path, start, end):
             collect(converted)
     if not chunks:
         raise ValueError("The selected material has no audio in this interval")
-    length = round((end - start) * rate) if math.isfinite(end) else max(pos + data.shape[1] for pos, data in chunks)
+    length = (
+        round((end - start) * rate)
+        if math.isfinite(end)
+        else max(pos + data.shape[1] for pos, data in chunks)
+    )
     waveform = np.zeros((2, length), dtype=np.float32)
     for pos, data in chunks:
-        waveform[:, pos:pos + data.shape[1]] = data[:, :max(0, length - pos)]
+        waveform[:, pos : pos + data.shape[1]] = data[:, : max(0, length - pos)]
     return {"waveform": torch.from_numpy(waveform).unsqueeze(0), "sample_rate": rate}
+
+
+def probe(path, kind):
+    if kind == "text":
+        path.read_text(encoding="utf-8")
+        return {}
+    if kind == "image":
+        with Image.open(path) as image:
+            image.verify()
+        with Image.open(path) as image:
+            return {"width": image.width, "height": image.height}
+    with av.open(str(path)) as container:
+        streams = (
+            container.streams.video if kind == "video" else container.streams.audio
+        )
+        if not streams:
+            raise ValueError(f"File has no {kind} stream")
+        metadata = {
+            "duration": float(container.duration or 0) / av.time_base,
+            "audio": bool(container.streams.audio),
+        }
+        if kind == "video":
+            stream = streams[0]
+            metadata.update(
+                width=stream.width,
+                height=stream.height,
+                fps=float(stream.average_rate or 24),
+            )
+        return metadata

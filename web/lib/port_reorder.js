@@ -11,8 +11,7 @@ export class PortReorder {
       double = node.onDblClick;
     node.onMouseDown = (event, pos, canvas) => {
       const row = this.hit(pos);
-      if (event.button !== 0 || row < 0)
-        return down?.call(node, event, pos, canvas);
+      if (event.button !== 0 || row < 0) return down?.call(node, event, pos, canvas);
       this.begin(row);
       return true;
     };
@@ -70,11 +69,7 @@ export class PortReorder {
     };
   }
   hit(pos) {
-    if (
-      this.node.flags.collapsed ||
-      pos[0] < 24 ||
-      pos[0] > this.node.size[0] - 24
-    )
+    if (this.node.flags.collapsed || pos[0] < 24 || pos[0] > this.node.size[0] - 24)
       return -1;
     return entries(this.node).findIndex(
       (p, i) =>
@@ -113,19 +108,13 @@ export class PortReorder {
       let moving = false;
       for (const [i, output] of this.node.outputs.entries()) {
         if (output._append) continue;
-        const goal =
-          top + order.indexOf(output._portId) * LiteGraph.NODE_SLOT_HEIGHT;
-        const previous =
-          output.pos?.[1] ?? top + i * LiteGraph.NODE_SLOT_HEIGHT;
+        const goal = top + order.indexOf(output._portId) * LiteGraph.NODE_SLOT_HEIGHT;
+        const previous = output.pos?.[1] ?? top + i * LiteGraph.NODE_SLOT_HEIGHT;
         const y =
-          Math.abs(goal - previous) < 0.5
-            ? goal
-            : previous + (goal - previous) * 0.35;
+          Math.abs(goal - previous) < 0.5 ? goal : previous + (goal - previous) * 0.35;
         moving ||= y !== goal;
         output.pos = [this.node.size[0], y];
-        const input = this.node.inputs.find(
-          (s) => s._portId === output._portId,
-        );
+        const input = this.node.inputs.find((s) => s._portId === output._portId);
         if (input) input.pos = [0, y];
       }
       this.node.graph?.setDirtyCanvas(true, true);

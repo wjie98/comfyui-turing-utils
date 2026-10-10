@@ -24,15 +24,13 @@ from ..profiling import CUDA_PHASE_PROFILER
 from ..quantization.dispatch import (
     turing_int8_workspace_bytes,
 )
+from ..quantization.formats import convrot_storage_kind
 
 
 LOG = get_logger("wan")
 _CONTEXT_SHAPE_KEY = "context_latents"
 _MEMORY_CONTEXT_ATTR = "_turing_utils_wan_memory_context"
 _OUTER_SAMPLE_WRAPPER_KEY = "turing_utils_wan_memory_context"
-_W4_LAYOUT = "TensorCoreConvRotW4A4Layout"
-_W8_LAYOUT = "TensorWiseINT8Layout"
-_CODEBOOK_W4_LAYOUT = "AsymW4A8Int8Layout"
 _SELF_ATTENTION_FORWARD_PARAMETERS = (
     "x",
     "freqs",
@@ -199,7 +197,11 @@ def _context_latents_shape(
 ) -> list[int] | None:
     if not isinstance(context_latents, (list, tuple)) or not context_latents:
         return None
-    tensors = [latent for latent in context_latents if torch.is_tensor(latent) and latent.ndim >= 3]
+    tensors = [
+        latent
+        for latent in context_latents
+        if torch.is_tensor(latent) and latent.ndim >= 3
+    ]
     if not tensors:
         return None
     channels = int(tensors[0].shape[1])
@@ -301,8 +303,7 @@ def _make_extra_conds(base_model, patch_size):
             for index in range(len(self.cond)):
                 out.append(
                     torch.cat(
-                        [self.cond[index]]
-                        + [other.cond[index] for other in others]
+                        [self.cond[index]] + [other.cond[index] for other in others]
                     )
                 )
             return out
@@ -370,25 +371,7 @@ def _make_outer_sample_wrapper(base_model):
 
 def _convrot_planning_kind(weight) -> str | None:
     """Classify storage for planning without imposing a compute dtype."""
-    params = getattr(weight, "_params", None)
-    if (
-        getattr(params, "transposed", False)
-        or getattr(params, "convrot_groupsize", None) != 256
-    ):
-        return None
-    layout = getattr(weight, "_layout_cls", None)
-    if layout == _W8_LAYOUT and bool(getattr(params, "convrot", False)):
-        return "w8a8"
-    if (
-        layout == _CODEBOOK_W4_LAYOUT
-        and getattr(params, "codebook", None) is not None
-        and getattr(params, "correction", None) is None
-    ):
-        return "codebook_w4a8"
-    if layout != _W4_LAYOUT or getattr(params, "quant_group_size", None) != 64:
-        return None
-    linear_dtype = getattr(params, "linear_dtype", None)
-    return {"int4": "w4a4", "int8": "w4a8"}.get(linear_dtype)
+    return convrot_storage_kind(weight)
 
 
 def _quantized_wan_summary(

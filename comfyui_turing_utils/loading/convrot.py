@@ -54,7 +54,9 @@ def official_clip_loader_inputs() -> dict:
         raise RuntimeError("ComfyUI's official CLIPLoader is not available")
     inputs = comfy_nodes.CLIPLoader.INPUT_TYPES()
     if not isinstance(inputs, dict) or not isinstance(inputs.get("required"), dict):
-        raise RuntimeError("ComfyUI's official CLIPLoader returned invalid input definitions")
+        raise RuntimeError(
+            "ComfyUI's official CLIPLoader returned invalid input definitions"
+        )
     return inputs
 
 
@@ -72,7 +74,9 @@ def convrot_model_names(folder_name: str) -> list[str]:
             continue
         model_path = folder_paths.get_full_path(folder_name, name)
         if model_path is None:
-            LOG.debug("Skipping ConvRot candidate %s: folder_paths could not resolve it", name)
+            LOG.debug(
+                "Skipping ConvRot candidate %s: folder_paths could not resolve it", name
+            )
             continue
         skip_reason = _convrot_skip_reason(model_path)
         if skip_reason is None:
@@ -87,7 +91,9 @@ def resolve_convrot_model_path(folder_name: str, model_name: str) -> str:
     model_path = folder_paths.get_full_path_or_raise(folder_name, model_name)
     skip_reason = _convrot_skip_reason(model_path)
     if skip_reason is not None:
-        raise ValueError(f"{model_path} is not a supported ConvRot model: {skip_reason}")
+        raise ValueError(
+            f"{model_path} is not a supported ConvRot model: {skip_reason}"
+        )
     return model_path
 
 
@@ -108,7 +114,7 @@ def validate_runtime_support(
             device = comfy.model_management.get_torch_device()
         if device.type == "cuda":
             load_nvfp4_backend().validate_runtime(device)
-    if expected.w4a8 == 0 and expected.codebook_w4a8 == 0:
+    if expected.w4a8 == 0 and expected.codebook_w4a8 == 0 and expected.w6a8 == 0:
         return
 
     try:
@@ -128,7 +134,9 @@ def validate_runtime_support(
     if device is None:
         device = comfy.model_management.get_torch_device()
     if not torch.cuda.is_available() or device.type != "cuda":
-        raise RuntimeError(f"ConvRot W4A8 requires an NVIDIA CUDA load device, got {device}")
+        raise RuntimeError(
+            f"ConvRot W4A8 requires an NVIDIA CUDA load device, got {device}"
+        )
     capability = torch.cuda.get_device_capability(device)
     if capability < (7, 5):
         raise RuntimeError(
@@ -145,8 +153,12 @@ def load_convrot_model(
 ):
     attention_backend = normalize_attention_backend(attention_backend)
     model_path = Path(model_path)
-    state_dict, metadata = comfy.utils.load_torch_file(str(model_path), return_metadata=True)
-    diffusion_model_prefix = comfy.model_detection.unet_prefix_from_state_dict(state_dict)
+    state_dict, metadata = comfy.utils.load_torch_file(
+        str(model_path), return_metadata=True
+    )
+    diffusion_model_prefix = comfy.model_detection.unet_prefix_from_state_dict(
+        state_dict
+    )
     if not any(key.startswith(diffusion_model_prefix) for key in state_dict):
         diffusion_model_prefix = ""
     metadata, expected = configure_convrot_activation(
@@ -168,8 +180,11 @@ def load_convrot_model(
     if expected.nvfp4:
         # Comfy skips legacy metadata conversion when custom operations are supplied.
         state_dict, metadata = comfy.utils.convert_old_quants(
-            state_dict, diffusion_model_prefix, metadata=metadata)
-        model_options["custom_operations"] = nvfp4_operations(compute_dtype, load_device)
+            state_dict, diffusion_model_prefix, metadata=metadata
+        )
+        model_options["custom_operations"] = nvfp4_operations(
+            compute_dtype, load_device
+        )
     model = comfy.sd.load_diffusion_model_state_dict(
         state_dict,
         model_options=model_options,
@@ -177,7 +192,9 @@ def load_convrot_model(
         disable_dynamic=disable_dynamic,
     )
     if model is None:
-        raise RuntimeError(f"ComfyUI could not detect a supported model config from {model_path}")
+        raise RuntimeError(
+            f"ComfyUI could not detect a supported model config from {model_path}"
+        )
 
     if compute_dtype is not None:
         model.set_model_compute_dtype(compute_dtype)
@@ -192,13 +209,14 @@ def load_convrot_model(
 
     LOG.info(
         "Loaded ConvRot model with force_int8_gemm=%s: "
-        "W4A4=%d, legacy_W4A8=%d, codebook_W4A8=%d, W8A8=%d, NVFP4=%d",
+        "W4A4=%d, legacy_W4A8=%d, codebook_W4A8=%d, W8A8=%d, NVFP4=%d, W6A8=%d",
         force_int8_gemm,
         loaded.w4a4,
         loaded.w4a8,
         loaded.codebook_w4a8,
         loaded.w8a8,
         loaded.nvfp4,
+        loaded.w6a8,
     )
     install_dynamic_vram_sample_fence(model, load_device)
     apply_model_adapters(model, load_device)
@@ -249,10 +267,14 @@ def load_convrot_clip(
     state_dict, metadata = comfy.utils.load_torch_file(
         str(model_path), safe_load=True, return_metadata=True
     )
-    metadata, expected = configure_convrot_activation(state_dict, metadata, force_int8_gemm)
+    metadata, expected = configure_convrot_activation(
+        state_dict, metadata, force_int8_gemm
+    )
 
     model_options = dict(model_options or {})
-    load_device = model_options.get("load_device", comfy.model_management.text_encoder_device())
+    load_device = model_options.get(
+        "load_device", comfy.model_management.text_encoder_device()
+    )
     validate_runtime_support(expected, load_device)
     prepare_turing_runtime(expected, load_device)
 
@@ -262,7 +284,8 @@ def load_convrot_clip(
     model_options["quantization_metadata"] = {"mixed_ops": True}
     if expected.nvfp4:
         model_options["custom_operations"] = nvfp4_operations(
-            None, load_device, full_precision_mm=True)
+            None, load_device, full_precision_mm=True
+        )
     clip = comfy.sd.load_text_encoder_state_dicts(
         [state_dict],
         embedding_directory=embedding_directory,
@@ -280,13 +303,14 @@ def load_convrot_clip(
 
     LOG.info(
         "Loaded ConvRot CLIP with force_int8_gemm=%s: "
-        "W4A4=%d, legacy_W4A8=%d, codebook_W4A8=%d, W8A8=%d, NVFP4=%d",
+        "W4A4=%d, legacy_W4A8=%d, codebook_W4A8=%d, W8A8=%d, NVFP4=%d, W6A8=%d",
         force_int8_gemm,
         loaded.w4a4,
         loaded.w4a8,
         loaded.codebook_w4a8,
         loaded.w8a8,
         loaded.nvfp4,
+        loaded.w6a8,
     )
     install_clip_operator_scope(clip)
     clip.patcher.cached_patcher_init = (

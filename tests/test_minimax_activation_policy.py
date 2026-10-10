@@ -10,7 +10,11 @@ from unittest import mock
 import torch
 
 from comfyui_turing_utils.adapters.minimax import activation_policy
-from comfyui_turing_utils.adapters.minimax import acceleration
+from comfyui_turing_utils.adapters.minimax import (
+    attention_ops,
+    memory_state,
+    mlp as mlp_ops,
+)
 from comfyui_turing_utils import precision
 from comfyui_turing_utils.quantization import dispatch
 
@@ -44,13 +48,13 @@ class MiniMaxActivationPolicyTest(unittest.TestCase):
     def test_prepared_attention_fallback_warning_is_bounded_per_shape(self):
         options = {}
         with self.assertLogs("comfyui-turing-utils", level="WARNING") as captured:
-            acceleration._warn_attention_fallback(
+            attention_ops._warn_attention_fallback(
                 options,
                 path="head_sharded",
                 rows=127_272,
                 reason="streamed executor unavailable",
             )
-            acceleration._warn_attention_fallback(
+            attention_ops._warn_attention_fallback(
                 options,
                 path="head_sharded",
                 rows=127_272,
@@ -101,8 +105,8 @@ class MiniMaxActivationPolicyTest(unittest.TestCase):
     def test_twelve_gib_budget_keeps_low_resolution_throughput(self):
         # 15 s H3 at 480x864: 43,335 video + 1,206 audio target rows.
         with mock.patch.object(
-            activation_policy,
-            "_runtime_memory",
+            memory_state,
+            "runtime_memory",
             return_value=(10 * _GIB, 4 * _GIB, 12 * _GIB),
         ):
             for operation in ("qkv", "mlp"):
@@ -116,8 +120,8 @@ class MiniMaxActivationPolicyTest(unittest.TestCase):
         # to a slower 60K-row monolithic QKV projection. Four saturated tiles
         # retain the same math while preserving DynamicVRAM weight residency.
         with mock.patch.object(
-            activation_policy,
-            "_runtime_memory",
+            memory_state,
+            "runtime_memory",
             return_value=(int(7.68 * _GIB), 4 * _GIB, 12 * _GIB),
         ):
             decision = activation_policy.decide_activation_chunks(
@@ -134,8 +138,8 @@ class MiniMaxActivationPolicyTest(unittest.TestCase):
 
     def test_dynamic_qkv_does_not_stream_before_four_saturated_tiles(self):
         with mock.patch.object(
-            activation_policy,
-            "_runtime_memory",
+            memory_state,
+            "runtime_memory",
             return_value=(int(7.68 * _GIB), 4 * _GIB, 12 * _GIB),
         ):
             decision = activation_policy.decide_activation_chunks(
@@ -152,8 +156,8 @@ class MiniMaxActivationPolicyTest(unittest.TestCase):
 
     def test_saturated_qkv_rule_does_not_force_mlp_streaming(self):
         with mock.patch.object(
-            activation_policy,
-            "_runtime_memory",
+            memory_state,
+            "runtime_memory",
             return_value=(int(9.90 * _GIB), 4 * _GIB, 12 * _GIB),
         ):
             decision = activation_policy.decide_activation_chunks(
@@ -170,8 +174,8 @@ class MiniMaxActivationPolicyTest(unittest.TestCase):
     def test_twelve_gib_budget_streams_one_megapixel_stage(self):
         # The same clip after 2.5x area upscale to 768x1376 has 111,630 rows.
         with mock.patch.object(
-            activation_policy,
-            "_runtime_memory",
+            memory_state,
+            "runtime_memory",
             return_value=(10 * _GIB, 4 * _GIB, 12 * _GIB),
         ):
             qkv = self._decision(111_630, "qkv")
@@ -188,8 +192,8 @@ class MiniMaxActivationPolicyTest(unittest.TestCase):
         # Two 1 MP images, one 15 s 0.2 MP video, and text bring the packed
         # second-stage sequence close to 135k rows in the supplied workflow.
         with mock.patch.object(
-            activation_policy,
-            "_runtime_memory",
+            memory_state,
+            "runtime_memory",
             return_value=(10 * _GIB, 4 * _GIB, 12 * _GIB),
         ):
             qkv = self._decision(135_000, "qkv")
@@ -202,22 +206,20 @@ class MiniMaxActivationPolicyTest(unittest.TestCase):
 
     def test_twenty_two_gib_card_releases_full_throughput(self):
         with mock.patch.object(
-            activation_policy,
-            "_runtime_memory",
+            memory_state,
+            "runtime_memory",
             return_value=(20 * _GIB, 0, 22 * _GIB),
         ):
             for operation in ("qkv", "mlp"):
                 with self.subTest(operation=operation):
-                    self.assertFalse(
-                        self._decision(111_630, operation).streamed
-                    )
+                    self.assertFalse(self._decision(111_630, operation).streamed)
 
     def test_reserve_is_part_of_the_runtime_decision(self):
         # Even if the desktop is temporarily idle, the 12 GiB usable ceiling
         # must keep the one-megapixel stage on the streamed path.
         with mock.patch.object(
-            activation_policy,
-            "_runtime_memory",
+            memory_state,
+            "runtime_memory",
             return_value=(10 * _GIB, 4 * _GIB, 12 * _GIB),
         ):
             decision = self._decision(111_630, "qkv")
@@ -226,8 +228,8 @@ class MiniMaxActivationPolicyTest(unittest.TestCase):
 
     def test_attention_heads_keep_full_sequence_when_compact_path_fits(self):
         with mock.patch.object(
-            activation_policy,
-            "_runtime_memory",
+            memory_state,
+            "runtime_memory",
             return_value=(10 * _GIB, 4 * _GIB, 12 * _GIB),
         ):
             decision = activation_policy.decide_attention_heads(
@@ -244,8 +246,8 @@ class MiniMaxActivationPolicyTest(unittest.TestCase):
 
     def test_attention_heads_shard_at_extreme_budget_on_exact_boundaries(self):
         with mock.patch.object(
-            activation_policy,
-            "_runtime_memory",
+            memory_state,
+            "runtime_memory",
             return_value=(6 * _GIB, 0, 6 * _GIB),
         ):
             decision = activation_policy.decide_attention_heads(
@@ -262,10 +264,10 @@ class MiniMaxActivationPolicyTest(unittest.TestCase):
         self.assertEqual((decision.head_group * 128) % 256, 0)
 
     def test_sampler_plan_never_promotes_attention_after_free_memory_recovers(self):
-        plan = activation_policy.ActivationRuntimePlan()
+        plan = memory_state.ActivationRuntimePlan()
         with mock.patch.object(
-            activation_policy,
-            "_runtime_memory",
+            memory_state,
+            "runtime_memory",
             side_effect=(
                 (int(6.8 * _GIB), 4 * _GIB, 12 * _GIB),
                 (int(7.54 * _GIB), 4 * _GIB, 12 * _GIB),
@@ -294,10 +296,10 @@ class MiniMaxActivationPolicyTest(unittest.TestCase):
         self.assertLess(first.head_group, 56)
 
     def test_sampler_plan_never_increases_a_streamed_row_tile(self):
-        plan = activation_policy.ActivationRuntimePlan()
+        plan = memory_state.ActivationRuntimePlan()
         with mock.patch.object(
-            activation_policy,
-            "_runtime_memory",
+            memory_state,
+            "runtime_memory",
             side_effect=(
                 (int(5.5 * _GIB), 4 * _GIB, 12 * _GIB),
                 (10 * _GIB, 4 * _GIB, 12 * _GIB),
@@ -322,10 +324,10 @@ class MiniMaxActivationPolicyTest(unittest.TestCase):
         self.assertEqual(later.chunk_rows, first.chunk_rows)
 
     def test_sampler_plan_keeps_independent_operation_low_water_marks(self):
-        plan = activation_policy.ActivationRuntimePlan()
+        plan = memory_state.ActivationRuntimePlan()
         with mock.patch.object(
-            activation_policy,
-            "_runtime_memory",
+            memory_state,
+            "runtime_memory",
             side_effect=(
                 (int(5.75 * _GIB), 4 * _GIB, 12 * _GIB),
                 (int(9.90 * _GIB), 4 * _GIB, 12 * _GIB),
@@ -358,22 +360,18 @@ class MiniMaxActivationPolicyTest(unittest.TestCase):
         self.assertFalse(mlp.streamed)
         self.assertFalse(ffn.sharded)
         self.assertEqual(
-            plan.available_floors[
-                ("cuda", 0, 60_186, "qkv")
-            ],
+            plan.available_floors[("cuda", 0, 60_186, "qkv")],
             int(5.75 * _GIB),
         )
         self.assertEqual(
-            plan.available_floors[
-                ("cuda", 0, 60_186, "mlp")
-            ],
+            plan.available_floors[("cuda", 0, 60_186, "mlp")],
             int(9.90 * _GIB),
         )
 
     def test_attention_peak_includes_w8a8_value_and_summary_lifecycle(self):
         with mock.patch.object(
-            activation_policy,
-            "_runtime_memory",
+            memory_state,
+            "runtime_memory",
             return_value=(10 * _GIB, 4 * _GIB, 12 * _GIB),
         ):
             without_v8 = activation_policy.decide_attention_heads(
@@ -495,10 +493,10 @@ class MiniMaxActivationPolicyTest(unittest.TestCase):
                 "comfy.model_management": model_management,
             },
         ):
-            inactive_reclaimable = activation_policy._dynamic_vram_reclaimable(
+            inactive_reclaimable = memory_state.dynamic_vram_reclaimable(
                 base, torch.device("cuda", 0)
             )
-            all_reclaimable = activation_policy._dynamic_vram_reclaimable(
+            all_reclaimable = memory_state.dynamic_vram_reclaimable(
                 base,
                 torch.device("cuda", 0),
                 include_current=True,
@@ -526,12 +524,12 @@ class MiniMaxActivationPolicyTest(unittest.TestCase):
             ),
             mock.patch.object(torch.cuda, "memory_allocated", return_value=2 * _GIB),
             mock.patch.object(
-                activation_policy,
-                "_dynamic_vram_reclaimable",
+                memory_state,
+                "dynamic_vram_reclaimable",
                 return_value=4 * _GIB,
             ),
         ):
-            available, reserve, usable = activation_policy._runtime_memory(
+            available, reserve, usable = memory_state.runtime_memory(
                 torch.device("cuda", 0), object()
             )
 
@@ -573,10 +571,8 @@ class MiniMaxActivationPolicyTest(unittest.TestCase):
                 "comfy.model_management": model_management,
             },
         ):
-            inactive_vbars = activation_policy._dynamic_vbars(
-                base, torch.device("cuda", 0)
-            )
-            all_vbars = activation_policy._dynamic_vbars(
+            inactive_vbars = memory_state.dynamic_vbars(base, torch.device("cuda", 0))
+            all_vbars = memory_state.dynamic_vbars(
                 base,
                 torch.device("cuda", 0),
                 include_current=True,
@@ -587,8 +583,8 @@ class MiniMaxActivationPolicyTest(unittest.TestCase):
 
     def test_high_resolution_head_group_keeps_allocator_margin(self):
         with mock.patch.object(
-            activation_policy,
-            "_runtime_memory",
+            memory_state,
+            "runtime_memory",
             return_value=(int(7.54 * _GIB), 4 * _GIB, 12 * _GIB),
         ):
             decision = activation_policy.decide_attention_heads(
@@ -605,19 +601,17 @@ class MiniMaxActivationPolicyTest(unittest.TestCase):
         self.assertTrue(decision.sharded)
 
     def test_observed_high_resolution_budget_shards_without_reclaim(self):
-        vbar = SimpleNamespace(
-            free_memory=mock.Mock(return_value=896 * 1024**2)
-        )
-        plan = activation_policy.ActivationRuntimePlan()
+        vbar = SimpleNamespace(free_memory=mock.Mock(return_value=896 * 1024**2))
+        plan = memory_state.ActivationRuntimePlan()
         with (
             mock.patch.object(
-                activation_policy,
-                "_runtime_memory",
+                memory_state,
+                "runtime_memory",
                 return_value=(int(5.25 * _GIB), 4 * _GIB, 12 * _GIB),
             ),
             mock.patch.object(
-                activation_policy,
-                "_dynamic_vbars",
+                memory_state,
+                "dynamic_vbars",
                 return_value=(vbar,),
             ),
         ):
@@ -630,7 +624,7 @@ class MiniMaxActivationPolicyTest(unittest.TestCase):
                 quantized_value=True,
                 runtime_plan=plan,
             )
-            released = activation_policy.ensure_dynamic_vram_headroom(
+            released = memory_state.ensure_dynamic_vram_headroom(
                 object(),
                 torch.device("cuda", 0),
                 rows=127_275,
@@ -646,8 +640,8 @@ class MiniMaxActivationPolicyTest(unittest.TestCase):
 
     def test_saturated_head_group_does_not_grow_with_extra_working_memory(self):
         with mock.patch.object(
-            activation_policy,
-            "_runtime_memory",
+            memory_state,
+            "runtime_memory",
             return_value=(int(6.25 * _GIB), 4 * _GIB, 12 * _GIB),
         ):
             decision = activation_policy.decide_attention_heads(
@@ -688,8 +682,8 @@ class MiniMaxActivationPolicyTest(unittest.TestCase):
         )
         base = SimpleNamespace(current_patcher=patcher)
         with mock.patch.object(
-            activation_policy,
-            "_runtime_memory",
+            memory_state,
+            "runtime_memory",
             return_value=(int(6.25 * _GIB), 4 * _GIB, 12 * _GIB),
         ):
             decision = activation_policy.decide_attention_heads(
@@ -718,7 +712,7 @@ class MiniMaxActivationPolicyTest(unittest.TestCase):
             _turing_utils_minimax_layer_count=50,
         )
 
-        reserve = activation_policy._dynamic_weight_prefetch_reserve(
+        reserve = memory_state.dynamic_weight_prefetch_reserve(
             base, torch.device("cuda", 0)
         )
 
@@ -736,7 +730,7 @@ class MiniMaxActivationPolicyTest(unittest.TestCase):
             _turing_utils_minimax_layer_count=2,
         )
 
-        reserve = activation_policy._dynamic_weight_prefetch_reserve(
+        reserve = memory_state.dynamic_weight_prefetch_reserve(
             base, torch.device("cuda", 0)
         )
 
@@ -766,20 +760,20 @@ class MiniMaxActivationPolicyTest(unittest.TestCase):
             _vbar_get=lambda: vbar,
         )
         base = SimpleNamespace(current_patcher=patcher)
-        plan = activation_policy.ActivationRuntimePlan()
+        plan = memory_state.ActivationRuntimePlan()
         with (
             mock.patch.object(
-                activation_policy,
-                "_runtime_memory",
+                memory_state,
+                "runtime_memory",
                 return_value=(2 * _GIB, 0, 6 * _GIB),
             ),
             mock.patch.object(
-                activation_policy,
-                "_dynamic_vbars",
+                memory_state,
+                "dynamic_vbars",
                 return_value=(vbar,),
             ),
         ):
-            first = activation_policy.ensure_dynamic_vram_headroom(
+            first = memory_state.ensure_dynamic_vram_headroom(
                 base,
                 torch.device("cuda", 0),
                 rows=135_000,
@@ -787,7 +781,7 @@ class MiniMaxActivationPolicyTest(unittest.TestCase):
                 estimated_peak_bytes=2 * _GIB,
                 runtime_plan=plan,
             )
-            second = activation_policy.ensure_dynamic_vram_headroom(
+            second = memory_state.ensure_dynamic_vram_headroom(
                 base,
                 torch.device("cuda", 0),
                 rows=135_000,
@@ -824,12 +818,12 @@ class MiniMaxActivationPolicyTest(unittest.TestCase):
                 },
             ),
             mock.patch.object(
-                activation_policy,
-                "_runtime_memory",
+                memory_state,
+                "runtime_memory",
                 return_value=(2 * _GIB, 0, 6 * _GIB),
             ),
         ):
-            released = activation_policy.ensure_dynamic_vram_headroom(
+            released = memory_state.ensure_dynamic_vram_headroom(
                 base,
                 torch.device("cuda", 0),
                 rows=127_275,
@@ -870,9 +864,7 @@ class MiniMaxActivationPolicyTest(unittest.TestCase):
             mock.patch.object(torch.cuda, "memory_reserved", return_value=2),
             mock.patch.object(torch.cuda, "mem_get_info", return_value=(3, 4)),
         ):
-            counters = activation_policy._memory_diagnostics(
-                torch.device("cuda", 0)
-            )
+            counters = memory_state.memory_diagnostics(torch.device("cuda", 0))
 
         self.assertEqual(counters, (1, 2, 3, 1234))
         control.get_total_vram_usage.assert_called_once_with()
@@ -881,8 +873,8 @@ class MiniMaxActivationPolicyTest(unittest.TestCase):
     def test_attention_head_override_uses_largest_legal_group(self):
         with (
             mock.patch.object(
-                activation_policy,
-                "_runtime_memory",
+                memory_state,
+                "runtime_memory",
                 return_value=(20 * _GIB, 0, 22 * _GIB),
             ),
         ):
@@ -899,8 +891,8 @@ class MiniMaxActivationPolicyTest(unittest.TestCase):
 
     def test_ffn_channel_sharding_is_reserved_for_tight_or_explicit_use(self):
         with mock.patch.object(
-            activation_policy,
-            "_runtime_memory",
+            memory_state,
+            "runtime_memory",
             return_value=(10 * _GIB, 4 * _GIB, 12 * _GIB),
         ):
             row_decision = self._decision(135_000, "mlp")
@@ -913,8 +905,8 @@ class MiniMaxActivationPolicyTest(unittest.TestCase):
 
         with (
             mock.patch.object(
-                activation_policy,
-                "_runtime_memory",
+                memory_state,
+                "runtime_memory",
                 return_value=(10 * _GIB, 4 * _GIB, 12 * _GIB),
             ),
         ):
@@ -930,8 +922,8 @@ class MiniMaxActivationPolicyTest(unittest.TestCase):
 
     def test_ffn_channel_sharding_is_automatic_at_the_extreme_floor(self):
         with mock.patch.object(
-            activation_policy,
-            "_runtime_memory",
+            memory_state,
+            "runtime_memory",
             return_value=(2 * _GIB, 0, 6 * _GIB),
         ):
             row_decision = self._decision(135_000, "mlp")
@@ -948,8 +940,8 @@ class MiniMaxActivationPolicyTest(unittest.TestCase):
 
     def test_ffn_channel_sharding_stops_at_balanced_saturation_width(self):
         with mock.patch.object(
-            activation_policy,
-            "_runtime_memory",
+            memory_state,
+            "runtime_memory",
             return_value=(int(3.95 * _GIB), 4 * _GIB, 12 * _GIB),
         ):
             decision = activation_policy.decide_ffn_channels(
@@ -964,8 +956,8 @@ class MiniMaxActivationPolicyTest(unittest.TestCase):
     def test_explicit_modes_and_chunk_override_remain_available(self):
         with (
             mock.patch.object(
-                activation_policy,
-                "_runtime_memory",
+                memory_state,
+                "runtime_memory",
                 return_value=(10 * _GIB, 4 * _GIB, 12 * _GIB),
             ),
             mock.patch.dict(
@@ -979,8 +971,8 @@ class MiniMaxActivationPolicyTest(unittest.TestCase):
 
         with (
             mock.patch.object(
-                activation_policy,
-                "_runtime_memory",
+                memory_state,
+                "runtime_memory",
                 return_value=(20 * _GIB, 0, 22 * _GIB),
             ),
             mock.patch.dict(
@@ -990,7 +982,10 @@ class MiniMaxActivationPolicyTest(unittest.TestCase):
                 },
             ),
         ):
-            self.assertEqual(self._decision(111_630, "qkv", chunk_rows_override=8192).chunk_rows, 8192)
+            self.assertEqual(
+                self._decision(111_630, "qkv", chunk_rows_override=8192).chunk_rows,
+                8192,
+            )
 
     def test_streamed_mlp_casts_each_weight_once(self):
         torch.manual_seed(7)
@@ -1000,9 +995,7 @@ class MiniMaxActivationPolicyTest(unittest.TestCase):
         )
         x = torch.randn(11, 4, dtype=torch.bfloat16)
         expanded = mlp.fc1(x)
-        expected = mlp.fc2(
-            torch.nn.functional.silu(expanded[:, :6]) * expanded[:, 6:]
-        )
+        expected = mlp.fc2(torch.nn.functional.silu(expanded[:, :6]) * expanded[:, 6:])
 
         comfy = ModuleType("comfy")
         comfy.__path__ = []
@@ -1039,12 +1032,12 @@ class MiniMaxActivationPolicyTest(unittest.TestCase):
                 {"comfy": comfy, "comfy.ops": ops},
             ),
             mock.patch.object(
-                acceleration,
+                mlp_ops,
                 "convrot_linear_input_act_from_weight",
                 side_effect=fused,
             ),
         ):
-            actual = acceleration._stream_mlp(mlp, x, chunk_rows=4)
+            actual = mlp_ops._stream_mlp(mlp, x, chunk_rows=4)
 
         torch.testing.assert_close(actual, expected)
         self.assertEqual(cast.call_count, 2)
@@ -1095,9 +1088,7 @@ class MiniMaxActivationPolicyTest(unittest.TestCase):
 
         def local_quantize(value, _group_size):
             marker = float(value[0, 0])
-            scale = torch.full(
-                (value.shape[0],), marker, dtype=torch.float32
-            )
+            scale = torch.full((value.shape[0],), marker, dtype=torch.float32)
             return torch.zeros(
                 (value.shape[0], value.shape[1] // 2), dtype=torch.int8
             ), scale
@@ -1130,37 +1121,35 @@ class MiniMaxActivationPolicyTest(unittest.TestCase):
 
         with (
             mock.patch.dict(sys.modules, {"comfy": comfy, "comfy.ops": ops}),
+            mock.patch.object(mlp_ops, "convrot_w8_plain_tensors", side_effect=plain),
             mock.patch.object(
-                acceleration, "convrot_w8_plain_tensors", side_effect=plain
-            ),
-            mock.patch.object(
-                acceleration,
-                "_quantize_qkv_rows",
+                mlp_ops,
+                "quantize_linear_rows",
                 side_effect=lambda _linear, tile: (
                     torch.zeros_like(tile, dtype=torch.int8),
                     torch.ones(tile.shape[0], dtype=torch.float32),
                 ),
             ),
             mock.patch.object(
-                acceleration, "_ffn_expanded_shard", side_effect=expanded_shard
+                mlp_ops, "_ffn_expanded_shard", side_effect=expanded_shard
             ),
             mock.patch.object(
-                acceleration,
+                mlp_ops,
                 "quantize_convrot_swiglu_activation",
                 side_effect=local_quantize,
             ),
             mock.patch.object(
-                acceleration,
+                mlp_ops,
                 "quantize_convrot_swiglu_with_scale",
                 side_effect=scaled_quantize,
             ),
             mock.patch.object(
-                acceleration,
+                mlp_ops,
                 "int8_linear_from_quantized",
                 side_effect=contraction,
             ),
         ):
-            actual = acceleration._stream_mlp_channels(
+            actual = mlp_ops._stream_mlp_channels(
                 mlp, x, chunk_rows=3, chunk_channels=256
             )
 
@@ -1171,8 +1160,14 @@ class MiniMaxActivationPolicyTest(unittest.TestCase):
         for scale in common_scales:
             self.assertTrue(torch.equal(scale, torch.full_like(scale, 2.0)))
         for activation, scale in contractions:
-            self.assertTrue(torch.equal(activation[:, :256], torch.ones_like(activation[:, :256])))
-            self.assertTrue(torch.equal(activation[:, 256:], torch.full_like(activation[:, 256:], 2)))
+            self.assertTrue(
+                torch.equal(activation[:, :256], torch.ones_like(activation[:, :256]))
+            )
+            self.assertTrue(
+                torch.equal(
+                    activation[:, 256:], torch.full_like(activation[:, 256:], 2)
+                )
+            )
             self.assertTrue(torch.equal(scale, torch.full_like(scale, 2.0)))
         torch.testing.assert_close(
             actual,
@@ -1181,9 +1176,7 @@ class MiniMaxActivationPolicyTest(unittest.TestCase):
 
     def test_streamed_qkv_keeps_scale_blocks_and_casts_weight_once(self):
         torch.manual_seed(9)
-        projection = torch.nn.Linear(
-            4, 6, bias=True, dtype=torch.bfloat16
-        )
+        projection = torch.nn.Linear(4, 6, bias=True, dtype=torch.bfloat16)
         attention = SimpleNamespace(
             qkv_proj=projection,
             heads=1,
@@ -1196,9 +1189,7 @@ class MiniMaxActivationPolicyTest(unittest.TestCase):
         comfy = ModuleType("comfy")
         comfy.__path__ = []
         ops = ModuleType("comfy.ops")
-        cast = mock.Mock(
-            return_value=(projection.weight, projection.bias, None)
-        )
+        cast = mock.Mock(return_value=(projection.weight, projection.bias, None))
         uncast = mock.Mock()
         ops.run_every_op = mock.Mock()
         ops.cast_bias_weight = cast
@@ -1243,16 +1234,14 @@ class MiniMaxActivationPolicyTest(unittest.TestCase):
             )
 
         with (
-            mock.patch.dict(
-                sys.modules, {"comfy": comfy, "comfy.ops": ops}
-            ),
+            mock.patch.dict(sys.modules, {"comfy": comfy, "comfy.ops": ops}),
             mock.patch.object(
-                acceleration,
+                attention_ops,
                 "prequantize_turing_qk",
                 side_effect=prequantize,
             ),
             mock.patch.object(
-                acceleration,
+                attention_ops,
                 "precompute_turing_k_anchor",
                 return_value=(
                     torch.full((1, 1), -1, dtype=torch.int32),
@@ -1260,7 +1249,7 @@ class MiniMaxActivationPolicyTest(unittest.TestCase):
                 ),
             ),
         ):
-            qk, value = acceleration._stream_qkv_projection(
+            qk, value = attention_ops._stream_qkv_projection(
                 attention,
                 x,
                 SimpleNamespace(freqs=None),
@@ -1268,10 +1257,25 @@ class MiniMaxActivationPolicyTest(unittest.TestCase):
             )
 
         self.assertEqual(calls, 3)
-        self.assertTrue(torch.equal(qk.query_int8[:, :, :64], torch.ones((1, 1, 64, 2), dtype=torch.int8)))
-        self.assertTrue(torch.equal(qk.query_int8[:, :, 64:128], torch.full((1, 1, 64, 2), 2, dtype=torch.int8)))
-        self.assertTrue(torch.equal(qk.query_int8[:, :, 128:], torch.full((1, 1, 2, 2), 3, dtype=torch.int8)))
-        self.assertEqual(qk.query_scale.flatten().tolist(), [1.0] * 4 + [2.0] * 4 + [3.0] * 4)
+        self.assertTrue(
+            torch.equal(
+                qk.query_int8[:, :, :64], torch.ones((1, 1, 64, 2), dtype=torch.int8)
+            )
+        )
+        self.assertTrue(
+            torch.equal(
+                qk.query_int8[:, :, 64:128],
+                torch.full((1, 1, 64, 2), 2, dtype=torch.int8),
+            )
+        )
+        self.assertTrue(
+            torch.equal(
+                qk.query_int8[:, :, 128:], torch.full((1, 1, 2, 2), 3, dtype=torch.int8)
+            )
+        )
+        self.assertEqual(
+            qk.query_scale.flatten().tolist(), [1.0] * 4 + [2.0] * 4 + [3.0] * 4
+        )
         self.assertEqual(qk.key_scale.flatten().tolist(), [1.0, 2.0, 3.0])
         torch.testing.assert_close(value, expected_value)
         cast.assert_called_once()
@@ -1282,9 +1286,9 @@ class MiniMaxActivationPolicyTest(unittest.TestCase):
     def test_head_sharding_preserves_full_sequence_and_feature_order(self):
         sequence, heads, head_dim = 7, 4, 2
         x = torch.randn(sequence, 3, dtype=torch.bfloat16)
-        expected = torch.arange(
-            sequence * heads * head_dim, dtype=torch.bfloat16
-        ).view(sequence, heads, head_dim)
+        expected = torch.arange(sequence * heads * head_dim, dtype=torch.bfloat16).view(
+            sequence, heads, head_dim
+        )
         projection = SimpleNamespace(weight=torch.empty(1), pre_quant_scale=None)
         attention = SimpleNamespace(
             qkv_proj=projection,
@@ -1296,9 +1300,7 @@ class MiniMaxActivationPolicyTest(unittest.TestCase):
         comfy.__path__ = []
         ops = ModuleType("comfy.ops")
         ops.run_every_op = mock.Mock()
-        ops.cast_bias_weight = mock.Mock(
-            return_value=(torch.empty(1), None, None)
-        )
+        ops.cast_bias_weight = mock.Mock(return_value=(torch.empty(1), None, None))
         ops.uncast_bias_weight = mock.Mock()
         comfy.ops = ops
         ldm = ModuleType("comfy.ldm")
@@ -1344,17 +1346,17 @@ class MiniMaxActivationPolicyTest(unittest.TestCase):
                 },
             ),
             mock.patch.object(
-                acceleration,
+                attention_ops,
                 "convrot_w8_plain_tensors",
                 return_value=(torch.empty(1), torch.ones(1)),
             ),
             mock.patch.object(
-                acceleration,
+                attention_ops,
                 "_project_qkv_head_group",
                 side_effect=project,
             ),
             mock.patch.object(
-                acceleration,
+                attention_ops,
                 "_apply_minimax_qk_transform",
                 side_effect=lambda _attention, query, key, _rope: (
                     query,
@@ -1362,7 +1364,7 @@ class MiniMaxActivationPolicyTest(unittest.TestCase):
                 ),
             ),
         ):
-            actual = acceleration._head_sharded_attention(
+            actual = attention_ops._head_sharded_attention(
                 attention,
                 x,
                 None,
@@ -1463,15 +1465,11 @@ class MiniMaxActivationPolicyTest(unittest.TestCase):
                     "comfy_kitchen.backends.cuda": cuda,
                 },
             ),
-            mock.patch.object(
-                dispatch, "TURING_INT8_GLOBAL_WORKSPACE_LIMIT", 1
-            ),
+            mock.patch.object(dispatch, "TURING_INT8_GLOBAL_WORKSPACE_LIMIT", 1),
             mock.patch.object(
                 dispatch, "_kernel_op", return_value=bundled
             ) as kernel_op,
-            mock.patch.object(
-                dispatch, "_kernel_available", return_value=True
-            ),
+            mock.patch.object(dispatch, "_kernel_available", return_value=True),
             mock.patch.object(
                 dispatch, "is_supported_tensor_core_device", return_value=True
             ),
@@ -1542,9 +1540,7 @@ class MiniMaxActivationPolicyTest(unittest.TestCase):
 
     def test_ampere_loader_preflights_the_shared_runtime(self):
         device = torch.device("cuda", 0)
-        summary = SimpleNamespace(
-            w4a4=0, w4a8=0, codebook_w4a8=0, w8a8=1
-        )
+        summary = SimpleNamespace(w4a4=0, w4a8=0, codebook_w4a8=0, w8a8=1)
         comfy_kitchen = ModuleType("comfy_kitchen")
         comfy_kitchen.list_backends = lambda: {
             "cuda": {
@@ -1569,12 +1565,8 @@ class MiniMaxActivationPolicyTest(unittest.TestCase):
             mock.patch.object(precision, "register_backend", return_value=True),
             mock.patch.object(precision, "backend_available", return_value=True),
             mock.patch.object(precision, "preflight_kitchen") as linear,
-            mock.patch.object(
-                precision, "bundled_w8a8_available", return_value=True
-            ),
-            mock.patch.object(
-                precision, "preflight_bundled_w8a8"
-            ) as attention,
+            mock.patch.object(precision, "bundled_w8a8_available", return_value=True),
+            mock.patch.object(precision, "preflight_bundled_w8a8") as attention,
         ):
             precision.prepare_turing_runtime(summary, device, "w8a8")
 

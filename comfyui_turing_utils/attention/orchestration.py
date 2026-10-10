@@ -91,15 +91,7 @@ def install_attention_strategy(
     return AttentionStrategyInstallation(patched, layout_status, site_status)
 
 
-# Compatibility aliases for integrations written before orchestration became
-# useful to non-sparse strategies such as virtual K/V expansion.
-SparsePatchInstallation = AttentionStrategyInstallation
-install_sparse_attention_override = install_attention_strategy
-
-
 __all__ = [
     "AttentionStrategyInstallation",
-    "SparsePatchInstallation",
     "install_attention_strategy",
-    "install_sparse_attention_override",
 ]

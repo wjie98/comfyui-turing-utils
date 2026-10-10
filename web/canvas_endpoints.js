@@ -29,8 +29,7 @@ app.registerExtension({
         );
         if (file.value === "Loading...") file.value = "";
         if (kind === "audio") {
-          node.widgets.find((w) => w.name === "audioUI").element.preload =
-            "none";
+          node.widgets.find((w) => w.name === "audioUI").element.preload = "none";
         }
         for (const widget of node.widgets.filter((w) => w.name === "upload"))
           widget.label = "choose file to upload";
@@ -38,8 +37,7 @@ app.registerExtension({
       const executed = node.onExecuted;
       node.onExecuted = function (data) {
         executed?.call(this, data);
-        const name =
-          kind === "text" ? "text" : kind === "audio" ? "audio" : "file";
+        const name = kind === "text" ? "text" : kind === "audio" ? "audio" : "file";
         const value = data.material_text?.[0] ?? data.material_file?.[0];
         const widget = this.widgets.find((w) => w.name === name);
         if (value !== undefined && widget) {

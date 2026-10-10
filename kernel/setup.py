@@ -495,6 +495,7 @@ core_ext = CUDAExtension(
         "csrc/bindings.cpp",
         "csrc/turing/bf16_epilogue.cu",
         "csrc/turing/convrot_quant.cu",
+        "csrc/turing/fp16_convrot_quant.cu",
         "csrc/turing/nvfp4_int8.cu",
         "csrc/turing/segmented_rms_adaln.cu",
         "csrc/turing/w4a8.cu",
@@ -563,7 +564,7 @@ if _includes_integer_attention_arch():
 
 setup(
     name="comfyui-turing-utils-kernel",
-    version="0.43.0",
+    version="0.45.0",
     packages=find_packages(where=str(ROOT)),
     ext_modules=ext_modules,
     cmdclass={"build_ext": BuildExtension},

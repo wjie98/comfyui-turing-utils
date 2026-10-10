@@ -81,13 +81,13 @@ __device__ __forceinline__ float load_group_scale<float>(float value) {
 }
 
 // CUTLASS normally loads the packed operand fragment and applies a stateless
-// numeric transform before storing it to shared memory. Grouped-codebook W4
-// also needs a per-group E4M3 scale and a 16-entry codebook. This iterator
-// wraps the normal predicated packed-W4 load, but returns an S8 fragment after
+// numeric transform before storing it to shared memory. Grouped W4/W6
+// also needs a per-group scale and, for W4, a 16-entry codebook. This iterator
+// wraps the normal predicated low-nibble load, but returns an S8 fragment after
 // decoding in registers. MmaPipelined therefore writes exactly the same S8
 // crosswise shared-memory tile as the existing W8A8 kernel: no decoded global
 // workspace and no additional shared memory are introduced.
-template <typename Shape_, typename ThreadMap_, typename ScaleT = uint8_t>
+template <typename Shape_, typename ThreadMap_, typename ScaleT = uint8_t, int Bits = 4>
 class TuringCodebookW4Iterator {
 public:
     using Shape = Shape_;
@@ -117,7 +117,7 @@ public:
     using Mask = typename RawIterator::Mask;
 
     static_assert(ThreadMap::kElementsPerAccess == 16,
-                  "inline codebook W4 requires one complete 16-value group per access");
+                  "inline grouped INT8 requires one complete 16-value group per access");
 
     struct Params {
         typename RawIterator::Params raw;
@@ -135,6 +135,7 @@ private:
     RawIterator raw_;
     ScaleT const *group_scale_ = nullptr;
     float const *codebook_ = nullptr;
+    uint8_t const *weight_ = nullptr;
     int groups_per_row_ = 0;
     int extent_k_ = 0;
     int extent_n_ = 0;
@@ -156,6 +157,7 @@ public:
         : raw_(params.raw, pointer, extent, thread_id, threadblock_offset, indices),
           group_scale_(params.group_scale),
           codebook_(params.codebook),
+          weight_(reinterpret_cast<uint8_t const *>(pointer)),
           groups_per_row_(params.groups_per_row),
           extent_k_(extent.row()),
           extent_n_(extent.column()) {
@@ -233,11 +235,27 @@ public:
                           group_scale_[static_cast<int64_t>(n) * groups_per_row_ + k / 16])
                     : 0.0f;
 
+                uint32_t upper = 0;
+                if constexpr (Bits == 6) {
+                    if (valid) {
+                        upper = *reinterpret_cast<uint32_t const *>(
+                            weight_ + static_cast<int64_t>(n) * (extent_k_ * 3 / 4)
+                            + extent_k_ / 2 + k / 4);
+                    }
+                }
+
                 CUTLASS_PRAGMA_UNROLL
                 for (int element = 0; element < 16; ++element) {
                     uint8_t const byte = packed_bytes[(base + element) / 2];
-                    int const code = (byte >> ((element & 1) * 4)) & 0x0f;
-                    float const value = valid ? __ldg(codebook_ + code) * scale : 0.0f;
+                    int code = (byte >> ((element & 1) * 4)) & 0x0f;
+                    float level;
+                    if constexpr (Bits == 6) {
+                        code |= ((upper >> (element * 2)) & 3) << 4;
+                        level = static_cast<float>(code - 32);
+                    } else {
+                        level = valid ? __ldg(codebook_ + code) : 0.0f;
+                    }
+                    float const value = level * scale;
                     int const rounded = __float2int_rn(value);
                     fragment[base + element] = static_cast<int8_t>(
                         max(-127, min(127, rounded)));
@@ -278,6 +296,7 @@ enum class WeightKind {
     kInt8,
     kSignedW4,
     kCodebookW4,
+    kUniformW6,
 };
 
 template <typename Output,
@@ -291,7 +310,8 @@ template <typename Output,
           typename ScaleT = uint8_t, bool RoundHalf = true, bool Residual = false>
 struct TuringW4A8Gemm {
     static constexpr bool PackedWeight = Kind != WeightKind::kInt8;
-    static constexpr bool CodebookWeight = Kind == WeightKind::kCodebookW4;
+    static constexpr bool CodebookWeight = Kind == WeightKind::kCodebookW4 || Kind == WeightKind::kUniformW6;
+    static constexpr int WeightBits = Kind == WeightKind::kUniformW6 ? 6 : 4;
     using ElementA = int8_t;
     using ElementB = std::conditional_t<PackedWeight, cutlass::int4b_t, int8_t>;
     using SharedElementB = int8_t;
@@ -346,7 +366,7 @@ struct TuringW4A8Gemm {
         CodebookWeight,
         TuringCodebookW4Iterator<
             cutlass::MatrixShape<ThreadblockShape::kK, ThreadblockShape::kN>,
-            typename MmaCore::IteratorThreadMapB, ScaleT>,
+            typename MmaCore::IteratorThreadMapB, ScaleT, WeightBits>,
         PredicatedIteratorB>;
 
     using TransformA = cutlass::NumericArrayConverter<
@@ -529,11 +549,11 @@ struct TuringW4A8Gemm {
                 ? reinterpret_cast<ElementC *>(const_cast<float *>(codebook))
                 : nullptr,
             static_cast<int64_t>(m) * k,
-            static_cast<int64_t>(n) * k,
+            static_cast<int64_t>(n) * k * (Kind == WeightKind::kUniformW6 ? 3 : 2) / 2,
             0,
             0,
             k,
-            k,
+            k * (Kind == WeightKind::kUniformW6 ? 3 : 2) / 2,
             0,
             0);
         Gemm gemm;
@@ -786,7 +806,7 @@ bool run_ampere_int8_tile(const int8_t *activation,
         m, n, k, output_stride, stream);
 }
 
-template <int TBM, int TBN, int WM, int WN, typename ScaleT>
+template <int TBM, int TBN, int WM, int WN, int Bits, typename ScaleT>
 bool run_codebook_tile(const int8_t *activation,
                        const int8_t *weight,
                        const float *activation_scale,
@@ -800,7 +820,7 @@ bool run_codebook_tile(const int8_t *activation,
                        int k,
                        cudaStream_t stream) {
     return TuringW4A8Gemm<
-        cutlass::bfloat16_t, WeightKind::kCodebookW4, TBM, TBN, WM, WN,
+        cutlass::bfloat16_t, Bits == 6 ? WeightKind::kUniformW6 : WeightKind::kCodebookW4, TBM, TBN, WM, WN,
         16, 16, ScaleT>::run(
         activation,
         weight,
@@ -867,7 +887,7 @@ bool dispatch_int8(const int8_t *activation,
         output, m, n, k, output_stride, stream);
 }
 
-template <typename ScaleT>
+template <typename ScaleT, int Bits>
 bool dispatch_codebook(const int8_t *activation,
                        const int8_t *weight,
                        const float *activation_scale,
@@ -887,15 +907,23 @@ bool dispatch_codebook(const int8_t *activation,
     if (m <= 8192) {
         return false;
     }
-    return run_codebook_tile<128, 256, 64, 64>(
-        activation, weight, activation_scale, group_scale,
-        channel_scale, codebook, bias, output, m, n, k, stream);
+    if constexpr (Bits == 6) {
+        // The extra high-plane decode would spill in the 128x256 SM75 tile.
+        // Keep the same INT8 mainloop with a smaller accumulator footprint.
+        return run_codebook_tile<128, 128, 32, 64, Bits>(
+            activation, weight, activation_scale, group_scale,
+            channel_scale, codebook, bias, output, m, n, k, stream);
+    } else {
+        return run_codebook_tile<128, 256, 64, 64, Bits>(
+            activation, weight, activation_scale, group_scale,
+            channel_scale, codebook, bias, output, m, n, k, stream);
+    }
 }
 
 // Decode one 16-column vector per thread. This intentionally matches Kitchen's
 // reference rounding and E4M3 conversion so the staged SM75 path is bit exact
 // before the INT8 contraction.
-template <typename ScaleT>
+template <typename ScaleT, int Bits>
 __global__ void decode_codebook_w4_to_s8(
     const int8_t *__restrict__ packed_weight,
     const ScaleT *__restrict__ group_scale,
@@ -906,8 +934,10 @@ __global__ void decode_codebook_w4_to_s8(
     int k,
     int group_size) {
     __shared__ float shared_codebook[16];
-    if (threadIdx.x < 16) {
-        shared_codebook[threadIdx.x] = codebook[threadIdx.x];
+    if constexpr (Bits == 4) {
+        if (threadIdx.x < 16) {
+            shared_codebook[threadIdx.x] = codebook[threadIdx.x];
+        }
     }
     __syncthreads();
 
@@ -915,7 +945,7 @@ __global__ void decode_codebook_w4_to_s8(
     if (vector >= vector_count) {
         return;
     }
-    const int vectors_per_row = packed_k / 8;
+    const int vectors_per_row = k / 16;
     const int row = static_cast<int>(vector / vectors_per_row);
     const int packed_column = static_cast<int>(vector % vectors_per_row) * 8;
     const int output_column = packed_column * 2;
@@ -923,6 +953,12 @@ __global__ void decode_codebook_w4_to_s8(
     const int64_t scale_row = static_cast<int64_t>(row) * groups_per_row;
     const uint2 packed = *reinterpret_cast<const uint2 *>(
         packed_weight + static_cast<int64_t>(row) * packed_k + packed_column);
+    uint32_t upper = 0;
+    if constexpr (Bits == 6) {
+        upper = *reinterpret_cast<uint32_t const *>(
+            packed_weight + static_cast<int64_t>(row) * packed_k
+            + k / 2 + output_column / 4);
+    }
     const int base_group = output_column / group_size;
     uint4 decoded;
 #pragma unroll
@@ -937,12 +973,23 @@ __global__ void decode_codebook_w4_to_s8(
         for (int byte_index = 0; byte_index < 2; ++byte_index) {
             const unsigned value =
                 (bytes >> (input_shift + byte_index * 8)) & 0xffu;
-            const unsigned low = value & 0x0fu;
-            const unsigned high = value >> 4;
+            unsigned low = value & 0x0fu;
+            unsigned high = value >> 4;
+            float low_level, high_level;
+            if constexpr (Bits == 6) {
+                const int column = output_word * 4 + byte_index * 2;
+                low |= ((upper >> (column * 2)) & 3) << 4;
+                high |= ((upper >> ((column + 1) * 2)) & 3) << 4;
+                low_level = static_cast<float>(static_cast<int>(low) - 32);
+                high_level = static_cast<float>(static_cast<int>(high) - 32);
+            } else {
+                low_level = shared_codebook[low];
+                high_level = shared_codebook[high];
+            }
             const int low_value = max(
-                -127, min(127, __float2int_rn(shared_codebook[low] * scale)));
+                -127, min(127, __float2int_rn(low_level * scale)));
             const int high_value = max(
-                -127, min(127, __float2int_rn(shared_codebook[high] * scale)));
+                -127, min(127, __float2int_rn(high_level * scale)));
             decoded_word |=
                 (static_cast<unsigned>(static_cast<uint8_t>(low_value))
                  << (byte_index * 16));
@@ -964,7 +1011,7 @@ __global__ void decode_codebook_w4_to_s8(
         decoded;
 }
 
-template <typename ScaleT>
+template <typename ScaleT, int Bits>
 void launch_codebook_decode(const int8_t *packed_weight,
                             const ScaleT *group_scale,
                             const float *codebook,
@@ -974,10 +1021,10 @@ void launch_codebook_decode(const int8_t *packed_weight,
                             int group_size,
                             cudaStream_t stream) {
     constexpr int threads = 256;
-    const int packed_k = k / 2;
-    const int64_t vector_count = static_cast<int64_t>(rows) * packed_k / 8;
+    const int packed_k = k * Bits / 8;
+    const int64_t vector_count = static_cast<int64_t>(rows) * k / 16;
     const int blocks = static_cast<int>(ceilDiv(vector_count, static_cast<int64_t>(threads)));
-    decode_codebook_w4_to_s8<<<blocks, threads, 0, stream>>>(
+    decode_codebook_w4_to_s8<ScaleT, Bits><<<blocks, threads, 0, stream>>>(
         packed_weight,
         group_scale,
         codebook,
@@ -1076,7 +1123,7 @@ void turing_w4a8_linear(Tensor activation,
     checkCUDA(cudaGetLastError());
 }
 
-template <typename ScaleT>
+template <typename ScaleT, int Bits>
 void codebook_w4a8_linear_impl(Tensor activation,
                                  Tensor weight,
                                  Tensor activation_scale,
@@ -1110,10 +1157,10 @@ void codebook_w4a8_linear_impl(Tensor activation,
     const auto *activation_scale_ptr = activation_scale.data_ptr<float>();
     const auto *group_scale_ptr = group_scale.data_ptr<ScaleT>();
     const auto *channel_scale_ptr = channel_scale.data_ptr<float>();
-    const auto *codebook_ptr = codebook.data_ptr<float>();
+    const auto *codebook_ptr = codebook.valid() ? codebook.data_ptr<float>() : nullptr;
     const auto *bias_ptr = bias.valid() ? bias.data_ptr<float>() : nullptr;
     auto *output_ptr = output.data_ptr<__nv_bfloat16>();
-    const int packed_k = k / 2;
+    const int packed_k = k * Bits / 8;
     const int groups_per_row = k / group_size;
     const cudaStream_t stream = getCurrentCUDAStream();
 
@@ -1121,7 +1168,7 @@ void codebook_w4a8_linear_impl(Tensor activation,
         if (group_size != 16) {
             throw std::runtime_error("inline Turing codebook W4A8 requires group_size=16");
         }
-        if (!dispatch_codebook(
+        if (!dispatch_codebook<ScaleT, Bits>(
                 activation_ptr,
                 weight_ptr,
                 activation_scale_ptr,
@@ -1145,7 +1192,7 @@ void codebook_w4a8_linear_impl(Tensor activation,
 
     for (int row = 0; row < n; row += chunk_rows) {
         const int rows = std::min(chunk_rows, n - row);
-        launch_codebook_decode(
+        launch_codebook_decode<ScaleT, Bits>(
             weight_ptr + static_cast<int64_t>(row) * packed_k,
             group_scale_ptr + static_cast<int64_t>(row) * groups_per_row,
             codebook_ptr,
@@ -1177,14 +1224,19 @@ void turing_codebook_w4a8_linear(Tensor activation, Tensor weight,
                                  Tensor channel_scale, Tensor codebook,
                                  Tensor bias, Tensor workspace, Tensor output,
                                  int group_size, bool inline_decode) {
+    const bool w6 = weight.size(1) * 8 == activation.size(1) * 6;
+    const auto launch = [&](auto scale_type, auto bits) {
+        using ScaleT = decltype(scale_type);
+        codebook_w4a8_linear_impl<ScaleT, decltype(bits)::value>(
+            activation, weight, activation_scale, group_scale, channel_scale,
+            codebook, bias, workspace, output, group_size, inline_decode);
+    };
     if (group_scale.scalar_type() == Tensor::FP32) {
-        codebook_w4a8_linear_impl<float>(activation, weight, activation_scale,
-            group_scale, channel_scale, codebook, bias, workspace, output,
-            group_size, inline_decode);
+        if (w6) launch(float{}, std::integral_constant<int, 6>{});
+        else launch(float{}, std::integral_constant<int, 4>{});
     } else {
-        codebook_w4a8_linear_impl<uint8_t>(activation, weight, activation_scale,
-            group_scale, channel_scale, codebook, bias, workspace, output,
-            group_size, inline_decode);
+        if (w6) launch(uint8_t{}, std::integral_constant<int, 6>{});
+        else launch(uint8_t{}, std::integral_constant<int, 4>{});
     }
 }
 

@@ -21,17 +21,22 @@ from comfyui_turing_utils.adapters.minimax.conditioning import (  # noqa: E402
 from comfyui_turing_utils.nodes.minimax_references import (  # noqa: E402
     H3BuildConditioning,
     H3AudioReference,
-    H3AudioReferenceData,
     H3KeyframeReference,
-    H3KeyframeReferenceData,
     H3ImageReference,
-    H3ImageReferenceData,
     H3LatentInfo,
-    H3ReferenceManifest,
     H3SemanticReference,
-    H3SemanticReferenceData,
     H3VideoReference,
+)
+
+from comfyui_turing_utils.adapters.minimax.references import (
+    H3AudioReferenceData,
+    H3KeyframeReferenceData,
+    H3ImageReferenceData,
+    H3ReferenceManifest,
+    H3SemanticReferenceData,
     H3VideoReferenceData,
+)
+from comfyui_turing_utils.adapters.minimax.reference_execution import (
     _prepare_h3_semantic_encoder,
 )
 
@@ -205,7 +210,9 @@ class MiniMaxH3ReferencesTest(unittest.TestCase):
             [
                 "vae",
                 "latent",
-                "image_0", "image_1", "image_2",
+                "image_0",
+                "image_1",
+                "image_2",
             ],
         )
         self.assertTrue(all(item.optional for item in frame.inputs[2:]))
@@ -249,7 +256,8 @@ class MiniMaxH3ReferencesTest(unittest.TestCase):
 
         outputs = H3KeyframeReference.execute(
             vae,
-            image_2=image_10, image_0=image_2,
+            image_2=image_10,
+            image_0=image_2,
         ).result
 
         self.assertEqual(tuple(outputs[0].image.shape), (1, 64, 96, 3))
@@ -321,13 +329,18 @@ class MiniMaxH3ReferencesTest(unittest.TestCase):
                     vae, audios={"audio_0": audio}
                 ).result[0]
                 torch.testing.assert_close(vae.inputs[0], waveform.movedim(1, -1))
-                self.assertEqual(tuple(reference.items[0]["audio_latent"].shape), (1, 32, 2, 10))
+                self.assertEqual(
+                    tuple(reference.items[0]["audio_latent"].shape), (1, 32, 2, 10)
+                )
         loader.assert_called_once_with()
 
     def test_audio_reference_resamples_lazy_mapping(self):
-        loader = mock.Mock(return_value={
-            "waveform": torch.rand(1, 2, 160), "sample_rate": 16000,
-        })
+        loader = mock.Mock(
+            return_value={
+                "waveform": torch.rand(1, 2, 160),
+                "sample_rate": 16000,
+            }
+        )
         vae = _FakeAudioVAE()
         H3AudioReference.execute(vae, audios={"audio_0": _LazyAudioMap(loader)})
         self.assertEqual(tuple(vae.inputs[0].shape), (1, 320, 2))
@@ -336,8 +349,12 @@ class MiniMaxH3ReferencesTest(unittest.TestCase):
     def test_audio_reference_rejects_invalid_audio_before_encoding(self):
         waveform = torch.rand(1, 2, 320)
         cases = [
-            [], waveform, {"samples": waveform}, {},
-            {"waveform": waveform}, {"sample_rate": 32000},
+            [],
+            waveform,
+            {"samples": waveform},
+            {},
+            {"waveform": waveform},
+            {"sample_rate": 32000},
             {"waveform": waveform[0], "sample_rate": 32000},
         ]
         for index, data in enumerate(cases):
@@ -362,7 +379,9 @@ class MiniMaxH3ReferencesTest(unittest.TestCase):
             video_audios={"video_audio_2": _LazyAudioMap(loader)},
         ).result[0]
         torch.testing.assert_close(audio_vae.inputs[0], waveform.movedim(1, -1))
-        self.assertEqual(tuple(reference.items[0]["audio_latent"].shape), (1, 32, 2, 10))
+        self.assertEqual(
+            tuple(reference.items[0]["audio_latent"].shape), (1, 32, 2, 10)
+        )
         loader.assert_called_once_with()
 
     def test_video_reference_accepts_24_fps_and_pairs_audio_by_index(self):
@@ -506,7 +525,9 @@ class MiniMaxH3ReferencesTest(unittest.TestCase):
             semantic.manifest,
             H3ReferenceManifest(first_frame=True, last_frame=True),
         )
-        self.assertEqual(clip.encoded["qwen3vl_32b"][0][:2], [("keyframe", 0), ("keyframe", 1)])
+        self.assertEqual(
+            clip.encoded["qwen3vl_32b"][0][:2], [("keyframe", 0), ("keyframe", 1)]
+        )
         keyframes = conditioning[0][1]["minimax_keyframes"]
         self.assertEqual([item["resolved_frame_index"] for item in keyframes], [0, 21])
         self.assertIs(keyframes[0]["latent"], latent)
@@ -518,10 +539,17 @@ class MiniMaxH3ReferencesTest(unittest.TestCase):
         base = [[embeddings, {"minimax_token_tags": tags, "start_percent": 0.25}]]
         semantic = H3SemanticReferenceData(
             base,
-            H3ReferenceManifest(first_frame=True, last_frame=True, image_count=2, video_audio=(True, False), audio_count=1),
+            H3ReferenceManifest(
+                first_frame=True,
+                last_frame=True,
+                image_count=2,
+                video_audio=(True, False),
+                audio_count=1,
+            ),
         )
         conditioning = H3BuildConditioning.execute(
-            semantic, {"samples": torch.zeros(1, 24, 2, 4, 4)},
+            semantic,
+            {"samples": torch.zeros(1, 24, 2, 4, 4)},
         ).result[0]
         self.assertIs(conditioning[0][0], embeddings)
         self.assertIs(conditioning[0][1]["minimax_token_tags"], tags)
@@ -535,54 +563,103 @@ class MiniMaxH3ReferencesTest(unittest.TestCase):
         from comfy.ldm.minimax.model import PackedLayout
 
         keyframe = H3KeyframeReferenceData(
-            image=torch.zeros(1, 96, 128, 3), latent=torch.ones(1, 24, 1, 6, 8),
+            image=torch.zeros(1, 96, 128, 3),
+            latent=torch.ones(1, 24, 1, 6, 8),
         )
-        images = H3ImageReferenceData((
-            {"latent": torch.zeros(1, 24, 1, 2, 2)},
-            {"latent": torch.zeros(1, 24, 1, 4, 6)},
-        ))
+        images = H3ImageReferenceData(
+            (
+                {"latent": torch.zeros(1, 24, 1, 2, 2)},
+                {"latent": torch.zeros(1, 24, 1, 4, 6)},
+            )
+        )
         audio_latent = torch.zeros(1, 32, 2, 3)
-        videos = H3VideoReferenceData((
-            {"latent": torch.zeros(1, 24, 2, 2, 4), "audio_latent": audio_latent},
-            {"latent": torch.zeros(1, 24, 7, 2, 2), "audio_latent": None},
-        ))
+        videos = H3VideoReferenceData(
+            (
+                {"latent": torch.zeros(1, 24, 2, 2, 4), "audio_latent": audio_latent},
+                {"latent": torch.zeros(1, 24, 7, 2, 2), "audio_latent": None},
+            )
+        )
         audio = H3AudioReferenceData(({"audio_latent": audio_latent},))
         for manifest in (
             H3ReferenceManifest(),
-            H3ReferenceManifest(first_frame=True, image_count=1, video_audio=(False, True), audio_count=3),
+            H3ReferenceManifest(
+                first_frame=True,
+                image_count=1,
+                video_audio=(False, True),
+                audio_count=3,
+            ),
         ):
             with self.subTest(manifest=manifest):
-                semantic = H3SemanticReferenceData([[torch.zeros(1, 3, 8), {}]], manifest)
+                semantic = H3SemanticReferenceData(
+                    [[torch.zeros(1, 3, 8), {}]], manifest
+                )
                 conditioning = H3BuildConditioning.execute(
-                    semantic, {"samples": torch.zeros(1, 24, 7, 6, 8)},
-                    last_frame=keyframe, image_reference=images,
-                    video_reference=videos, audio_reference=audio,
+                    semantic,
+                    {"samples": torch.zeros(1, 24, 7, 6, 8)},
+                    last_frame=keyframe,
+                    image_reference=images,
+                    video_reference=videos,
+                    audio_reference=audio,
                 ).result[0]
                 options = conditioning[0][1]
-                self.assertEqual([r["kind"] for r in options["minimax_refs"]], ["image", "image", "video_audio", "video", "audio"])
-                self.assertEqual([kf["resolved_frame_index"] for kf in options["minimax_keyframes"]], [21])
-                self.assertIs(options["minimax_keyframes"][0]["latent"], keyframe.latent)
+                self.assertEqual(
+                    [r["kind"] for r in options["minimax_refs"]],
+                    ["image", "image", "video_audio", "video", "audio"],
+                )
+                self.assertEqual(
+                    [kf["resolved_frame_index"] for kf in options["minimax_keyframes"]],
+                    [21],
+                )
+                self.assertIs(
+                    options["minimax_keyframes"][0]["latent"], keyframe.latent
+                )
                 self.assertIs(options["minimax_refs"][2]["audio_latent"], audio_latent)
-                layout = PackedLayout(3, 7, 6, 8, 3, keyframes=options["minimax_keyframes"], refs=options["minimax_refs"])
+                layout = PackedLayout(
+                    3,
+                    7,
+                    6,
+                    8,
+                    3,
+                    keyframes=options["minimax_keyframes"],
+                    refs=options["minimax_refs"],
+                )
                 self.assertEqual(int((~layout.img_update).sum()), 12 + 1 + 6 + 4 + 7)
                 self.assertEqual(int((~layout.audio_update).sum()), 12)
-                self.assertEqual([segment[2] for segment in layout.segments[-2:]], ["audio", "video"])
+                self.assertEqual(
+                    [segment[2] for segment in layout.segments[-2:]], ["audio", "video"]
+                )
 
     def test_build_still_validates_connected_keyframe_latents(self):
-        semantic = H3SemanticReferenceData([[torch.zeros(1, 1, 1), {}]], H3ReferenceManifest())
+        semantic = H3SemanticReferenceData(
+            [[torch.zeros(1, 1, 1), {}]], H3ReferenceManifest()
+        )
         target = {"samples": torch.zeros(1, 24, 2, 6, 8)}
         for role in ("first_frame", "last_frame"):
-            for shape in ((1, 24, 1, 4, 4), (1, 24, 2, 6, 8), (1, 4, 1, 6, 8), (2, 24, 1, 6, 8)):
-                keyframe = H3KeyframeReferenceData(torch.zeros(1, 96, 128, 3), torch.zeros(shape))
-                with self.subTest(role=role, shape=shape), self.assertRaisesRegex(ValueError, role):
+            for shape in (
+                (1, 24, 1, 4, 4),
+                (1, 24, 2, 6, 8),
+                (1, 4, 1, 6, 8),
+                (2, 24, 1, 6, 8),
+            ):
+                keyframe = H3KeyframeReferenceData(
+                    torch.zeros(1, 96, 128, 3), torch.zeros(shape)
+                )
+                with (
+                    self.subTest(role=role, shape=shape),
+                    self.assertRaisesRegex(ValueError, role),
+                ):
                     H3BuildConditioning.execute(semantic, target, **{role: keyframe})
 
     def test_build_still_requires_valid_semantic_and_target_latent(self):
-        semantic = H3SemanticReferenceData([[torch.zeros(1, 1, 1), {}]], H3ReferenceManifest())
+        semantic = H3SemanticReferenceData(
+            [[torch.zeros(1, 1, 1), {}]], H3ReferenceManifest()
+        )
         with self.assertRaisesRegex(ValueError, "semantic_reference"):
             H3BuildConditioning.execute(None, {"samples": torch.zeros(1, 24, 2, 4, 4)})
         with self.assertRaisesRegex(ValueError, "Expected H3 video latent"):
-            H3BuildConditioning.execute(semantic, {"samples": torch.zeros(1, 4, 2, 4, 4)})
+            H3BuildConditioning.execute(
+                semantic, {"samples": torch.zeros(1, 4, 2, 4, 4)}
+            )
         with self.assertRaisesRegex(ValueError, "temporal grid"):
             H3BuildConditioning.execute(
                 semantic,

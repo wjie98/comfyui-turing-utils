@@ -1,0 +1,8 @@
+target-version = "py312"
+line-length = 88
+extend-exclude = ["comfyui_turing_utils/vendor", "third_party", "references", "experiments"]
+
+[lint]
+# The runtime uses deliberate lazy imports. Start with unambiguous ownership
+# and undefined-name checks rather than adding cosmetic or import-order churn.
+select = ["F401", "F811", "F821"]

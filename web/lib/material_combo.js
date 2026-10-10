@@ -1,10 +1,6 @@
 const lists = new Map();
 
-export function bindMaterialCombo(
-  node,
-  widget,
-  { key, list, selected, select },
-) {
+export function bindMaterialCombo(node, widget, { key, list, selected, select }) {
   let entry = lists.get(key);
   if (!entry)
     lists.set(
@@ -12,9 +8,7 @@ export function bindMaterialCombo(
       (entry = { items: [], listeners: new Set(), load: null, loaded: false, list }),
     );
   const update = () => {
-    widget.options.values = [
-      ...new Set(["", ...entry.items.map((i) => i.name)]),
-    ];
+    widget.options.values = [...new Set(["", ...entry.items.map((i) => i.name)])];
     widget.value = selected()?.split("/").at(-1) || "";
     if (widget.value && !widget.options.values.includes(widget.value))
       widget.options.values.push(widget.value);

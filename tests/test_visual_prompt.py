@@ -13,10 +13,8 @@ COMFY_ROOT = PLUGIN_ROOT.parents[1]
 sys.path.insert(0, str(COMFY_ROOT))
 sys.path.insert(0, str(PLUGIN_ROOT))
 
-from comfyui_turing_utils.nodes.visual_prompt import (  # noqa: E402
-    MaskToVisualPrompts,
-    visual_prompts_from_mask,
-)
+from comfyui_turing_utils.nodes.visual_prompt import MaskToVisualPrompts
+from comfyui_turing_utils.media.visual_prompts import visual_prompts_from_mask
 
 
 class VisualPromptTest(unittest.TestCase):
@@ -99,7 +97,9 @@ class VisualPromptTest(unittest.TestCase):
         pixels = preview[0]
         green = (pixels[..., 1] > 0.65) & (pixels[..., 1] > pixels[..., 0] + 0.15)
         red = (pixels[..., 0] > 0.75) & (pixels[..., 0] > pixels[..., 1] + 0.15)
-        amber = (pixels[..., 0] > 0.8) & (pixels[..., 1] > 0.55) & (pixels[..., 2] < 0.5)
+        amber = (
+            (pixels[..., 0] > 0.8) & (pixels[..., 1] > 0.55) & (pixels[..., 2] < 0.5)
+        )
         self.assertTrue(bool(green.any()))
         self.assertTrue(bool(red.any()))
         self.assertTrue(bool(amber.any()))

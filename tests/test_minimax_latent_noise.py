@@ -53,7 +53,11 @@ class TestModel:
         self.object_patches = {}
 
     def get_model_object(self, name):
-        return self.object_patches[name] if name in self.object_patches else getattr(self.model, name)
+        return (
+            self.object_patches[name]
+            if name in self.object_patches
+            else getattr(self.model, name)
+        )
 
 
 class H3AddNoiseTest(unittest.TestCase):
@@ -77,7 +81,10 @@ class H3AddNoiseTest(unittest.TestCase):
         schema = H3AddNoise.define_schema()
         self.assertEqual(schema.node_id, "TuringUtilsH3AddNoise")
         self.assertEqual(schema.display_name, "H3 Add Noise")
-        self.assertEqual([item.id for item in schema.inputs], ["model", "noise", "sigmas", "latent_image"])
+        self.assertEqual(
+            [item.id for item in schema.inputs],
+            ["model", "noise", "sigmas", "latent_image"],
+        )
         self.assertEqual(len(schema.outputs), 1)
 
     def test_standalone_video_round_trip_to_sampler_sigma(self):
@@ -89,14 +96,23 @@ class H3AddNoiseTest(unittest.TestCase):
 
     def test_standalone_audio_uses_video_schedule_and_audio_carry(self):
         prepared = self.prepare(self.audio, self.audio_noise)["samples"]
-        torch.testing.assert_close(prepared, self.audio + (0.6 / 0.4 / 4.0) * self.audio_noise)
+        torch.testing.assert_close(
+            prepared, self.audio + (0.6 / 0.4 / 4.0) * self.audio_noise
+        )
 
     def test_av_changes_both_streams_without_mutating_input(self):
         samples = NestedTensor([self.video, self.audio])
         noise = FixedNoise(NestedTensor([self.video_noise, self.audio_noise]))
-        masks = NestedTensor([torch.zeros_like(self.video), torch.ones_like(self.audio)])
+        masks = NestedTensor(
+            [torch.zeros_like(self.video), torch.ones_like(self.audio)]
+        )
         metadata = {"purpose": "continuation"}
-        latent = {"samples": samples, "noise_mask": masks, "batch_index": [2, 2], "metadata": metadata}
+        latent = {
+            "samples": samples,
+            "noise_mask": masks,
+            "batch_index": [2, 2],
+            "metadata": metadata,
+        }
         video_copy, audio_copy = self.video.clone(), self.audio.clone()
         output = H3AddNoise.execute(self.model, noise, self.sigmas, latent).result[0]
         self.assertEqual(noise.calls, [latent])
@@ -111,7 +127,8 @@ class H3AddNoiseTest(unittest.TestCase):
 
     def test_combined_and_separate_streams_have_identical_math(self):
         combined = self.prepare(
-            NestedTensor([self.video, self.audio]), NestedTensor([self.video_noise, self.audio_noise])
+            NestedTensor([self.video, self.audio]),
+            NestedTensor([self.video_noise, self.audio_noise]),
         )["samples"]
         video = self.prepare(self.video, self.video_noise)["samples"]
         audio = self.prepare(self.audio, self.audio_noise)["samples"]
@@ -119,10 +136,15 @@ class H3AddNoiseTest(unittest.TestCase):
         torch.testing.assert_close(combined.unbind()[1], audio)
 
     def test_random_noise_respects_batch_index_and_seed(self):
-        latent = {"samples": NestedTensor([self.video, self.audio]), "batch_index": [3, 3]}
+        latent = {
+            "samples": NestedTensor([self.video, self.audio]),
+            "batch_index": [3, 3],
+        }
         noise = Noise_RandomNoise(17)
         generated = noise.generate_noise(latent)
-        output = H3AddNoise.execute(self.model, noise, self.sigmas, latent).result[0]["samples"]
+        output = H3AddNoise.execute(self.model, noise, self.sigmas, latent).result[0][
+            "samples"
+        ]
         for clean, epsilon, prepared, scale in zip(
             latent["samples"].unbind(), generated.unbind(), output.unbind(), [1.0, 4.0]
         ):
@@ -140,28 +162,39 @@ class H3AddNoiseTest(unittest.TestCase):
         latent = {"samples": NestedTensor([self.video, self.audio])}
         noise = FixedNoise(None)
         for sigmas in [torch.tensor([]), torch.tensor([0.0])]:
-            self.assertIs(H3AddNoise.execute(self.model, noise, sigmas, latent).result[0], latent)
+            self.assertIs(
+                H3AddNoise.execute(self.model, noise, sigmas, latent).result[0], latent
+            )
         self.assertEqual(noise.calls, [])
 
     def test_invalid_sigma_fails_before_generating_noise(self):
         for value in [1.0, 1.5, -0.2, float("inf"), float("nan")]:
-            with self.subTest(value=value), self.assertRaisesRegex(ValueError, "0 <= sigmas"):
+            with (
+                self.subTest(value=value),
+                self.assertRaisesRegex(ValueError, "0 <= sigmas"),
+            ):
                 self.prepare(self.video, self.video_noise, torch.tensor([value]))
         with self.assertRaisesRegex(ValueError, "one-dimensional"):
             self.prepare(self.video, self.video_noise, torch.tensor([[0.5]]))
 
     def test_model_sampling_patches_are_used_without_mutating_live_state(self):
-        patched = TestModel(shift=8, audio_shift=4, noise_scale=1.7).model.model_sampling
+        patched = TestModel(
+            shift=8, audio_shift=4, noise_scale=1.7
+        ).model.model_sampling
         self.model.object_patches["model_sampling"] = patched
         stale_shapes = [(1, 24, 7, 99, 99), (1, 32, 2, 38)]
         self.model.model.latent_shapes = stale_shapes
         actual = self.prepare(self.audio, self.audio_noise)["samples"]
-        torch.testing.assert_close(actual, self.audio + 1.5 * 1.7 / 2.0 * self.audio_noise)
+        torch.testing.assert_close(
+            actual, self.audio + 1.5 * 1.7 / 2.0 * self.audio_noise
+        )
         self.assertIs(self.model.model.latent_shapes, stale_shapes)
         self.assertEqual(self.model.model.model_sampling.audio_scale, 4.0)
 
     def test_absent_audio_shift_means_equal_stream_scales(self):
-        actual = self.prepare(self.audio, self.audio_noise, model=TestModel(audio_shift=None))["samples"]
+        actual = self.prepare(
+            self.audio, self.audio_noise, model=TestModel(audio_shift=None)
+        )["samples"]
         torch.testing.assert_close(actual, self.audio + 1.5 * self.audio_noise)
 
     def test_half_inputs_promote_for_safe_near_one_sigma(self):
@@ -169,8 +202,12 @@ class H3AddNoiseTest(unittest.TestCase):
             with self.subTest(dtype=dtype):
                 clean = self.video.to(dtype)
                 epsilon = self.video_noise.to(dtype)
-                actual = self.prepare(clean, epsilon, torch.tensor([0.99999]))["samples"]
-                self.assertEqual(actual.dtype, torch.promote_types(dtype, torch.float32))
+                actual = self.prepare(clean, epsilon, torch.tensor([0.99999]))[
+                    "samples"
+                ]
+                self.assertEqual(
+                    actual.dtype, torch.promote_types(dtype, torch.float32)
+                )
                 self.assertEqual(actual.device, clean.device)
                 self.assertTrue(bool(torch.isfinite(actual).all()))
 
@@ -184,8 +221,12 @@ class H3AddNoiseTest(unittest.TestCase):
         actual = self.prepare(self.video, self.video_noise, sigmas)["samples"]
         self.assertEqual(actual.dtype, torch.float64)
         self.assertTrue(bool(torch.isfinite(actual).all()))
-        start = self.model.model.model_sampling.noise_scaling(sigmas[0], torch.zeros_like(actual), actual)
-        expected = (1 - sigmas[0]) * self.video.double() + sigmas[0] * self.video_noise.double()
+        start = self.model.model.model_sampling.noise_scaling(
+            sigmas[0], torch.zeros_like(actual), actual
+        )
+        expected = (1 - sigmas[0]) * self.video.double() + sigmas[
+            0
+        ] * self.video_noise.double()
         torch.testing.assert_close(start, expected)
 
     @unittest.skipUnless(torch.cuda.is_available(), "CUDA unavailable")
@@ -193,17 +234,24 @@ class H3AddNoiseTest(unittest.TestCase):
         latent = {"samples": NestedTensor([self.video.cuda(), self.audio.cuda()])}
         noise = Noise_RandomNoise(19)
         generated = noise.generate_noise(latent)
-        actual = H3AddNoise.execute(self.model, noise, self.sigmas, latent).result[0]["samples"]
+        actual = H3AddNoise.execute(self.model, noise, self.sigmas, latent).result[0][
+            "samples"
+        ]
         for clean, epsilon, prepared, carry in zip(
             latent["samples"].unbind(), generated.unbind(), actual.unbind(), [1.0, 4.0]
         ):
             self.assertEqual(prepared.device, clean.device)
             self.assertEqual(epsilon.device.type, "cpu")
-            torch.testing.assert_close(prepared, clean + 1.5 / carry * epsilon.to(clean.device))
+            torch.testing.assert_close(
+                prepared, clean + 1.5 / carry * epsilon.to(clean.device)
+            )
 
     def test_wrong_stream_order_and_broadcasting_noise_are_rejected(self):
         with self.assertRaisesRegex(ValueError, "Expected H3"):
-            self.prepare(NestedTensor([self.audio, self.video]), NestedTensor([self.audio_noise, self.video_noise]))
+            self.prepare(
+                NestedTensor([self.audio, self.video]),
+                NestedTensor([self.audio_noise, self.video_noise]),
+            )
         with self.assertRaisesRegex(ValueError, "same shape"):
             self.prepare(self.video, self.video_noise[:1])
         with self.assertRaisesRegex(ValueError, "same video/audio structure"):
@@ -226,28 +274,46 @@ class H3AddNoiseTest(unittest.TestCase):
 
         comfy.samplers.KSAMPLER(capture).sample(
             SimpleNamespace(inner_model=self.model.model),
-            self.sigmas, {}, None, noise, latent_image=internal, disable_pbar=True,
+            self.sigmas,
+            {},
+            None,
+            noise,
+            latent_image=internal,
+            disable_pbar=True,
         )
         return comfy.utils.unpack_latents(captured[0], shapes)
 
     def test_native_disable_noise_sampler_receives_correct_av_state(self):
         latent = self.prepare(
-            NestedTensor([self.video, self.audio]), NestedTensor([self.video_noise, self.audio_noise])
+            NestedTensor([self.video, self.audio]),
+            NestedTensor([self.video_noise, self.audio_noise]),
         )
         video, audio = self.sampler_start(latent)
         torch.testing.assert_close(video, 0.4 * self.video + 0.6 * self.video_noise)
-        torch.testing.assert_close(audio, 0.4 * 4.0 * self.audio + 0.6 * self.audio_noise)
+        torch.testing.assert_close(
+            audio, 0.4 * 4.0 * self.audio + 0.6 * self.audio_noise
+        )
 
     def test_upscaled_video_can_rejoin_unchanged_partial_output_audio(self):
         # First sampler exports intermediate audio via its native inverse and
         # process_latent_out. The learned upscaler supplies a new clean video.
         self.model.model.latent_shapes = [self.video.shape, self.audio.shape]
         partial_audio = torch.randn_like(self.audio)
-        first_output = self.model.model.process_latent_out(NestedTensor([
-            self.model.model.model_sampling.inverse_noise_scaling(self.sigmas[0], self.video),
-            self.model.model.model_sampling.inverse_noise_scaling(self.sigmas[0], partial_audio),
-        ]))
-        _, original_audio = LTXVSeparateAVLatent.execute({"samples": first_output}).result
+        first_output = self.model.model.process_latent_out(
+            NestedTensor(
+                [
+                    self.model.model.model_sampling.inverse_noise_scaling(
+                        self.sigmas[0], self.video
+                    ),
+                    self.model.model.model_sampling.inverse_noise_scaling(
+                        self.sigmas[0], partial_audio
+                    ),
+                ]
+            )
+        )
+        _, original_audio = LTXVSeparateAVLatent.execute(
+            {"samples": first_output}
+        ).result
         larger_video = torch.randn(2, 24, 2, 6, 8)
         epsilon = torch.randn_like(larger_video)
         video = self.prepare(larger_video, epsilon)

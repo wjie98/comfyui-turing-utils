@@ -21,6 +21,7 @@ H3_PIXEL_ALIGNMENT = 32
 H3_SPATIAL_DOWNSCALE = 16
 H3_MAX_KEYFRAME_REFERENCES = 32
 
+
 @dataclass(frozen=True)
 class H3ReferenceManifest:
     first_frame: bool = False
@@ -200,7 +201,9 @@ def _encode_audio(audio_vae, audio, name: str) -> torch.Tensor:
         or "waveform" not in audio
         or "sample_rate" not in audio
     ):
-        raise ValueError(f"{name} must be an AUDIO mapping with waveform and sample_rate")
+        raise ValueError(
+            f"{name} must be an AUDIO mapping with waveform and sample_rate"
+        )
     waveform = audio["waveform"]
     if not torch.is_tensor(waveform) or waveform.ndim != 3:
         shape = (
@@ -389,8 +392,6 @@ def _reference_blocks(
             for item in audio_reference.items
         )
     return refs
-
-
 
 
 __all__ = [

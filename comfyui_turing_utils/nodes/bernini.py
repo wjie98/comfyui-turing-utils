@@ -27,8 +27,16 @@ class BerniniInpaintCondition(io.ComfyNode):
                 io.Int.Input("height", default=480, min=16, max=8192, step=16),
                 io.Int.Input("length", default=81, min=1, max=8192, step=4),
                 io.Int.Input("batch_size", default=1, min=1, max=4096),
-                io.Boolean.Input("source_as_context", default=False, tooltip="Also append the aligned source video as Bernini context tokens."),
-                io.Mask.Input("mask", optional=True, tooltip="White is repainted and black is preserved. Omit for global repaint."),
+                io.Boolean.Input(
+                    "source_as_context",
+                    default=False,
+                    tooltip="Also append the aligned source video as Bernini context tokens.",
+                ),
+                io.Mask.Input(
+                    "mask",
+                    optional=True,
+                    tooltip="White is repainted and black is preserved. Omit for global repaint.",
+                ),
             ],
             outputs=[
                 io.Conditioning.Output(display_name="positive"),
@@ -38,8 +46,19 @@ class BerniniInpaintCondition(io.ComfyNode):
         )
 
     @classmethod
-    def execute(cls, positive, negative, vae, source_video, width, height, length, batch_size,
-                source_as_context=False, mask=None):
+    def execute(
+        cls,
+        positive,
+        negative,
+        vae,
+        source_video,
+        width,
+        height,
+        length,
+        batch_size,
+        source_as_context=False,
+        mask=None,
+    ):
         length = int(length)
         if (length - 1) % 4 != 0:
             raise ValueError(f"Bernini length must be 4*n+1 real frames; got {length}")
@@ -170,13 +189,19 @@ class BerniniContextWindowsCore:
         freenoise: bool = True,
     ):
         if position_mode not in ("absolute", "relative"):
-            raise ValueError(f"position_mode must be absolute or relative; got {position_mode}")
-        latent_context_length, latent_context_overlap = service._validate_context_window_frames(
-            context_length,
-            context_overlap,
+            raise ValueError(
+                f"position_mode must be absolute or relative; got {position_mode}"
+            )
+        latent_context_length, latent_context_overlap = (
+            service._validate_context_window_frames(
+                context_length,
+                context_overlap,
+            )
         )
         context_handler = service.BerniniScheduledContextHandler(
-            context_schedule=comfy.context_windows.get_matching_context_schedule(context_schedule),
+            context_schedule=comfy.context_windows.get_matching_context_schedule(
+                context_schedule
+            ),
             fuse_method=comfy.context_windows.get_matching_fuse_method(fuse_method),
             context_length=latent_context_length,
             context_overlap=latent_context_overlap,
@@ -200,7 +225,11 @@ class BerniniContextWindowsCore:
         patched.model_options["context_handler"] = context_handler
         patched.model_options.setdefault("transformer_options", {})
         base_model = getattr(patched, "model", None)
-        if base_model is not None and callable(getattr(base_model, "extra_conds", None)) and hasattr(patched, "add_object_patch"):
+        if (
+            base_model is not None
+            and callable(getattr(base_model, "extra_conds", None))
+            and hasattr(patched, "add_object_patch")
+        ):
             patched.add_object_patch(
                 "extra_conds", service._make_extra_conds_with_bernini_roles(base_model)
             )

@@ -2,7 +2,10 @@
 
 from comfy_api.latest import io
 from ..attention import apply_sla_attention_patch, apply_sparse_attention_patch
-from ..adapters.minimax.veda.integration import configure as configure_veda, predictor_choices
+from ..adapters.minimax.veda.integration import (
+    configure as configure_veda,
+    predictor_choices,
+)
 from ..adapters.minimax.veda.predictor import PRECISIONS
 
 
@@ -226,22 +229,45 @@ def sla_inputs():
 
 
 def veda_inputs():
-    inputs = {"required": {
-        "model": ("MODEL",),
-        "predictor_name": (predictor_choices(),),
-        "predictor_precision": (list(PRECISIONS), {"default": "w8a8"}),
-        "keep_ratio": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 1.0, "step": 0.01, "tooltip": "0 uses the predictor's trained keep ratio; 1 keeps full attention."}),
-        "reference_keep_ratio": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 1.0, "step": 0.01, "tooltip": "0 uses the predictor's trained keep ratio; 1 keeps references dense in both directions."}),
-        "plan_policy": (["nearest", "strict"],),
-        "dense_prefix_steps": ("INT", {"default": 0, "min": 0, "max": 10000}),
-        "dense_suffix_steps": ("INT", {"default": 0, "min": 0, "max": 10000}),
-        "dense_prefix_layers": ("INT", {"default": 0, "min": 0, "max": 10000}),
-        "dense_suffix_layers": ("INT", {"default": 0, "min": 0, "max": 10000}),
-        "debug": ("BOOLEAN", {"default": False}),
-    }}
+    inputs = {
+        "required": {
+            "model": ("MODEL",),
+            "predictor_name": (predictor_choices(),),
+            "predictor_precision": (list(PRECISIONS), {"default": "w8a8"}),
+            "keep_ratio": (
+                "FLOAT",
+                {
+                    "default": 0.0,
+                    "min": 0.0,
+                    "max": 1.0,
+                    "step": 0.01,
+                    "tooltip": "0 uses the predictor's trained keep ratio; 1 keeps full attention.",
+                },
+            ),
+            "reference_keep_ratio": (
+                "FLOAT",
+                {
+                    "default": 0.0,
+                    "min": 0.0,
+                    "max": 1.0,
+                    "step": 0.01,
+                    "tooltip": "0 uses the predictor's trained keep ratio; 1 keeps references dense in both directions.",
+                },
+            ),
+            "plan_policy": (["nearest", "strict"],),
+            "dense_prefix_steps": ("INT", {"default": 0, "min": 0, "max": 10000}),
+            "dense_suffix_steps": ("INT", {"default": 0, "min": 0, "max": 10000}),
+            "dense_prefix_layers": ("INT", {"default": 0, "min": 0, "max": 10000}),
+            "dense_suffix_layers": ("INT", {"default": 0, "min": 0, "max": 10000}),
+            "debug": ("BOOLEAN", {"default": False}),
+        }
+    }
     for name, spec in inputs["required"].items():
         if name not in ("model", "predictor_name", "predictor_precision"):
-            inputs["required"][name] = (spec[0], {**(spec[1] if len(spec) > 1 else {}), "advanced": True})
+            inputs["required"][name] = (
+                spec[0],
+                {**(spec[1] if len(spec) > 1 else {}), "advanced": True},
+            )
     return inputs
 
 
@@ -251,7 +277,12 @@ _ATTENTION_STRATEGIES = {
     "sla": apply_sla_attention_patch,
     "veda": configure_veda,
 }
-_COMMON_CONTROLS = {"routing_threshold", "sparsity_ratio", "predictor_name", "keep_ratio"}
+_COMMON_CONTROLS = {
+    "routing_threshold",
+    "sparsity_ratio",
+    "predictor_name",
+    "keep_ratio",
+}
 
 
 def _strategy_inputs(schema, *, advanced=False):
@@ -265,25 +296,40 @@ def _strategy_inputs(schema, *, advanced=False):
         options["optional"] = name in schema.get("optional", {})
         if isinstance(kind, list):
             return io.Combo.Input(name, options=kind, **options)
-        return {"INT": io.Int, "FLOAT": io.Float, "BOOLEAN": io.Boolean}[kind].Input(name, **options)
+        return {"INT": io.Int, "FLOAT": io.Float, "BOOLEAN": io.Boolean}[kind].Input(
+            name, **options
+        )
 
     inputs = []
     for name in specs:
         if name == "model":
             continue
-        if "prefix_policy" in specs and (name == "manual_prefix_tokens" or name.startswith("sparse_reference_")):
+        if "prefix_policy" in specs and (
+            name == "manual_prefix_tokens" or name.startswith("sparse_reference_")
+        ):
             continue
         if name == "prefix_policy":
-            inputs.append(io.DynamicCombo.Input(
-                name,
-                options=[
-                    io.DynamicCombo.Option("auto", [widget(key) for key in specs if key.startswith("sparse_reference_")]),
-                    io.DynamicCombo.Option("none", []),
-                    io.DynamicCombo.Option("manual", [widget("manual_prefix_tokens")]),
-                ],
-                extra_dict={"advanced": advanced},
-                tooltip=specs[name][1]["tooltip"],
-            ))
+            inputs.append(
+                io.DynamicCombo.Input(
+                    name,
+                    options=[
+                        io.DynamicCombo.Option(
+                            "auto",
+                            [
+                                widget(key)
+                                for key in specs
+                                if key.startswith("sparse_reference_")
+                            ],
+                        ),
+                        io.DynamicCombo.Option("none", []),
+                        io.DynamicCombo.Option(
+                            "manual", [widget("manual_prefix_tokens")]
+                        ),
+                    ],
+                    extra_dict={"advanced": advanced},
+                    tooltip=specs[name][1]["tooltip"],
+                )
+            )
         else:
             inputs.append(widget(name))
     return inputs
@@ -304,10 +350,15 @@ class AttentionStrategy(io.ComfyNode):
             ),
             inputs=[
                 io.Model.Input("model"),
-                io.DynamicCombo.Input("strategy", options=[
-                    io.DynamicCombo.Option(name, _strategy_inputs(node(), advanced=advanced))
-                    for name, node in _ATTENTION_INPUTS.items()
-                ]),
+                io.DynamicCombo.Input(
+                    "strategy",
+                    options=[
+                        io.DynamicCombo.Option(
+                            name, _strategy_inputs(node(), advanced=advanced)
+                        )
+                        for name, node in _ATTENTION_INPUTS.items()
+                    ],
+                ),
             ],
             outputs=[io.Model.Output("model")],
         )
@@ -326,7 +377,11 @@ class AttentionStrategy(io.ComfyNode):
             if policy == "manual":
                 settings["manual_prefix_tokens"] = prefix.get("manual_prefix_tokens", 0)
             elif policy == "auto":
-                for key in ("sparse_reference_image", "sparse_reference_video", "sparse_reference_audio"):
+                for key in (
+                    "sparse_reference_image",
+                    "sparse_reference_video",
+                    "sparse_reference_audio",
+                ):
                     if prefix.get(key) is not None:
                         settings[key] = prefix[key]
         return io.NodeOutput(_ATTENTION_STRATEGIES[name](model, **settings))

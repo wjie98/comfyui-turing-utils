@@ -260,7 +260,6 @@ def _sparse_dense_schedule(
     return dense
 
 
-
 def _sparse_dense_layer(
     transformer_options,
     dense_prefix_layers: int,
@@ -878,7 +877,9 @@ def turing_sol_sparse_attention(
                     layer_count,
                 )
         except (ImportError, OSError, RuntimeError, ValueError) as error:
-            LOG.warning_once("[Turing sparse debug] route density unavailable: %s", error)
+            LOG.warning_once(
+                "[Turing sparse debug] route density unavailable: %s", error
+            )
         if not aggregate_route_stats:
             route_keys.add(kernel_key)
     else:

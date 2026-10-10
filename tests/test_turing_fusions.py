@@ -117,14 +117,23 @@ class FusionDispatchTest(unittest.TestCase):
         offload = (None, None, None)
 
         with (
-            mock.patch("comfyui_turing_utils.hardware.is_supported_attention_device", return_value=True),
-            mock.patch("comfyui_turing_utils.quantization.dispatch.is_supported_tensor_core_device", return_value=True),
+            mock.patch(
+                "comfyui_turing_utils.hardware.is_supported_attention_device",
+                return_value=True,
+            ),
+            mock.patch(
+                "comfyui_turing_utils.quantization.dispatch.is_supported_tensor_core_device",
+                return_value=True,
+            ),
             mock.patch(
                 "comfy.ops.cast_bias_weight",
                 return_value=(weight, None, offload),
             ) as cast,
             mock.patch("comfy.ops.uncast_bias_weight") as uncast,
-            mock.patch("comfyui_turing_utils.quantization.dispatch.int8_linear", return_value=output) as int8_linear,
+            mock.patch(
+                "comfyui_turing_utils.quantization.dispatch.int8_linear",
+                return_value=output,
+            ) as int8_linear,
         ):
             result = turing_fusions.turing_linear_input_act(linear, x, "swiglu")
 
@@ -149,14 +158,23 @@ class FusionDispatchTest(unittest.TestCase):
                 output = torch.empty((2, 4), dtype=torch.bfloat16)
                 offload = (None, None, None)
                 with (
-                    mock.patch("comfyui_turing_utils.hardware.is_supported_attention_device", return_value=True),
-                    mock.patch("comfyui_turing_utils.quantization.dispatch.is_supported_tensor_core_device", return_value=True),
+                    mock.patch(
+                        "comfyui_turing_utils.hardware.is_supported_attention_device",
+                        return_value=True,
+                    ),
+                    mock.patch(
+                        "comfyui_turing_utils.quantization.dispatch.is_supported_tensor_core_device",
+                        return_value=True,
+                    ),
                     mock.patch(
                         "comfy.ops.cast_bias_weight",
                         return_value=(weight, None, offload),
                     ),
                     mock.patch("comfy.ops.uncast_bias_weight") as uncast,
-                    mock.patch("comfyui_turing_utils.quantization.dispatch.convrot_w4a4_linear", return_value=output) as kernel,
+                    mock.patch(
+                        "comfyui_turing_utils.quantization.dispatch.convrot_w4a4_linear",
+                        return_value=output,
+                    ) as kernel,
                 ):
                     result = turing_fusions.turing_linear_input_act(linear, x, "swiglu")
 
@@ -172,17 +190,24 @@ class FusionDispatchTest(unittest.TestCase):
         output = torch.empty((2, 4), dtype=torch.bfloat16)
         offload = (None, None, None)
         with (
-            mock.patch("comfyui_turing_utils.hardware.is_supported_attention_device", return_value=True),
-            mock.patch("comfyui_turing_utils.quantization.dispatch.is_supported_tensor_core_device", return_value=True),
+            mock.patch(
+                "comfyui_turing_utils.hardware.is_supported_attention_device",
+                return_value=True,
+            ),
+            mock.patch(
+                "comfyui_turing_utils.quantization.dispatch.is_supported_tensor_core_device",
+                return_value=True,
+            ),
             mock.patch(
                 "comfy.ops.cast_bias_weight", return_value=(weight, None, offload)
             ),
             mock.patch("comfy.ops.uncast_bias_weight"),
-            mock.patch("comfyui_turing_utils.quantization.dispatch.int8_linear", return_value=output) as kernel,
+            mock.patch(
+                "comfyui_turing_utils.quantization.dispatch.int8_linear",
+                return_value=output,
+            ) as kernel,
         ):
-            result = turing_fusions.turing_linear_input_act(
-                linear, x, "gelu_tanh"
-            )
+            result = turing_fusions.turing_linear_input_act(linear, x, "gelu_tanh")
 
         self.assertIs(result, output)
         self.assertEqual(kernel.call_args.kwargs["input_act"], "gelu_tanh")
@@ -194,7 +219,10 @@ class FusionDispatchTest(unittest.TestCase):
         output = torch.empty((2, 8), dtype=torch.bfloat16)
         offload = (None, None, None)
         with (
-            mock.patch("comfyui_turing_utils.hardware.is_supported_attention_device", return_value=True),
+            mock.patch(
+                "comfyui_turing_utils.hardware.is_supported_attention_device",
+                return_value=True,
+            ),
             mock.patch(
                 "comfyui_turing_utils.quantization.dispatch.is_supported_tensor_core_device",
                 return_value=True,
@@ -268,7 +296,9 @@ class FusionDispatchTest(unittest.TestCase):
             16,
         )
 
-    def test_large_w8_gemm_attempts_fixed_workspace_even_when_latency_heuristic_declines(self):
+    def test_large_w8_gemm_attempts_fixed_workspace_even_when_latency_heuristic_declines(
+        self,
+    ):
         from comfy_kitchen.backends import cuda as kitchen_cuda
 
         qactivation = torch.zeros((2, 16), dtype=torch.int8)
@@ -277,9 +307,7 @@ class FusionDispatchTest(unittest.TestCase):
         weight_scale = torch.ones(8, dtype=torch.float32)
         expected = torch.zeros((2, 8), dtype=torch.bfloat16)
         with (
-            mock.patch.object(
-                turing_ops, "TURING_INT8_GLOBAL_WORKSPACE_LIMIT", 16
-            ),
+            mock.patch.object(turing_ops, "TURING_INT8_GLOBAL_WORKSPACE_LIMIT", 16),
             mock.patch.object(
                 kitchen_cuda, "_prefer_turing_fused_int8", return_value=False
             ),
@@ -320,13 +348,18 @@ class FusionDispatchTest(unittest.TestCase):
         offload = (None, None, None)
 
         with (
-            mock.patch("comfyui_turing_utils.hardware.is_supported_attention_device", return_value=True),
+            mock.patch(
+                "comfyui_turing_utils.hardware.is_supported_attention_device",
+                return_value=True,
+            ),
             mock.patch(
                 "comfy.ops.cast_bias_weight",
                 return_value=(dense, None, offload),
             ),
             mock.patch("comfy.ops.uncast_bias_weight") as uncast,
-            mock.patch("comfyui_turing_utils.quantization.dispatch.int8_linear") as int8_linear,
+            mock.patch(
+                "comfyui_turing_utils.quantization.dispatch.int8_linear"
+            ) as int8_linear,
         ):
             result = turing_fusions.turing_linear_input_act(linear, x, "swiglu")
 
@@ -354,7 +387,11 @@ class FusionDispatchTest(unittest.TestCase):
             mock.patch.object(turing_fusions, "_segment_table", return_value=table),
             mock.patch.dict(
                 sys.modules,
-                {"comfyui_turing_utils_kernel": SimpleNamespace(turing_segmented_rms_adaln=kernel)},
+                {
+                    "comfyui_turing_utils_kernel": SimpleNamespace(
+                        turing_segmented_rms_adaln=kernel
+                    )
+                },
             ),
         ):
             result = turing_fusions.segmented_rms_adaln(
@@ -368,6 +405,7 @@ class FusionDispatchTest(unittest.TestCase):
         self.assertIs(kernel.call_args.args[0], x)
         self.assertIs(kernel.call_args.args[1], weight)
         self.assertIs(kernel.call_args.args[4], table)
+
 
 if __name__ == "__main__":
     unittest.main()

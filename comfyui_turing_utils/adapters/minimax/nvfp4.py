@@ -18,6 +18,8 @@ def install_nvfp4_mlp_fusions(model):
             continue
         if getattr(module.fc2, "quant_format", None) != "nvfp4":
             continue
-        model.add_object_patch(f"diffusion_model.{name}.forward", weak_method(_mlp_forward, module))
+        model.add_object_patch(
+            f"diffusion_model.{name}.forward", weak_method(_mlp_forward, module)
+        )
         count += 1
     return count

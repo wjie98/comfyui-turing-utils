@@ -20,19 +20,28 @@
 - 新增卡片只插入新原生节点，不重载项目、不重建已有控件和连线；会话裁剪状态保持不变。
 - 项目读取在单次请求内复用 canvas.json 快照；布局保存只检查已连线卡片的接口，
   不展开执行图、不读取无连线卡片。编译执行时仍重新校验实际卡片内容。
+- 展示只生成卡片描述，不展开计算图；执行只展开目标卡片。跨卡片读取已发布素材，
+  不为了执行一张卡片加载所有卡片的工作流。
+- 素材发布先持久化任务意图，再更新 canvas.json。中断后重试或重新打开项目可恢复；
+  不覆盖之后发生的手工选择，也不重复增加选择版本。
+- 缩略图服务限制并发并合并重复请求；请求取消不取消其它请求正在等待的解码。
+  保存队列仅保留未完成的操作，完成后释放，不随访问过的项目数量增长。
 - 原生界面只保留一套选择、连线保存和任务提交 API；不保留旧独立网页的重复入口。
 - 同目录与类型的历史 combo 共享已加载的文件列表；内容变化后显式刷新。
   不缓存媒体解码张量或另存模型权重，不改变原生历史下拉的使用方式。
 
 ## 代码归属
 
-- web/material_workspace.js：原生节点、命令、标签页、局部执行交互。
+- web/material_workspace.js：原生节点、命令、标签页、局部执行交互的入口。
+- web/workspace/api.js、project_state.js、material_controls.js：请求反馈、保存队列和预览生命周期。
 - web/lib/canvas_ports.js、endpoint_interaction.js：普通工作流端点的动态插槽。
 - web/lib/port_reorder.js：端口排序、取消和局部动画；不维护另一份图。
 - web/lib/material_combo.js、directory_picker.js：原生文件下拉适配和受限目录弹窗。
 - workspace/native.py：项目图表示及保存校验。
-- workspace/store.py、workflow_files.py：素材与实例持久化。
-- workspace/compiler.py、cache.py：局部计算编译及中间结果清理。
+- workspace/store.py、workflow_files.py、runs.py：素材与实例持久化、可恢复发布。
+- workspace/projection.py、tasks.py、compiler.py：展示描述与局部计算编译。
+- workspace/execution.py、cache.py：普通节点新鲜执行及中间结果清理。
+- workspace/materials.py、previews.py、directories.py：媒体读写、受限缩略图和目录操作。
 - workspace/routes.py：受限项目、模板和素材 API。
 
 ## 回归

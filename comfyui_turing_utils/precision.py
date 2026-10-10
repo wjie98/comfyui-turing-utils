@@ -17,12 +17,13 @@ from .attention import (
 from .hardware import is_supported_tensor_core_device, is_supported_turing_device
 from .kernel_api import load_kernel_package
 from .log import get_logger
-from .quantization.dispatch import (
-    backend_available,
+from .quantization.backend import register_backend
+from .quantization.capabilities import kitchen_backend_available as backend_available
+from .quantization.formats import describe_weight_storage
+from .quantization.preflight import (
     preflight_kitchen,
     preflight_codebook_w4a8,
     preflight_w4a8,
-    register_backend,
 )
 
 
@@ -30,9 +31,8 @@ LOG = get_logger("precision")
 MIN_KITCHEN_VERSION = (0, 2, 26)
 MIN_KERNEL_VERSION = (0, 8, 0)
 MIN_CODEBOOK_W4A8_KERNEL_VERSION = (0, 24, 0)
-_CONVROT_W4_LAYOUT = "TensorCoreConvRotW4A4Layout"
-_CODEBOOK_W4_LAYOUT = "AsymW4A8Int8Layout"
-_TENSORWISE_INT8_LAYOUT = "TensorWiseINT8Layout"
+MIN_W6A8_KERNEL_VERSION = (0, 45, 0)
+MIN_W6A8_KITCHEN_VERSION = (0, 2, 37)
 
 
 def _explicit_dtype_override() -> bool:
@@ -60,13 +60,13 @@ def _version_tuple(value: str) -> tuple[int, int, int]:
     return tuple((numeric + [0, 0, 0])[:3])
 
 
-def _check_kitchen_contract() -> None:
+def _check_kitchen_contract(minimum_version=MIN_KITCHEN_VERSION) -> None:
     try:
         kitchen_version = version("comfy-kitchen")
     except PackageNotFoundError as exc:
         raise RuntimeError("Turing ConvRot execution requires comfy-kitchen") from exc
-    if _version_tuple(kitchen_version) < MIN_KITCHEN_VERSION:
-        required = ".".join(str(value) for value in MIN_KITCHEN_VERSION)
+    if _version_tuple(kitchen_version) < minimum_version:
+        required = ".".join(str(value) for value in minimum_version)
         raise RuntimeError(
             f"Turing Utils requires comfy-kitchen>={required}, got {kitchen_version}. Update ComfyUI."
         )
@@ -116,19 +116,23 @@ def prepare_turing_runtime(
     if attention_backend is not None:
         attention_backend = normalize_attention_backend(attention_backend)
     codebook_w4a8 = bool(getattr(summary, "codebook_w4a8", 0))
+    w6a8 = bool(getattr(summary, "w6a8", 0))
     bundled_w8a8 = attention_backend == "w8a8"
-    bundled_sage = (
-        attention_backend == "sage" and is_supported_turing_device(device)
+    bundled_sage = attention_backend == "sage" and is_supported_turing_device(device)
+    needs_kernel = (
+        bool(summary.w4a4 or summary.w4a8 or codebook_w4a8 or w6a8 or summary.w8a8)
+        or bundled_w8a8
+        or bundled_sage
     )
-    needs_kernel = bool(
-        summary.w4a4 or summary.w4a8 or codebook_w4a8 or summary.w8a8
-    ) or bundled_w8a8 or bundled_sage
     if needs_kernel:
         _check_kernel_contract()
     if codebook_w4a8:
         _check_kernel_contract(MIN_CODEBOOK_W4A8_KERNEL_VERSION)
+    if w6a8:
+        _check_kernel_contract(MIN_W6A8_KERNEL_VERSION)
+        _check_kitchen_contract(MIN_W6A8_KITCHEN_VERSION)
 
-    if summary.w4a4 or summary.w4a8 or codebook_w4a8 or summary.w8a8:
+    if summary.w4a4 or summary.w4a8 or codebook_w4a8 or w6a8 or summary.w8a8:
         _check_kitchen_contract()
         import comfy_kitchen
 
@@ -139,7 +143,7 @@ def prepare_turing_runtime(
         capabilities = set(cuda_status.get("capabilities", ()))
         if (summary.w4a4 or summary.w4a8) and "convrot_w4a4_linear" not in capabilities:
             raise RuntimeError("Kitchen ConvRot W4 support is unavailable")
-        if codebook_w4a8 and "w4a8_int8_linear" not in capabilities:
+        if (codebook_w4a8 or w6a8) and "w4a8_int8_linear" not in capabilities:
             raise RuntimeError("Kitchen grouped-codebook W4A8 support is unavailable")
         if summary.w8a8 and "int8_linear" not in capabilities:
             raise RuntimeError("Kitchen W8A8 support is unavailable")
@@ -150,10 +154,14 @@ def prepare_turing_runtime(
             preflight_w4a8(device)
         if codebook_w4a8:
             preflight_codebook_w4a8(device)
+        if w6a8:
+            preflight_codebook_w4a8(device, bits=6)
 
     if bundled_w8a8:
         if not bundled_w8a8_available():
-            raise RuntimeError("the bundled sm75+ W8A8 attention extension is unavailable")
+            raise RuntimeError(
+                "the bundled sm75+ W8A8 attention extension is unavailable"
+            )
         preflight_bundled_w8a8(device)
     elif bundled_sage:
         if not bundled_available():
@@ -213,25 +221,33 @@ def normalize_turing_convrot_weight_dtypes(
         if not isinstance(weight, QuantizedTensor):
             continue
 
-        layout = getattr(weight, "_layout_cls", None)
         params = getattr(weight, "_params", None)
-        is_convrot = layout in {_CONVROT_W4_LAYOUT, _CODEBOOK_W4_LAYOUT} or (
-            layout == _TENSORWISE_INT8_LAYOUT and bool(getattr(params, "convrot", False))
-        )
-        if not is_convrot:
+        storage = describe_weight_storage(weight)
+        if storage is None or storage.rotation_group is None:
             continue
 
         matched += 1
-        if weight.dtype is not torch.bfloat16 or getattr(params, "orig_dtype", None) is not torch.bfloat16:
+        if (
+            weight.dtype is not torch.bfloat16
+            or getattr(params, "orig_dtype", None) is not torch.bfloat16
+        ):
             try:
-                normalized_params = dataclasses.replace(params, orig_dtype=torch.bfloat16)
-                normalized_weight = QuantizedTensor(weight._qdata, weight._layout_cls, normalized_params)
-                normalized_parameter = torch.nn.Parameter(normalized_weight, requires_grad=False)
+                normalized_params = dataclasses.replace(
+                    params, orig_dtype=torch.bfloat16
+                )
+                normalized_weight = QuantizedTensor(
+                    weight._qdata, weight._layout_cls, normalized_params
+                )
+                normalized_parameter = torch.nn.Parameter(
+                    normalized_weight, requires_grad=False
+                )
                 normalized_parameter._params = normalized_params
                 module.register_parameter("weight", normalized_parameter)
             except Exception as exc:
                 layer = module_name or "<root>"
-                raise RuntimeError(f"Could not normalize Turing ConvRot weight dtype for {layer}") from exc
+                raise RuntimeError(
+                    f"Could not normalize Turing ConvRot weight dtype for {layer}"
+                ) from exc
             normalized += 1
 
         module.weight_comfy_model_dtype = torch.bfloat16

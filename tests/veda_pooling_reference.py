@@ -16,8 +16,7 @@ import torch
 from comfyui_turing_utils.adapters.minimax.veda import tiling
 
 
-def pool_video_tiles(x: torch.Tensor,
-                     layout: tiling.TileLayout) -> torch.Tensor:
+def pool_video_tiles(x: torch.Tensor, layout: tiling.TileLayout) -> torch.Tensor:
     """Masked mean / max / min over the real rows of every video tile.
 
     Global tiles are never scored (they are always attended), so they are
@@ -32,8 +31,7 @@ def pool_video_tiles(x: torch.Tensor,
     """
     n_tiles = layout.n_video_tiles
     heads, dim = x.shape[1], x.shape[2]
-    tiles = x[:n_tiles * tiling.TILE_SIZE].view(n_tiles, tiling.TILE_SIZE,
-                                                heads, dim)
+    tiles = x[: n_tiles * tiling.TILE_SIZE].view(n_tiles, tiling.TILE_SIZE, heads, dim)
     count = layout.valid_count[:n_tiles].clamp(min=1).to(torch.float32)
     # Sum with fp32 accumulation instead of upcasting the whole tensor.
     mean = tiles.sum(dim=1, dtype=torch.float32) / count[:, None, None]
@@ -45,13 +43,13 @@ def pool_video_tiles(x: torch.Tensor,
     partial = layout.partial_video_tiles
     if partial.numel():
         sub = tiles.index_select(0, partial)
-        valid = (torch.arange(tiling.TILE_SIZE, device=x.device)[None, :]
-                 < layout.valid_count.index_select(0, partial)[:, None])
+        valid = (
+            torch.arange(tiling.TILE_SIZE, device=x.device)[None, :]
+            < layout.valid_count.index_select(0, partial)[:, None]
+        )
         valid = valid[:, :, None, None]
-        tmax.index_copy_(0, partial,
-                         sub.masked_fill(~valid, float('-inf')).amax(dim=1))
-        tmin.index_copy_(0, partial,
-                         sub.masked_fill(~valid, float('inf')).amin(dim=1))
+        tmax.index_copy_(0, partial, sub.masked_fill(~valid, float("-inf")).amax(dim=1))
+        tmin.index_copy_(0, partial, sub.masked_fill(~valid, float("inf")).amin(dim=1))
     feats = torch.cat([mean, tmax.float(), tmin.float()], dim=-1)
     # where, not multiply: -inf * 0 would be NaN for empty tiles.
     feats = torch.where(layout.kv_ok[:n_tiles, None, None], feats, 0.0)

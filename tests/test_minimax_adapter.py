@@ -15,6 +15,12 @@ COMFY_ROOT = PLUGIN_ROOT.parents[1]
 sys.path.insert(0, str(COMFY_ROOT))
 sys.path.insert(0, str(PLUGIN_ROOT))
 
+from comfyui_turing_utils.adapters.minimax import (
+    attention_ops as minimax_attention_ops,
+    execution as minimax_execution,
+    memory_planning as minimax_memory_planning,
+    mlp as minimax_mlp,
+)
 from comfyui_turing_utils.adapters.minimax import acceleration as minimax_adapter  # noqa: E402
 from comfyui_turing_utils.adapters.minimax.compat import make_packed_layout  # noqa: E402
 from comfyui_turing_utils.attention.protocol import (  # noqa: E402
@@ -88,8 +94,12 @@ class MiniMaxAdapterTest(unittest.TestCase):
 
             def __init__(self):
                 super().__init__()
-                self.qkv_proj = torch.nn.Linear(128, 384, bias=False, dtype=torch.bfloat16)
-                self.out_proj = torch.nn.Linear(128, 128, bias=False, dtype=torch.bfloat16)
+                self.qkv_proj = torch.nn.Linear(
+                    128, 384, bias=False, dtype=torch.bfloat16
+                )
+                self.out_proj = torch.nn.Linear(
+                    128, 128, bias=False, dtype=torch.bfloat16
+                )
                 self.q_norm = torch.nn.RMSNorm(64, eps=1e-6, dtype=torch.bfloat16)
                 self.k_norm = torch.nn.RMSNorm(64, eps=1e-6, dtype=torch.bfloat16)
 
@@ -108,7 +118,7 @@ class MiniMaxAdapterTest(unittest.TestCase):
                 torch.zeros((1, 64, 128), dtype=torch.bfloat16)
             )
 
-        patched = minimax_adapter._make_attention_forward(
+        patched = minimax_attention_ops._make_attention_forward(
             attention, AttentionTensorContainer
         )
         x = torch.randn(64, 128, dtype=torch.bfloat16)
@@ -170,7 +180,9 @@ class MiniMaxAdapterTest(unittest.TestCase):
                 self.attn = torch.nn.Identity()
                 self.mlp = FakeMLP()
 
-            def forward(self, x, t_emb, mod_segments, rope_freqs, transformer_options={}):
+            def forward(
+                self, x, t_emb, mod_segments, rope_freqs, transformer_options={}
+            ):
                 return x
 
         return FakeBlock, FakeMLP
@@ -187,7 +199,10 @@ class MiniMaxAdapterTest(unittest.TestCase):
                 original_block_forward = root.block.forward
                 original_mlp_forward = root.block.mlp.forward
                 with (
-                    mock.patch("comfyui_turing_utils.adapters.minimax.acceleration.is_supported_attention_device", return_value=True),
+                    mock.patch(
+                        "comfyui_turing_utils.adapters.minimax.acceleration.is_supported_attention_device",
+                        return_value=True,
+                    ),
                     mock.patch.object(minimax_model, "DiTBlock", FakeBlock),
                     mock.patch.dict(
                         sys.modules,
@@ -209,8 +224,12 @@ class MiniMaxAdapterTest(unittest.TestCase):
                     set(patcher.object_patches),
                     {"block.forward", "block.mlp.forward"},
                 )
-                self.assertIs(root.block.forward.__func__, original_block_forward.__func__)
-                self.assertIs(root.block.mlp.forward.__func__, original_mlp_forward.__func__)
+                self.assertIs(
+                    root.block.forward.__func__, original_block_forward.__func__
+                )
+                self.assertIs(
+                    root.block.mlp.forward.__func__, original_mlp_forward.__func__
+                )
 
     def test_changed_block_contract_disables_adapter_cleanly(self):
         import comfy.ldm.minimax.model as minimax_model
@@ -223,7 +242,10 @@ class MiniMaxAdapterTest(unittest.TestCase):
         root.block = ChangedBlock()
         patcher = FakePatcher(root)
         with (
-            mock.patch("comfyui_turing_utils.adapters.minimax.acceleration.is_supported_attention_device", return_value=True),
+            mock.patch(
+                "comfyui_turing_utils.adapters.minimax.acceleration.is_supported_attention_device",
+                return_value=True,
+            ),
             mock.patch.object(minimax_model, "DiTBlock", ChangedBlock),
             self.assertLogs("comfyui-turing-utils", level="WARNING"),
         ):
@@ -235,7 +257,9 @@ class MiniMaxAdapterTest(unittest.TestCase):
         self.assertFalse(patcher.object_patches)
 
     def test_runtime_audit_reports_a_complete_fused_window_once(self):
-        audit = minimax_adapter._RuntimeDispatchAudit(expected_blocks=2, expected_mlps=2)
+        audit = minimax_execution._RuntimeDispatchAudit(
+            expected_blocks=2, expected_mlps=2
+        )
         x = torch.zeros((3, 256), dtype=torch.bfloat16)
         with self.assertLogs("comfyui-turing-utils", level="DEBUG") as captured:
             audit.record("block", True, x)
@@ -252,8 +276,10 @@ class MiniMaxAdapterTest(unittest.TestCase):
     def test_runtime_audit_exposes_mlp_dtype_fallback(self):
         FakeBlock, _ = self._types("w8a8")
         mlp = FakeBlock().mlp
-        audit = minimax_adapter._RuntimeDispatchAudit(expected_blocks=0, expected_mlps=1)
-        patched = minimax_adapter._make_mlp_forward(mlp, audit)
+        audit = minimax_execution._RuntimeDispatchAudit(
+            expected_blocks=0, expected_mlps=1
+        )
+        patched = minimax_mlp._make_mlp_forward(mlp, audit)
         x = torch.zeros((3, 256), dtype=torch.float32)
 
         with self.assertLogs("comfyui-turing-utils", level="WARNING") as captured:
@@ -266,22 +292,24 @@ class MiniMaxAdapterTest(unittest.TestCase):
     def test_runtime_audit_keeps_fused_w8a8_mlp_dispatch(self):
         FakeBlock, _ = self._types("w8a8")
         mlp = FakeBlock().mlp
-        audit = minimax_adapter._RuntimeDispatchAudit(expected_blocks=0, expected_mlps=1)
-        patched = minimax_adapter._make_mlp_forward(mlp, audit)
+        audit = minimax_execution._RuntimeDispatchAudit(
+            expected_blocks=0, expected_mlps=1
+        )
+        patched = minimax_mlp._make_mlp_forward(mlp, audit)
         x = torch.zeros((3, 256), dtype=torch.bfloat16)
         sentinel = object()
 
         with (
             mock.patch(
-                "comfyui_turing_utils.adapters.minimax.acceleration.is_supported_attention_device",
+                "comfyui_turing_utils.adapters.minimax.mlp.is_supported_attention_device",
                 return_value=True,
             ),
             mock.patch(
-                "comfyui_turing_utils.adapters.minimax.acceleration.decide_activation_chunks",
+                "comfyui_turing_utils.adapters.minimax.mlp.decide_activation_chunks",
                 return_value=SimpleNamespace(streamed=False, chunk_rows=0),
             ),
             mock.patch(
-                "comfyui_turing_utils.adapters.minimax.acceleration.fused_convrot_linear_input_act",
+                "comfyui_turing_utils.adapters.minimax.mlp.fused_convrot_linear_input_act",
                 return_value=sentinel,
             ) as fused,
             self.assertLogs("comfyui-turing-utils", level="DEBUG") as captured,
@@ -295,7 +323,9 @@ class MiniMaxAdapterTest(unittest.TestCase):
     def test_block_forward_publishes_semantic_attention_prefix(self):
         FakeBlock, _ = self._types("w8a8")
         block = FakeBlock()
-        audit = minimax_adapter._RuntimeDispatchAudit(expected_blocks=1, expected_mlps=0)
+        audit = minimax_execution._RuntimeDispatchAudit(
+            expected_blocks=1, expected_mlps=0
+        )
         patched = minimax_adapter._make_block_forward(
             block,
             0,
@@ -326,9 +356,18 @@ class MiniMaxAdapterTest(unittest.TestCase):
 
         torch.manual_seed(321)
         block = DiTBlock(
-            hidden=128, heads=1, head_dim=128, ffn=64, t_dim=32,
-            eps=1e-5, qk_eps=1e-6, dtype=dtype, device=device,
-            operations=SimpleNamespace(Linear=torch.nn.Linear, RMSNorm=torch.nn.RMSNorm),
+            hidden=128,
+            heads=1,
+            head_dim=128,
+            ffn=64,
+            t_dim=32,
+            eps=1e-5,
+            qk_eps=1e-6,
+            dtype=dtype,
+            device=device,
+            operations=SimpleNamespace(
+                Linear=torch.nn.Linear, RMSNorm=torch.nn.RMSNorm
+            ),
         )
         x = torch.randn(27, 128, device=device, dtype=dtype)
         t_emb = torch.randn(3, 32, device=device, dtype=dtype)
@@ -345,34 +384,58 @@ class MiniMaxAdapterTest(unittest.TestCase):
                 segments = [(0, 3, 1), (3, 11, audio_row), (11, 27, video_row)]
                 options = {}
                 audit = mock.Mock()
-                with mock.patch.object(minimax_adapter, "segmented_modulation_schema", return_value=0):
-                    patched = minimax_adapter._make_block_forward(block, 0, _mod_gate, audit)
+                with mock.patch.object(
+                    minimax_adapter, "segmented_modulation_schema", return_value=0
+                ):
+                    patched = minimax_adapter._make_block_forward(
+                        block, 0, _mod_gate, audit
+                    )
                 # Verify fallback preserves the attention override and MLP calls.
                 attention = mock.Mock(wraps=block.attn.forward)
                 with (
                     torch.inference_mode(),
-                    mock.patch.object(block.mlp, "forward", wraps=block.mlp.forward) as mlp,
+                    mock.patch.object(
+                        block.mlp, "forward", wraps=block.mlp.forward
+                    ) as mlp,
                 ):
                     expected = block.forward(
-                        x.clone(), t_emb, segments, None,
-                        transformer_options=options, attention=attention,
+                        x.clone(),
+                        t_emb,
+                        segments,
+                        None,
+                        transformer_options=options,
+                        attention=attention,
                     )
                     mlp.reset_mock()
                     attention.reset_mock()
                     with (
-                        mock.patch.object(minimax_adapter, "_block_fusion_blocker", return_value=None),
-                        mock.patch.object(minimax_adapter, "segmented_rms_adaln") as fused_norm,
-                        mock.patch.object(minimax_adapter, "segmented_mod_gate_rms_adaln") as fused_gate_norm,
-                        mock.patch.object(minimax_adapter, "segmented_mod_gate") as fused_gate,
+                        mock.patch.object(
+                            minimax_adapter, "_block_fusion_blocker", return_value=None
+                        ),
+                        mock.patch.object(
+                            minimax_adapter, "segmented_rms_adaln"
+                        ) as fused_norm,
+                        mock.patch.object(
+                            minimax_adapter, "segmented_mod_gate_rms_adaln"
+                        ) as fused_gate_norm,
+                        mock.patch.object(
+                            minimax_adapter, "segmented_mod_gate"
+                        ) as fused_gate,
                     ):
                         actual = patched(
-                            x.clone(), t_emb, segments, None,
-                            transformer_options=options, attention=attention,
+                            x.clone(),
+                            t_emb,
+                            segments,
+                            None,
+                            transformer_options=options,
+                            attention=attention,
                         )
                 torch.testing.assert_close(actual, expected, rtol=0, atol=0)
                 attention.assert_called_once()
                 mlp.assert_called_once()
-                self.assertIs(attention.call_args.kwargs["transformer_options"], options)
+                self.assertIs(
+                    attention.call_args.kwargs["transformer_options"], options
+                )
                 fused_norm.assert_not_called()
                 fused_gate_norm.assert_not_called()
                 fused_gate.assert_not_called()
@@ -396,10 +459,18 @@ class MiniMaxAdapterTest(unittest.TestCase):
         audit = mock.Mock()
         patched = minimax_adapter._make_block_forward(block, 0, mock.Mock(), audit)
         with (
-            mock.patch.object(minimax_adapter, "_block_fusion_blocker", return_value=None),
-            mock.patch.object(minimax_adapter, "segmented_rms_adaln", return_value=x) as norm,
-            mock.patch.object(minimax_adapter, "segmented_mod_gate_rms_adaln", return_value=(x, x)) as gate_norm,
-            mock.patch.object(minimax_adapter, "segmented_mod_gate", return_value=x) as gate,
+            mock.patch.object(
+                minimax_adapter, "_block_fusion_blocker", return_value=None
+            ),
+            mock.patch.object(
+                minimax_adapter, "segmented_rms_adaln", return_value=x
+            ) as norm,
+            mock.patch.object(
+                minimax_adapter, "segmented_mod_gate_rms_adaln", return_value=(x, x)
+            ) as gate_norm,
+            mock.patch.object(
+                minimax_adapter, "segmented_mod_gate", return_value=x
+            ) as gate,
         ):
             result = patched(x, x, [(0, 4, 0)], None)
         self.assertIs(result, x)
@@ -437,7 +508,7 @@ class MiniMaxAdapterTest(unittest.TestCase):
             "minimax_keyframes": keyframes,
             "minimax_refs": refs,
         }
-        plan = minimax_adapter._minimax_memory_shape(
+        plan = minimax_memory_planning._minimax_memory_shape(
             kwargs, self._latent_shapes(), self._diffusion_spec()
         )
         layout = make_packed_layout(
@@ -471,20 +542,18 @@ class MiniMaxAdapterTest(unittest.TestCase):
     def test_memory_rows_cover_zero_one_and_many_reference_inputs(self):
         spec = self._diffusion_spec()
         shapes = self._latent_shapes()
-        baseline = minimax_adapter._minimax_memory_shape(
+        baseline = minimax_memory_planning._minimax_memory_shape(
             {"cross_attn": torch.empty(1, 5, 5120)}, shapes, spec
         )
-        one = minimax_adapter._minimax_memory_shape(
+        one = minimax_memory_planning._minimax_memory_shape(
             {
                 "cross_attn": torch.empty(1, 7, 5120),
-                "minimax_refs": [
-                    {"kind": "image", "latent_h": 6, "latent_w": 8}
-                ],
+                "minimax_refs": [{"kind": "image", "latent_h": 6, "latent_w": 8}],
             },
             shapes,
             spec,
         )
-        many = minimax_adapter._minimax_memory_shape(
+        many = minimax_memory_planning._minimax_memory_shape(
             {
                 "cross_attn": torch.empty(1, 13, 5120),
                 "minimax_refs": [
@@ -511,28 +580,28 @@ class MiniMaxAdapterTest(unittest.TestCase):
 
     def test_memory_required_uses_buffer_floor_and_all_w8_outputs(self):
         class Base:
-            memory_usage_factor_conds = (minimax_adapter._MEMORY_SHAPE_KEY,)
+            memory_usage_factor_conds = (minimax_memory_planning._MEMORY_SHAPE_KEY,)
 
             def get_dtype_inference(self):
                 return torch.bfloat16
 
             def memory_required(self, input_shape, cond_shapes={}):
                 shapes = [input_shape]
-                shapes.extend(cond_shapes.get(minimax_adapter._MEMORY_SHAPE_KEY, ()))
+                shapes.extend(
+                    cond_shapes.get(minimax_memory_planning._MEMORY_SHAPE_KEY, ())
+                )
                 return sum(shape[0] * math.prod(shape[2:]) for shape in shapes)
 
-        plan = minimax_adapter._minimax_memory_shape(
+        plan = minimax_memory_planning._minimax_memory_shape(
             {
                 "cross_attn": torch.empty(1, 11, 5120),
-                "minimax_refs": [
-                    {"kind": "image", "latent_h": 6, "latent_w": 8}
-                ],
+                "minimax_refs": [{"kind": "image", "latent_h": 6, "latent_w": 8}],
             },
             self._latent_shapes(),
             self._diffusion_spec(),
         )
         base = Base()
-        base.memory_required = minimax_adapter._make_memory_required(
+        base.memory_required = minimax_memory_planning._make_memory_required(
             base, (2048, 4096), (8192,)
         )
         target_area = 24 * 7 * 8 * 10 + 32 * 2 * 12
@@ -542,7 +611,7 @@ class MiniMaxAdapterTest(unittest.TestCase):
         ):
             required = base.memory_required(
                 [1, 1, target_area],
-                cond_shapes={minimax_adapter._MEMORY_SHAPE_KEY: [plan]},
+                cond_shapes={minimax_memory_planning._MEMORY_SHAPE_KEY: [plan]},
             )
 
         explicit = plan.explicit_condition_bytes(2)
@@ -557,10 +626,10 @@ class MiniMaxAdapterTest(unittest.TestCase):
 
         class Executor:
             def __call__(self, *args, **kwargs):
-                seen.append(getattr(base, minimax_adapter._MEMORY_CONTEXT_ATTR))
+                seen.append(getattr(base, minimax_memory_planning._MEMORY_CONTEXT_ATTR))
                 return "ok"
 
-        wrapper = minimax_adapter._make_outer_sample_wrapper(base)
+        wrapper = minimax_memory_planning._make_outer_sample_wrapper(base)
         result = wrapper(
             Executor(),
             torch.empty(1, 1, 16),
@@ -576,10 +645,8 @@ class MiniMaxAdapterTest(unittest.TestCase):
 
         self.assertEqual(result, "ok")
         self.assertEqual(seen[0]["latent_shapes"], latent_shapes)
-        self.assertTrue(
-            callable(seen[0]["activation_plan"].observe_available)
-        )
-        self.assertFalse(hasattr(base, minimax_adapter._MEMORY_CONTEXT_ATTR))
+        self.assertTrue(callable(seen[0]["activation_plan"].observe_available))
+        self.assertFalse(hasattr(base, minimax_memory_planning._MEMORY_CONTEXT_ATTR))
 
     def test_memory_required_includes_serial_activation_floor_when_profiled(self):
         class Base:
@@ -589,7 +656,7 @@ class MiniMaxAdapterTest(unittest.TestCase):
             def memory_required(self, input_shape, cond_shapes={}):
                 return 100
 
-        plan = minimax_adapter._MiniMaxMemoryShape(
+        plan = minimax_memory_planning._MiniMaxMemoryShape(
             1,
             full_rows=127_275,
             target_rows=127_275,
@@ -601,19 +668,19 @@ class MiniMaxAdapterTest(unittest.TestCase):
             video_row_width=96,
             audio_row_width=32,
         )
-        profile = minimax_adapter._MiniMaxActivationProfile(
+        profile = minimax_memory_planning._MiniMaxActivationProfile(
             hidden_size=5376,
             heads=56,
             head_dim=128,
             expanded_size=14_336,
         )
         base = Base()
-        base.memory_required = minimax_adapter._make_memory_required(
+        base.memory_required = minimax_memory_planning._make_memory_required(
             base, (), (), profile
         )
         required = base.memory_required(
             [1, 1, 1],
-            cond_shapes={minimax_adapter._MEMORY_SHAPE_KEY: [plan]},
+            cond_shapes={minimax_memory_planning._MEMORY_SHAPE_KEY: [plan]},
         )
 
         self.assertEqual(
@@ -626,7 +693,7 @@ class MiniMaxAdapterTest(unittest.TestCase):
         latent_shapes = self._latent_shapes()
         setattr(
             base,
-            minimax_adapter._MEMORY_CONTEXT_ATTR,
+            minimax_memory_planning._MEMORY_CONTEXT_ATTR,
             {"latent_shapes": latent_shapes},
         )
         # Seven frames at 8x10 latent resolution with a 1x2x2 patch become
@@ -653,7 +720,7 @@ class MiniMaxAdapterTest(unittest.TestCase):
         base = SimpleNamespace()
         setattr(
             base,
-            minimax_adapter._MEMORY_CONTEXT_ATTR,
+            minimax_memory_planning._MEMORY_CONTEXT_ATTR,
             {"latent_shapes": self._latent_shapes()},
         )
 
@@ -672,23 +739,19 @@ class MiniMaxAdapterTest(unittest.TestCase):
                 return {"existing": object()}
 
         base = Base()
-        base.extra_conds = minimax_adapter._make_extra_conds(
+        base.extra_conds = minimax_memory_planning._make_extra_conds(
             base, self._diffusion_spec()
         )
         out = base.extra_conds(
             cross_attn=torch.empty(1, 9, 5120),
             latent_shapes=self._latent_shapes(),
-            minimax_refs=[
-                {"kind": "image", "latent_h": 6, "latent_w": 8}
-            ],
+            minimax_refs=[{"kind": "image", "latent_h": 6, "latent_w": 8}],
         )
-        cond = out[minimax_adapter._MEMORY_SHAPE_KEY]
-        expected = minimax_adapter._minimax_memory_shape(
+        cond = out[minimax_memory_planning._MEMORY_SHAPE_KEY]
+        expected = minimax_memory_planning._minimax_memory_shape(
             {
                 "cross_attn": torch.empty(1, 9, 5120),
-                "minimax_refs": [
-                    {"kind": "image", "latent_h": 6, "latent_w": 8}
-                ],
+                "minimax_refs": [{"kind": "image", "latent_h": 6, "latent_w": 8}],
             },
             self._latent_shapes(),
             self._diffusion_spec(),
@@ -727,18 +790,18 @@ class MiniMaxAdapterTest(unittest.TestCase):
         base = Base()
         patcher = FakePatcher(base)
         self.assertTrue(
-            minimax_adapter._install_memory_planning(
+            minimax_memory_planning._install_memory_planning(
                 patcher, base, base.diffusion_model
             )
         )
         self.assertFalse(
-            minimax_adapter._install_memory_planning(
+            minimax_memory_planning._install_memory_planning(
                 patcher, base, base.diffusion_model
             )
         )
         self.assertEqual(
             base.memory_usage_factor_conds,
-            ("existing", minimax_adapter._MEMORY_SHAPE_KEY),
+            ("existing", minimax_memory_planning._MEMORY_SHAPE_KEY),
         )
         # Runtime shape publication now belongs to the loader-independent H3
         # layout provider rather than the quantization memory planner.

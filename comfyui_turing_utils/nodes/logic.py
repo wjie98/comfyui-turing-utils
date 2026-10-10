@@ -119,9 +119,7 @@ class LazyIfElse(io.ComfyNode):
         )
 
     @classmethod
-    def check_lazy_status(
-        cls, condition, on_true=_MISSING, on_false=_MISSING
-    ):
+    def check_lazy_status(cls, condition, on_true=_MISSING, on_false=_MISSING):
         selected = on_true if condition else on_false
         if selected is _MISSING:
             return None
@@ -131,9 +129,7 @@ class LazyIfElse(io.ComfyNode):
             return ["on_false"]
 
     @classmethod
-    def execute(
-        cls, condition, on_true=_MISSING, on_false=_MISSING
-    ) -> io.NodeOutput:
+    def execute(cls, condition, on_true=_MISSING, on_false=_MISSING) -> io.NodeOutput:
         selected = on_true if condition else on_false
         return io.NodeOutput(None if selected is _MISSING else selected)
 
@@ -171,7 +167,10 @@ class StageBarrier(io.ComfyNode):
                         "scheduler can plan it before executing upstream nodes."
                     ),
                 ),
-                *[io.AnyType.Input(f"value_{index}", optional=True) for index in range(_STAGE_BARRIER_VALUES)],
+                *[
+                    io.AnyType.Input(f"value_{index}", optional=True)
+                    for index in range(_STAGE_BARRIER_VALUES)
+                ],
             ],
             outputs=[
                 io.AnyType.Output(f"value_{index}")
@@ -183,9 +182,13 @@ class StageBarrier(io.ComfyNode):
     def execute(cls, stage, **values) -> io.NodeOutput:
         stage = int(stage)
         if stage < 0:
-            raise ValueError("Stage Barrier stage must be greater than or equal to zero")
+            raise ValueError(
+                "Stage Barrier stage must be greater than or equal to zero"
+            )
 
-        outputs = [values.get(f"value_{index}") for index in range(_STAGE_BARRIER_VALUES)]
+        outputs = [
+            values.get(f"value_{index}") for index in range(_STAGE_BARRIER_VALUES)
+        ]
         LOG.debug("Stage Barrier reached: stage=%d values=%d", stage, len(values))
         return io.NodeOutput(*outputs)
 
@@ -199,7 +202,8 @@ class StagePath(io.ComfyNode):
             node_id=STAGE_PATH_NODE_ID,
             display_name="Stage Path (Internal)",
             category="",
-            description=INTERNAL_NODE_NOTE + (
+            description=INTERNAL_NODE_NOTE
+            + (
                 "Internal one-input/one-output Stage Barrier route. The server "
                 "creates this node while compiling a submitted workflow."
             ),

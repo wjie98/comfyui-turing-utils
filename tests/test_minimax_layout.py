@@ -14,11 +14,15 @@ COMFY_ROOT = PLUGIN_ROOT.parents[1]
 sys.path.insert(0, str(COMFY_ROOT))
 sys.path.insert(0, str(PLUGIN_ROOT))
 
-from comfyui_turing_utils.attention import patches as attention_patches, runtime as attention_runtime  # noqa: E402
+from comfyui_turing_utils.attention import (
+    patches as attention_patches,
+    runtime as attention_runtime,
+)  # noqa: E402
 from comfyui_turing_utils.adapters.minimax import layout as minimax_layout  # noqa: E402
 from comfyui_turing_utils.attention.layout import (  # noqa: E402
     ATTENTION_LAYOUT_REQUIREMENT_KEY,
     attention_semantic_layout,
+    has_complete_attention_layout,
 )
 
 
@@ -125,7 +129,10 @@ class MiniMaxLayoutProviderTest(unittest.TestCase):
 
         def executor(*args, **kwargs):
             patcher.model.diffusion_model.forward_callback = lambda: block_forward(
-                x, x, [(0, 64, 0), (64, 88, 2), (88, 228, 3)], None,
+                x,
+                x,
+                [(0, 64, 0), (64, 88, 2), (88, 228, 3)],
+                None,
                 transformer_options=options,
             )
             packed_layout = SimpleNamespace(
@@ -134,10 +141,13 @@ class MiniMaxLayoutProviderTest(unittest.TestCase):
                     (0, 64, "text"),
                     (64, 88, "audio"),
                     (88, 228, "video"),
-                ]
+                ],
             )
             return model_forward(
-                model_input, None, context, transformer_options=options,
+                model_input,
+                None,
+                context,
+                transformer_options=options,
                 minimax_payload={"layout": packed_layout, "refs": []},
             )
 
@@ -163,7 +173,9 @@ class MiniMaxLayoutProviderTest(unittest.TestCase):
         self.assertEqual(semantic.layer_index, 1)
         self.assertEqual(semantic.layer_count, 2)
         self.assertEqual(
-            tuple((item.start, item.stop, item.role) for item in semantic.query_segments),
+            tuple(
+                (item.start, item.stop, item.role) for item in semantic.query_segments
+            ),
             (
                 (0, 64, "text"),
                 (64, 88, "target_audio"),
@@ -171,11 +183,9 @@ class MiniMaxLayoutProviderTest(unittest.TestCase):
             ),
         )
         self.assertTrue(
-            minimax_layout.has_complete_minimax_attention_layout(options, 228)
+            has_complete_attention_layout(options, 228, provider="minimax_h3")
         )
-        self.assertFalse(
-            hasattr(patcher.model, minimax_layout.RUNTIME_CONTEXT_ATTR)
-        )
+        self.assertFalse(hasattr(patcher.model, minimax_layout.RUNTIME_CONTEXT_ATTR))
 
     def test_provider_installation_is_keyed_and_idempotent(self):
         patcher = FakePatcher()
@@ -256,7 +266,7 @@ class MiniMaxLayoutProviderTest(unittest.TestCase):
         self.assertEqual(layout["dense_prefix_tokens"], 64)
         self.assertNotIn("topology_tokens", layout)
         self.assertFalse(
-            minimax_layout.has_complete_minimax_attention_layout(options, 200)
+            has_complete_attention_layout(options, 200, provider="minimax_h3")
         )
 
     def test_full_modality_segments_cover_multiple_references(self):
@@ -306,7 +316,10 @@ class MiniMaxLayoutProviderTest(unittest.TestCase):
         override = object()
         with (
             self._minimax_type_patch(),
-            mock.patch("comfyui_turing_utils.attention.patches.make_sparse_attention_override", return_value=override),
+            mock.patch(
+                "comfyui_turing_utils.attention.patches.make_sparse_attention_override",
+                return_value=override,
+            ),
         ):
             patched = attention_patches.apply_sparse_attention_patch(model)
 
@@ -322,6 +335,7 @@ class MiniMaxLayoutProviderTest(unittest.TestCase):
         self.assertEqual(len(patched.wrappers), 1)
         self.assertFalse(model.object_patches)
         self.assertFalse(model.wrappers)
+
 
 if __name__ == "__main__":
     unittest.main()

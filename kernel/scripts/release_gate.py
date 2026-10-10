@@ -14,7 +14,7 @@ import sys
 ROOT = Path(__file__).resolve().parents[2]
 KERNEL = ROOT / "kernel"
 COMFYUI_ROOT = ROOT.parents[1]
-EXPECTED_VERSION = "0.43.0"
+EXPECTED_VERSION = "0.45.0"
 
 
 def _run(command: list[str], *, cwd: Path = ROOT, env=None) -> None:
@@ -86,9 +86,9 @@ def _static_gate() -> None:
             raise RuntimeError(f"missing SM75 attention resource/ABI gate: {marker}")
     gemm = (KERNEL / "csrc/turing/w4a8.cu").read_text(encoding="utf-8")
     for marker in (
-        "properties->major >= 8 && n >= 16384",
-        "run_ampere_int8_tile<128, 256, 64, 64, 64, 64, 3>",
-        "run_int8_tile<128, 256, 64, 64>",
+        "std::max(n, original_n) >= 16384",
+        "run_ampere_int8_tile<128, 256, 64, 64, 64, 64, 3, Output, RoundHalf>",
+        "run_int8_tile<128, 256, 64, 64, Output, RoundHalf>",
     ):
         if marker not in gemm:
             raise RuntimeError(f"missing deterministic GEMM dispatch gate: {marker}")

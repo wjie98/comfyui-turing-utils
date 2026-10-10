@@ -11,7 +11,7 @@ from ...log import get_logger
 from ..memory import install_memory_hooks, scan_quantized_workspaces
 from ..methods import OriginalMethod, weak_method
 from ...quantization.dispatch import turing_int8_workspace_bytes
-from ...quantization.fusions import convrot_weight_kind
+from ...quantization.formats import convrot_storage_kind
 from .activation_policy import (
     balanced_saturation_size,
     estimate_attention_lifecycle_peak,
@@ -65,14 +65,18 @@ class _MiniMaxMemoryShape(list):
             # With visual conditions H3 keeps the individual condition rows and
             # also assembles one target+condition FP32 row buffer.
             visual_fp32 += (
-                self.target_visual_rows + self.visual_condition_rows
-            ) * self.video_row_width * 4
+                (self.target_visual_rows + self.visual_condition_rows)
+                * self.video_row_width
+                * 4
+            )
 
         audio_fp32 = self.audio_condition_rows * self.audio_row_width * 4
         if self.audio_condition_rows:
             audio_fp32 += (
-                self.target_audio_rows + self.audio_condition_rows
-            ) * self.audio_row_width * 4
+                (self.target_audio_rows + self.audio_condition_rows)
+                * self.audio_row_width
+                * 4
+            )
         return packed_hidden + visual_fp32 + audio_fp32
 
 
@@ -91,8 +95,7 @@ class _MiniMaxMemoryCond:
             and self.cond.full_rows == other.cond.full_rows
             and self.cond.target_rows == other.cond.target_rows
             and self.cond.equivalent_area == other.cond.equivalent_area
-            and self.cond.visual_condition_rows
-            == other.cond.visual_condition_rows
+            and self.cond.visual_condition_rows == other.cond.visual_condition_rows
             and self.cond.audio_condition_rows == other.cond.audio_condition_rows
         )
 
@@ -142,9 +145,7 @@ class _MiniMaxActivationProfile:
             + qkv_scales
         )
         qkv_tile = min(rows, 16_384) * (
-            3 * self.heads * self.head_dim * element_size
-            + self.hidden_size
-            + 4
+            3 * self.heads * self.head_dim * element_size + self.hidden_size + 4
         )
         qkv = qkv_persistent + qkv_tile
 
@@ -221,9 +222,9 @@ def _minimax_memory_shape(kwargs, latent_shapes, diffusion_model):
     for ref in kwargs.get("minimax_refs") or ():
         kind = ref.get("kind")
         if kind == "image":
-            visual_condition_rows += (
-                int(ref["latent_h"]) // ph
-            ) * (int(ref["latent_w"]) // pw)
+            visual_condition_rows += (int(ref["latent_h"]) // ph) * (
+                int(ref["latent_w"]) // pw
+            )
         elif kind == "audio":
             audio_condition_rows += int(ref.get("ref_audio_t", 0)) * 2
         elif kind in ("video", "video_audio"):
@@ -343,7 +344,7 @@ _make_outer_sample_wrapper = make_minimax_runtime_context_wrapper
 def _linear_workspace_requirements(
     root: torch.nn.Module,
 ) -> tuple[tuple[int, ...], tuple[int, ...]]:
-    profile = scan_quantized_workspaces(root, convrot_weight_kind)
+    profile = scan_quantized_workspaces(root, convrot_storage_kind)
     return profile.w8_output_channels, profile.fixed_workspaces
 
 
@@ -379,6 +380,8 @@ def _install_memory_planning(model, base_model, diffusion_model) -> bool:
         ),
     )
     return True
+
+
 __all__ = [
     "_MEMORY_ADAPTER_ATTR",
     "_MEMORY_CONTEXT_ATTR",

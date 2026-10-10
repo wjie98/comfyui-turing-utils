@@ -115,8 +115,7 @@ def compile_stage_barrier_prompt(
     barrier_ids = {
         node_id
         for node_id, node in prompt.items()
-        if isinstance(node, Mapping)
-        and node.get("class_type") == STAGE_BARRIER_NODE_ID
+        if isinstance(node, Mapping) and node.get("class_type") == STAGE_BARRIER_NODE_ID
     }
     if not barrier_ids:
         return dict(prompt), 0

@@ -84,9 +84,7 @@ def make_attention_runtime_dispatcher(dense_override: Callable) -> Callable:
     """Create one stable dispatcher for every strategy using a dense base."""
 
     def attention_override(original: Callable, *args, **kwargs):
-        target = _active_override(
-            kwargs.get("transformer_options"), dense_override
-        )
+        target = _active_override(kwargs.get("transformer_options"), dense_override)
         return target(original, *args, **kwargs)
 
     def prepared_executor(request: PreparedAttention) -> AttentionExecutionOutcome:
@@ -99,15 +97,12 @@ def make_attention_runtime_dispatcher(dense_override: Callable) -> Callable:
         return executor(request)
 
     def container_function(q, k, v, heads: int, *args, **kwargs):
-        target = _active_override(
-            kwargs.get("transformer_options"), dense_override
-        )
+        target = _active_override(kwargs.get("transformer_options"), dense_override)
         container = getattr(target, "container_function", None)
         if not callable(container):
             # This is only a compatibility path for third-party dense
             # overrides which expose neither prepared nor container execution.
-            # Import lazily to avoid a runtime <-> patches import cycle.
-            from .patches import _default_attention_fallback
+            from .execution import _default_attention_fallback
 
             q.peek(), k.peek(), v.peek()
             query, key, value = q.take(), k.take(), v.take()
@@ -125,6 +120,7 @@ def make_attention_runtime_dispatcher(dense_override: Callable) -> Callable:
     dense_prepared = getattr(dense_override, "prepared_attention_executor", None)
     dense_streamed = getattr(dense_prepared, _STREAMED_QKV_EXECUTOR_ATTR, None)
     if callable(dense_streamed):
+
         def streamed_qkv_executor(
             qk,
             value,

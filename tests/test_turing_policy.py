@@ -14,6 +14,8 @@ COMFY_ROOT = PLUGIN_ROOT.parents[1]
 sys.path.insert(0, str(COMFY_ROOT))
 sys.path.insert(0, str(PLUGIN_ROOT))
 
+from comfyui_turing_utils.quantization import preflight as quantization_preflight
+from comfyui_turing_utils.hardware import is_supported_turing_device
 from comfyui_turing_utils import precision as bf16_policy  # noqa: E402
 from comfyui_turing_utils import hardware  # noqa: E402
 from comfyui_turing_utils.quantization import dispatch as turing_ops  # noqa: E402
@@ -22,7 +24,9 @@ from comfy_kitchen.backends import cuda as kitchen_cuda  # noqa: E402
 
 SUMMARY = SimpleNamespace(w4a4=1, w4a8=1, w8a8=1)
 NO_CONVROT = SimpleNamespace(w4a4=0, w4a8=0, w8a8=0)
-BF16_CONFIG = SimpleNamespace(supported_inference_dtypes=[torch.bfloat16, torch.float32])
+BF16_CONFIG = SimpleNamespace(
+    supported_inference_dtypes=[torch.bfloat16, torch.float32]
+)
 FP16_BF16_CONFIG = SimpleNamespace(
     supported_inference_dtypes=[torch.float16, torch.bfloat16, torch.float32]
 )
@@ -61,45 +65,75 @@ class BF16PolicyTest(unittest.TestCase):
     @staticmethod
     def _module_with_weight(weight):
         module = torch.nn.Module()
-        module.register_parameter("weight", torch.nn.Parameter(weight, requires_grad=False))
+        module.register_parameter(
+            "weight", torch.nn.Parameter(weight, requires_grad=False)
+        )
         return module
 
     def test_non_turing_cuda_keeps_comfyui_policy(self):
         with (
-            mock.patch("comfyui_turing_utils.precision._explicit_dtype_override", return_value=False),
+            mock.patch(
+                "comfyui_turing_utils.precision._explicit_dtype_override",
+                return_value=False,
+            ),
             mock.patch("torch.cuda.is_available", return_value=True),
             mock.patch("torch.cuda.get_device_capability", return_value=(8, 6)),
         ):
-            dtype = bf16_policy.select_compute_dtype(BF16_CONFIG, torch.device("cuda", 0))
+            dtype = bf16_policy.select_compute_dtype(
+                BF16_CONFIG, torch.device("cuda", 0)
+            )
         self.assertIsNone(dtype)
 
     def test_model_without_declared_bf16_keeps_comfyui_policy(self):
-        config = SimpleNamespace(supported_inference_dtypes=[torch.float16, torch.float32])
-        with mock.patch("comfyui_turing_utils.precision._explicit_dtype_override", return_value=False):
+        config = SimpleNamespace(
+            supported_inference_dtypes=[torch.float16, torch.float32]
+        )
+        with mock.patch(
+            "comfyui_turing_utils.precision._explicit_dtype_override",
+            return_value=False,
+        ):
             dtype = bf16_policy.select_compute_dtype(config, torch.device("cuda", 0))
         self.assertIsNone(dtype)
 
     def test_explicit_comfyui_dtype_override_wins(self):
-        with mock.patch("comfyui_turing_utils.precision._explicit_dtype_override", return_value=True):
-            dtype = bf16_policy.select_compute_dtype(BF16_CONFIG, torch.device("cuda", 0))
+        with mock.patch(
+            "comfyui_turing_utils.precision._explicit_dtype_override", return_value=True
+        ):
+            dtype = bf16_policy.select_compute_dtype(
+                BF16_CONFIG, torch.device("cuda", 0)
+            )
         self.assertIsNone(dtype)
 
     def test_supported_turing_selects_bf16_independently_of_runtime_preflight(self):
         with (
-            mock.patch("comfyui_turing_utils.precision._explicit_dtype_override", return_value=False),
+            mock.patch(
+                "comfyui_turing_utils.precision._explicit_dtype_override",
+                return_value=False,
+            ),
             mock.patch("torch.cuda.is_available", return_value=True),
             mock.patch("torch.cuda.get_device_capability", return_value=(7, 5)),
-            mock.patch("comfyui_turing_utils.precision.is_supported_turing_device", return_value=True),
+            mock.patch(
+                "comfyui_turing_utils.precision.is_supported_turing_device",
+                return_value=True,
+            ),
         ):
-            dtype = bf16_policy.select_compute_dtype(BF16_CONFIG, torch.device("cuda", 1))
+            dtype = bf16_policy.select_compute_dtype(
+                BF16_CONFIG, torch.device("cuda", 1)
+            )
         self.assertIs(dtype, torch.bfloat16)
 
     def test_turing_model_with_fp16_support_keeps_comfyui_policy(self):
         with (
-            mock.patch("comfyui_turing_utils.precision._explicit_dtype_override", return_value=False),
+            mock.patch(
+                "comfyui_turing_utils.precision._explicit_dtype_override",
+                return_value=False,
+            ),
             mock.patch("torch.cuda.is_available", return_value=True),
             mock.patch("torch.cuda.get_device_capability", return_value=(7, 5)),
-            mock.patch("comfyui_turing_utils.precision.is_supported_turing_device", return_value=True),
+            mock.patch(
+                "comfyui_turing_utils.precision.is_supported_turing_device",
+                return_value=True,
+            ),
         ):
             dtype = bf16_policy.select_compute_dtype(
                 FP16_BF16_CONFIG, torch.device("cuda", 0)
@@ -108,10 +142,22 @@ class BF16PolicyTest(unittest.TestCase):
 
     def test_turing_preflight_failure_does_not_silently_fallback_to_fp32(self):
         with (
-            mock.patch("comfyui_turing_utils.precision.is_supported_tensor_core_device", return_value=True),
-            mock.patch("comfyui_turing_utils.precision.is_supported_turing_device", return_value=True),
-            mock.patch("comfyui_turing_utils.precision.bundled_w8a8_available", return_value=True),
-            mock.patch("comfyui_turing_utils.precision.preflight_bundled_w8a8", side_effect=RuntimeError("attention self-test")),
+            mock.patch(
+                "comfyui_turing_utils.precision.is_supported_tensor_core_device",
+                return_value=True,
+            ),
+            mock.patch(
+                "comfyui_turing_utils.precision.is_supported_turing_device",
+                return_value=True,
+            ),
+            mock.patch(
+                "comfyui_turing_utils.precision.bundled_w8a8_available",
+                return_value=True,
+            ),
+            mock.patch(
+                "comfyui_turing_utils.precision.preflight_bundled_w8a8",
+                side_effect=RuntimeError("attention self-test"),
+            ),
             self.assertRaisesRegex(RuntimeError, "attention self-test"),
         ):
             bf16_policy.prepare_turing_runtime(
@@ -120,10 +166,18 @@ class BF16PolicyTest(unittest.TestCase):
 
     def test_legacy_sage_alias_preflights_the_canonical_bundled_backend(self):
         with (
-            mock.patch("comfyui_turing_utils.precision.is_supported_tensor_core_device", return_value=True),
-            mock.patch("comfyui_turing_utils.precision.is_supported_turing_device", return_value=True),
+            mock.patch(
+                "comfyui_turing_utils.precision.is_supported_tensor_core_device",
+                return_value=True,
+            ),
+            mock.patch(
+                "comfyui_turing_utils.precision.is_supported_turing_device",
+                return_value=True,
+            ),
             mock.patch("comfyui_turing_utils.precision._check_kernel_contract"),
-            mock.patch("comfyui_turing_utils.precision.bundled_available", return_value=True),
+            mock.patch(
+                "comfyui_turing_utils.precision.bundled_available", return_value=True
+            ),
             mock.patch("comfyui_turing_utils.precision.preflight_bundled") as preflight,
         ):
             bf16_policy.prepare_turing_runtime(
@@ -134,7 +188,8 @@ class BF16PolicyTest(unittest.TestCase):
     def test_turing_runtime_rejects_stale_independent_kernel(self):
         with (
             mock.patch.dict(
-                sys.modules, {"comfyui_turing_utils_kernel": SimpleNamespace(__version__="0.4.9")}
+                sys.modules,
+                {"comfyui_turing_utils_kernel": SimpleNamespace(__version__="0.4.9")},
             ),
             self.assertRaisesRegex(RuntimeError, "comfyui-turing-utils-kernel>=0.8.0"),
         ):
@@ -153,10 +208,17 @@ class BF16PolicyTest(unittest.TestCase):
                     }
                 },
             ),
-            mock.patch("comfyui_turing_utils.precision.is_supported_tensor_core_device", return_value=True),
+            mock.patch(
+                "comfyui_turing_utils.precision.is_supported_tensor_core_device",
+                return_value=True,
+            ),
             mock.patch("comfyui_turing_utils.precision._check_kitchen_contract"),
-            mock.patch("comfyui_turing_utils.precision.register_backend", return_value=True) as register,
-            mock.patch("comfyui_turing_utils.precision.backend_available", return_value=True),
+            mock.patch(
+                "comfyui_turing_utils.precision.register_backend", return_value=True
+            ) as register,
+            mock.patch(
+                "comfyui_turing_utils.precision.backend_available", return_value=True
+            ),
             mock.patch("comfyui_turing_utils.precision.preflight_kitchen") as preflight,
         ):
             bf16_policy.prepare_turing_runtime(summary, torch.device("cuda", 0), "sdpa")
@@ -190,9 +252,7 @@ class BF16PolicyTest(unittest.TestCase):
             mock.patch(
                 "comfyui_turing_utils.precision.backend_available", return_value=True
             ),
-            mock.patch(
-                "comfyui_turing_utils.precision.preflight_kitchen"
-            ) as preflight,
+            mock.patch("comfyui_turing_utils.precision.preflight_kitchen") as preflight,
         ):
             bf16_policy.prepare_turing_runtime(summary, device, "sdpa")
 
@@ -200,9 +260,7 @@ class BF16PolicyTest(unittest.TestCase):
         preflight.assert_called_once_with(device, False, True)
 
     def test_codebook_w4a8_requires_new_kernel_and_uses_its_preflight(self):
-        summary = SimpleNamespace(
-            w4a4=0, w4a8=0, codebook_w4a8=1, w8a8=0
-        )
+        summary = SimpleNamespace(w4a4=0, w4a8=0, codebook_w4a8=1, w8a8=0)
         with (
             mock.patch(
                 "comfy_kitchen.list_backends",
@@ -210,7 +268,11 @@ class BF16PolicyTest(unittest.TestCase):
                     "cuda": {
                         "available": True,
                         "disabled": False,
-                        "capabilities": ("convrot_w4a4_linear", "int8_linear", "w4a8_int8_linear"),
+                        "capabilities": (
+                            "convrot_w4a4_linear",
+                            "int8_linear",
+                            "w4a8_int8_linear",
+                        ),
                     }
                 },
             ),
@@ -218,16 +280,22 @@ class BF16PolicyTest(unittest.TestCase):
                 "comfyui_turing_utils.precision.is_supported_tensor_core_device",
                 return_value=True,
             ),
-            mock.patch("comfyui_turing_utils.precision._check_kernel_contract") as contract,
+            mock.patch(
+                "comfyui_turing_utils.precision._check_kernel_contract"
+            ) as contract,
             mock.patch("comfyui_turing_utils.precision._check_kitchen_contract"),
-            mock.patch("comfyui_turing_utils.precision.register_backend", return_value=True),
-            mock.patch("comfyui_turing_utils.precision.backend_available", return_value=True),
+            mock.patch(
+                "comfyui_turing_utils.precision.register_backend", return_value=True
+            ),
+            mock.patch(
+                "comfyui_turing_utils.precision.backend_available", return_value=True
+            ),
             mock.patch("comfyui_turing_utils.precision.preflight_kitchen"),
-            mock.patch("comfyui_turing_utils.precision.preflight_codebook_w4a8") as preflight,
+            mock.patch(
+                "comfyui_turing_utils.precision.preflight_codebook_w4a8"
+            ) as preflight,
         ):
-            bf16_policy.prepare_turing_runtime(
-                summary, torch.device("cuda", 0), "sdpa"
-            )
+            bf16_policy.prepare_turing_runtime(summary, torch.device("cuda", 0), "sdpa")
 
         self.assertEqual(
             contract.call_args_list,
@@ -240,13 +308,23 @@ class BF16PolicyTest(unittest.TestCase):
 
     def test_gtx16_keeps_comfyui_fallback(self):
         with (
-            mock.patch("comfyui_turing_utils.precision._explicit_dtype_override", return_value=False),
+            mock.patch(
+                "comfyui_turing_utils.precision._explicit_dtype_override",
+                return_value=False,
+            ),
             mock.patch("torch.cuda.is_available", return_value=True),
             mock.patch("torch.cuda.get_device_capability", return_value=(7, 5)),
-            mock.patch("torch.cuda.get_device_name", return_value="NVIDIA GeForce GTX 1660 Ti"),
-            mock.patch("comfyui_turing_utils.precision.is_supported_turing_device", return_value=False),
+            mock.patch(
+                "torch.cuda.get_device_name", return_value="NVIDIA GeForce GTX 1660 Ti"
+            ),
+            mock.patch(
+                "comfyui_turing_utils.precision.is_supported_turing_device",
+                return_value=False,
+            ),
         ):
-            dtype = bf16_policy.select_compute_dtype(BF16_CONFIG, torch.device("cuda", 0))
+            dtype = bf16_policy.select_compute_dtype(
+                BF16_CONFIG, torch.device("cuda", 0)
+            )
         self.assertIsNone(dtype)
 
     def test_turing_convrot_logical_dtype_is_normalized_without_copying_qdata(self):
@@ -257,7 +335,10 @@ class BF16PolicyTest(unittest.TestCase):
         old_qdata_ptr = module.weight._qdata.data_ptr()
         old_scale_ptr = module.weight._params.scale.data_ptr()
 
-        with mock.patch("comfyui_turing_utils.precision.is_supported_turing_device", return_value=True):
+        with mock.patch(
+            "comfyui_turing_utils.precision.is_supported_turing_device",
+            return_value=True,
+        ):
             count = bf16_policy.normalize_turing_convrot_weight_dtypes(
                 root, torch.device("cuda", 0), torch.bfloat16
             )
@@ -269,16 +350,23 @@ class BF16PolicyTest(unittest.TestCase):
         self.assertEqual(module.weight._params.scale.data_ptr(), old_scale_ptr)
         self.assertIs(module.weight_comfy_model_dtype, torch.bfloat16)
 
-    def test_turing_dtype_normalization_does_not_touch_dense_or_nonconvrot_weights(self):
+    def test_turing_dtype_normalization_does_not_touch_dense_or_nonconvrot_weights(
+        self,
+    ):
         dense = torch.nn.Linear(8, 4, bias=False, dtype=torch.float32)
-        plain_int8 = self._module_with_weight(self._w8_weight(torch.float32, convrot=False))
+        plain_int8 = self._module_with_weight(
+            self._w8_weight(torch.float32, convrot=False)
+        )
         root = torch.nn.Module()
         root.dense = dense
         root.plain_int8 = plain_int8
         dense_weight = dense.weight
         plain_weight = plain_int8.weight
 
-        with mock.patch("comfyui_turing_utils.precision.is_supported_turing_device", return_value=True):
+        with mock.patch(
+            "comfyui_turing_utils.precision.is_supported_turing_device",
+            return_value=True,
+        ):
             count = bf16_policy.normalize_turing_convrot_weight_dtypes(
                 root, torch.device("cuda", 0), torch.bfloat16
             )
@@ -295,7 +383,10 @@ class BF16PolicyTest(unittest.TestCase):
         root.w4a4 = self._module_with_weight(self._w4_weight(linear_dtype="int4"))
         root.w4a8 = self._module_with_weight(self._w4_weight(linear_dtype="int8"))
 
-        with mock.patch("comfyui_turing_utils.precision.is_supported_turing_device", return_value=True):
+        with mock.patch(
+            "comfyui_turing_utils.precision.is_supported_turing_device",
+            return_value=True,
+        ):
             count = bf16_policy.normalize_turing_convrot_weight_dtypes(
                 root, torch.device("cuda", 0), torch.bfloat16
             )
@@ -307,11 +398,18 @@ class BF16PolicyTest(unittest.TestCase):
         self.assertEqual(root.w4a8.weight._params.linear_dtype, "int8")
 
     def test_convrot_dtype_normalization_is_disabled_off_turing_or_without_bf16(self):
-        for supported, dtype in ((False, torch.bfloat16), (True, None), (True, torch.float32)):
+        for supported, dtype in (
+            (False, torch.bfloat16),
+            (True, None),
+            (True, torch.float32),
+        ):
             with self.subTest(supported=supported, dtype=dtype):
-                module = self._module_with_weight(self._w8_weight(torch.float32, convrot=True))
+                module = self._module_with_weight(
+                    self._w8_weight(torch.float32, convrot=True)
+                )
                 with mock.patch(
-                    "comfyui_turing_utils.precision.is_supported_turing_device", return_value=supported
+                    "comfyui_turing_utils.precision.is_supported_turing_device",
+                    return_value=supported,
                 ):
                     count = bf16_policy.normalize_turing_convrot_weight_dtypes(
                         module, torch.device("cuda", 0), dtype
@@ -322,11 +420,17 @@ class BF16PolicyTest(unittest.TestCase):
     def test_device_check_uses_requested_tensor_device(self):
         with (
             mock.patch("torch.cuda.is_available", return_value=True),
-            mock.patch("torch.cuda.get_device_capability", side_effect=lambda index: (7, 5) if index == 1 else (8, 6)),
+            mock.patch(
+                "torch.cuda.get_device_capability",
+                side_effect=lambda index: (7, 5) if index == 1 else (8, 6),
+            ),
             mock.patch("torch.cuda.get_device_name", return_value="NVIDIA T4"),
+            mock.patch(
+                "torch.cuda.get_device_properties", return_value=SimpleNamespace()
+            ),
         ):
-            self.assertTrue(turing_ops.is_supported_turing_device(torch.device("cuda", 1)))
-            self.assertFalse(turing_ops.is_supported_turing_device(torch.device("cuda", 0)))
+            self.assertTrue(is_supported_turing_device(torch.device("cuda", 1)))
+            self.assertFalse(is_supported_turing_device(torch.device("cuda", 0)))
 
     def test_integer_attention_supports_ampere_and_newer(self):
         with (
@@ -336,11 +440,22 @@ class BF16PolicyTest(unittest.TestCase):
                 side_effect=lambda index: ((7, 5), (8, 0), (8, 9), (9, 0))[index],
             ),
             mock.patch("torch.cuda.get_device_name", return_value="NVIDIA A100"),
+            mock.patch(
+                "torch.cuda.get_device_properties", return_value=SimpleNamespace()
+            ),
         ):
-            self.assertTrue(hardware.is_supported_attention_device(torch.device("cuda", 0)))
-            self.assertTrue(hardware.is_supported_attention_device(torch.device("cuda", 1)))
-            self.assertTrue(hardware.is_supported_attention_device(torch.device("cuda", 2)))
-            self.assertTrue(hardware.is_supported_attention_device(torch.device("cuda", 3)))
+            self.assertTrue(
+                hardware.is_supported_attention_device(torch.device("cuda", 0))
+            )
+            self.assertTrue(
+                hardware.is_supported_attention_device(torch.device("cuda", 1))
+            )
+            self.assertTrue(
+                hardware.is_supported_attention_device(torch.device("cuda", 2))
+            )
+            self.assertTrue(
+                hardware.is_supported_attention_device(torch.device("cuda", 3))
+            )
 
         self.assertFalse(hardware.is_supported_attention_device(torch.device("cpu")))
 
@@ -368,9 +483,15 @@ class BF16PolicyTest(unittest.TestCase):
             ),
             mock.patch("comfyui_turing_utils.precision._check_kernel_contract"),
             mock.patch("comfyui_turing_utils.precision._check_kitchen_contract"),
-            mock.patch("comfyui_turing_utils.precision.register_backend", return_value=True),
-            mock.patch("comfyui_turing_utils.precision.backend_available", return_value=True),
-            mock.patch("comfyui_turing_utils.precision.preflight_kitchen") as preflight_linear,
+            mock.patch(
+                "comfyui_turing_utils.precision.register_backend", return_value=True
+            ),
+            mock.patch(
+                "comfyui_turing_utils.precision.backend_available", return_value=True
+            ),
+            mock.patch(
+                "comfyui_turing_utils.precision.preflight_kitchen"
+            ) as preflight_linear,
             mock.patch(
                 "comfyui_turing_utils.precision.bundled_w8a8_available",
                 return_value=True,
@@ -388,32 +509,50 @@ class BF16PolicyTest(unittest.TestCase):
         with (
             mock.patch("torch.cuda.is_available", return_value=True),
             mock.patch("torch.cuda.get_device_capability", return_value=(7, 5)),
-            mock.patch("torch.cuda.get_device_name", return_value="NVIDIA GeForce GTX 1660 Ti"),
+            mock.patch(
+                "torch.cuda.get_device_name", return_value="NVIDIA GeForce GTX 1660 Ti"
+            ),
         ):
-            self.assertFalse(turing_ops.is_supported_turing_device(torch.device("cuda", 0)))
+            self.assertFalse(is_supported_turing_device(torch.device("cuda", 0)))
 
     def test_w4a8_preflight_reports_missing_independent_kernel(self):
         with (
-            mock.patch.object(turing_ops, "is_supported_tensor_core_device", return_value=True),
-            mock.patch.object(turing_ops, "_kernel_available", return_value=False),
+            mock.patch.object(
+                quantization_preflight,
+                "is_supported_tensor_core_device",
+                return_value=True,
+            ),
+            mock.patch.object(
+                quantization_preflight, "_kernel_available", return_value=False
+            ),
             self.assertRaisesRegex(RuntimeError, "does not provide W4A8"),
         ):
-            turing_ops.preflight_w4a8(torch.device("cuda", 0))
+            quantization_preflight.preflight_w4a8(torch.device("cuda", 0))
 
     def test_codebook_w4a8_preflight_reports_missing_independent_kernel(self):
         with (
-            mock.patch.object(turing_ops, "is_supported_tensor_core_device", return_value=True),
-            mock.patch.object(turing_ops, "_kernel_available", return_value=False),
+            mock.patch.object(
+                quantization_preflight,
+                "is_supported_tensor_core_device",
+                return_value=True,
+            ),
+            mock.patch.object(
+                quantization_preflight, "_kernel_available", return_value=False
+            ),
             self.assertRaisesRegex(RuntimeError, "codebook W4A8"),
         ):
-            turing_ops.preflight_codebook_w4a8(torch.device("cuda", 0))
+            quantization_preflight.preflight_codebook_w4a8(torch.device("cuda", 0))
 
     def test_int8_activation_uses_staged_bf16_rotation_above_48k_shared_limit(self):
         x = torch.empty((3, 5376), dtype=torch.bfloat16)
         with (
             mock.patch.object(kitchen_cuda, "quantize_int8_rowwise_convrot64") as fused,
-            mock.patch.object(kitchen_cuda, "quantize_int8_convrot_staged", return_value=("q", "s")) as staged,
-            mock.patch.dict(sys.modules, {"comfyui_turing_utils_kernel": SimpleNamespace()}),
+            mock.patch.object(
+                kitchen_cuda, "quantize_int8_convrot_staged", return_value=("q", "s")
+            ) as staged,
+            mock.patch.dict(
+                sys.modules, {"comfyui_turing_utils_kernel": SimpleNamespace()}
+            ),
         ):
             result = turing_ops._quantize_turing_int8_activation(x, 256)
         self.assertEqual(result, ("q", "s"))
@@ -444,13 +583,19 @@ class BF16PolicyTest(unittest.TestCase):
                 mock.patch.object(
                     turing_ops, "is_supported_tensor_core_device", return_value=True
                 ),
-                mock.patch.object(kitchen_cuda, "quantize_int8_rowwise_convrot64") as fused,
-                mock.patch.object(kitchen_cuda, "quantize_int8_convrot_staged") as staged,
+                mock.patch.object(
+                    kitchen_cuda, "quantize_int8_rowwise_convrot64"
+                ) as fused,
+                mock.patch.object(
+                    kitchen_cuda, "quantize_int8_convrot_staged"
+                ) as staged,
                 mock.patch.dict(
                     sys.modules,
-                    {"comfyui_turing_utils_kernel": SimpleNamespace(
-                        turing_bf16_int8_convrot_quantize=rowbuffer
-                    )},
+                    {
+                        "comfyui_turing_utils_kernel": SimpleNamespace(
+                            turing_bf16_int8_convrot_quantize=rowbuffer
+                        )
+                    },
                 ),
             ):
                 result = turing_ops._quantize_turing_int8_activation(x, 256)
@@ -470,10 +615,12 @@ class BF16PolicyTest(unittest.TestCase):
             ),
             mock.patch.dict(
                 sys.modules,
-                {"comfyui_turing_utils_kernel": SimpleNamespace(
-                    turing_bf16_int8_convrot_quantize=rowbuffer,
-                    turing_swiglu_int8_convrot_quantize=staged_swiglu,
-                )},
+                {
+                    "comfyui_turing_utils_kernel": SimpleNamespace(
+                        turing_bf16_int8_convrot_quantize=rowbuffer,
+                        turing_swiglu_int8_convrot_quantize=staged_swiglu,
+                    )
+                },
             ),
         ):
             result = turing_ops._quantize_turing_int8_activation(
@@ -486,9 +633,7 @@ class BF16PolicyTest(unittest.TestCase):
     def test_int8_swiglu_rejects_odd_input_width_before_cuda_dispatch(self):
         x = torch.empty((3, 513), dtype=torch.bfloat16)
         with self.assertRaisesRegex(ValueError, "width must be even"):
-            turing_ops._quantize_turing_int8_activation(
-                x, 256, input_act="swiglu"
-            )
+            turing_ops._quantize_turing_int8_activation(x, 256, input_act="swiglu")
 
     def test_w8a8_uses_shared_staged_quantizer(self):
         x = torch.ones((2, 10752), dtype=torch.bfloat16)
@@ -499,9 +644,15 @@ class BF16PolicyTest(unittest.TestCase):
         output = torch.zeros((2, 8), dtype=torch.bfloat16)
         fused_swiglu = mock.Mock(return_value=(qactivation, activation_scale))
         with (
-            mock.patch.object(turing_ops, "is_supported_tensor_core_device", return_value=True),
-            mock.patch.object(kitchen_cuda, "_prefer_turing_fused_int8", return_value=False),
-            mock.patch.object(turing_ops, "_turing_cublas_int8_bf16", return_value=None),
+            mock.patch.object(
+                turing_ops, "is_supported_tensor_core_device", return_value=True
+            ),
+            mock.patch.object(
+                kitchen_cuda, "_prefer_turing_fused_int8", return_value=False
+            ),
+            mock.patch.object(
+                turing_ops, "_turing_cublas_int8_bf16", return_value=None
+            ),
             mock.patch.object(
                 kitchen_cuda,
                 "_int4_linear_via_int8_values",
@@ -509,9 +660,11 @@ class BF16PolicyTest(unittest.TestCase):
             ) as linear,
             mock.patch.dict(
                 sys.modules,
-                {"comfyui_turing_utils_kernel": SimpleNamespace(
-                    turing_swiglu_int8_convrot_quantize=fused_swiglu
-                )},
+                {
+                    "comfyui_turing_utils_kernel": SimpleNamespace(
+                        turing_swiglu_int8_convrot_quantize=fused_swiglu
+                    )
+                },
             ),
         ):
             result = turing_ops.int8_linear(
@@ -537,7 +690,9 @@ class BF16PolicyTest(unittest.TestCase):
         weight_scale = torch.ones((), dtype=torch.float32)
         expected = torch.zeros((4, 1024), dtype=torch.bfloat16)
         with (
-            mock.patch.object(kitchen_cuda, "_prefer_turing_fused_int8", return_value=True),
+            mock.patch.object(
+                kitchen_cuda, "_prefer_turing_fused_int8", return_value=True
+            ),
             mock.patch.object(
                 kitchen_cuda,
                 "_int8_linear_turing_quantized",
@@ -564,7 +719,9 @@ class BF16PolicyTest(unittest.TestCase):
         weight_scale = torch.ones((), dtype=torch.float32)
         expected = torch.zeros((4, 64), dtype=torch.bfloat16)
         with (
-            mock.patch.object(kitchen_cuda, "_prefer_turing_fused_int8", return_value=False),
+            mock.patch.object(
+                kitchen_cuda, "_prefer_turing_fused_int8", return_value=False
+            ),
             mock.patch.object(
                 turing_ops,
                 "_turing_cublas_int8_bf16",
@@ -593,13 +750,22 @@ class BF16PolicyTest(unittest.TestCase):
         output = torch.zeros((2, 8), dtype=torch.bfloat16)
         linear = mock.Mock(return_value=output)
         with (
-            mock.patch.object(turing_ops, "is_supported_tensor_core_device", return_value=True),
+            mock.patch.object(
+                turing_ops, "is_supported_tensor_core_device", return_value=True
+            ),
             mock.patch.object(
                 turing_ops,
                 "_quantize_turing_int8_activation",
                 return_value=(qactivation, activation_scale),
             ) as quantize,
-            mock.patch.dict(sys.modules, {"comfyui_turing_utils_kernel": SimpleNamespace(turing_w4a8_linear=linear)}),
+            mock.patch.dict(
+                sys.modules,
+                {
+                    "comfyui_turing_utils_kernel": SimpleNamespace(
+                        turing_w4a8_linear=linear
+                    )
+                },
+            ),
         ):
             result = turing_ops.convrot_w4a4_linear(
                 x,
@@ -625,8 +791,12 @@ class BF16PolicyTest(unittest.TestCase):
         rotated = torch.empty_like(x)
         with (
             mock.patch.object(kitchen_cuda, "quantize_int4_rowwise_convrot64") as fused,
-            mock.patch.object(kitchen_cuda, "rotate_int8_convrot_weight", return_value=rotated) as rotate,
-            mock.patch.object(kitchen_cuda, "quantize_int4_rowwise", return_value=("q", "s")) as quantize,
+            mock.patch.object(
+                kitchen_cuda, "rotate_int8_convrot_weight", return_value=rotated
+            ) as rotate,
+            mock.patch.object(
+                kitchen_cuda, "quantize_int4_rowwise", return_value=("q", "s")
+            ) as quantize,
         ):
             result = turing_ops._quantize_turing_int4_activation(x, 256)
         self.assertEqual(result, ("q", "s"))
@@ -645,9 +815,11 @@ class BF16PolicyTest(unittest.TestCase):
             mock.patch.object(kitchen_cuda, "rotate_int8_convrot_weight") as rotate,
             mock.patch.dict(
                 sys.modules,
-                {"comfyui_turing_utils_kernel": SimpleNamespace(
-                    turing_bf16_int4_convrot_quantize=rowbuffer
-                )},
+                {
+                    "comfyui_turing_utils_kernel": SimpleNamespace(
+                        turing_bf16_int4_convrot_quantize=rowbuffer
+                    )
+                },
             ),
         ):
             result = turing_ops._quantize_turing_int4_activation(x, 256)
@@ -671,9 +843,11 @@ class BF16PolicyTest(unittest.TestCase):
             mock.patch.object(kitchen_cuda, "rotate_int8_convrot_weight") as rotate,
             mock.patch.dict(
                 sys.modules,
-                {"comfyui_turing_utils_kernel": SimpleNamespace(
-                    turing_bf16_int4_convrot_quantize=rowbuffer
-                )},
+                {
+                    "comfyui_turing_utils_kernel": SimpleNamespace(
+                        turing_bf16_int4_convrot_quantize=rowbuffer
+                    )
+                },
             ),
         ):
             result = turing_ops._quantize_turing_int4_activation(x, 256)
@@ -690,13 +864,17 @@ class BF16PolicyTest(unittest.TestCase):
         activation_scale = torch.ones((2, 1), dtype=torch.float32)
         output = torch.zeros((2, 8), dtype=torch.bfloat16)
         with (
-            mock.patch.object(turing_ops, "is_supported_tensor_core_device", return_value=True),
+            mock.patch.object(
+                turing_ops, "is_supported_tensor_core_device", return_value=True
+            ),
             mock.patch.object(
                 turing_ops,
                 "_quantize_turing_int4_activation",
                 return_value=(qactivation, activation_scale),
             ) as quantize,
-            mock.patch.object(kitchen_cuda, "int4_linear", return_value=output) as linear,
+            mock.patch.object(
+                kitchen_cuda, "int4_linear", return_value=output
+            ) as linear,
         ):
             result = turing_ops.convrot_w4a4_linear(
                 x,
@@ -722,7 +900,9 @@ class BF16PolicyTest(unittest.TestCase):
         activation_scale = torch.ones((2, 1), dtype=torch.float32)
         output = torch.zeros((2, 8), dtype=torch.bfloat16)
         with (
-            mock.patch.object(turing_ops, "is_supported_tensor_core_device", return_value=True),
+            mock.patch.object(
+                turing_ops, "is_supported_tensor_core_device", return_value=True
+            ),
             mock.patch.object(
                 turing_ops,
                 "_quantize_turing_int4_activation",
@@ -754,10 +934,12 @@ class BF16PolicyTest(unittest.TestCase):
             ),
             mock.patch.dict(
                 sys.modules,
-                {"comfyui_turing_utils_kernel": SimpleNamespace(
-                    turing_bf16_int4_convrot_quantize=rowbuffer,
-                    turing_swiglu_int4_convrot_quantize=staged,
-                )},
+                {
+                    "comfyui_turing_utils_kernel": SimpleNamespace(
+                        turing_bf16_int4_convrot_quantize=rowbuffer,
+                        turing_swiglu_int4_convrot_quantize=staged,
+                    )
+                },
             ),
         ):
             result = turing_ops._quantize_turing_int4_activation(
@@ -773,8 +955,12 @@ class BF16PolicyTest(unittest.TestCase):
         weight = torch.empty((8, 256), dtype=torch.int8)
         weight_scale = torch.ones((), dtype=torch.float32)
         with (
-            mock.patch.object(turing_ops, "is_supported_tensor_core_device", return_value=False),
-            mock.patch.object(kitchen_cuda, "int8_linear", return_value="official") as official,
+            mock.patch.object(
+                turing_ops, "is_supported_tensor_core_device", return_value=False
+            ),
+            mock.patch.object(
+                kitchen_cuda, "int8_linear", return_value="official"
+            ) as official,
         ):
             result = turing_ops.int8_linear(
                 x,
@@ -792,7 +978,9 @@ class BF16PolicyTest(unittest.TestCase):
         qweight = torch.empty((8, 128), dtype=torch.int8)
         wscales = torch.ones(8, dtype=torch.float32)
         with (
-            mock.patch.object(turing_ops, "is_supported_tensor_core_device", return_value=False),
+            mock.patch.object(
+                turing_ops, "is_supported_tensor_core_device", return_value=False
+            ),
             mock.patch.object(
                 kitchen_cuda,
                 "convrot_w4a4_linear",

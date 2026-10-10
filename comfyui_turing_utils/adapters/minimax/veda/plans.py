@@ -44,15 +44,21 @@ class TilePlan:
     def transposed(self) -> TilePlan:
         """The H<->W mirrored plan (for portrait / landscape fallback)."""
         t, h, w = self.grid
-        return TilePlan(self.name + '_T', (t, w, h),
-                        [s.transposed() for s in self.shapes],
-                        [list(r) for r in self.head_shape])
+        return TilePlan(
+            self.name + "_T",
+            (t, w, h),
+            [s.transposed() for s in self.shapes],
+            [list(r) for r in self.head_shape],
+        )
 
     @classmethod
     def from_json(cls, data: dict) -> TilePlan:
-        return cls(name=data['geometry'], grid=tuple(data['grid']),
-                   shapes=[tiling.TileShape.parse(s) for s in data['shapes']],
-                   head_shape=[list(r) for r in data['head_shape']])
+        return cls(
+            name=data["geometry"],
+            grid=tuple(data["grid"]),
+            shapes=[tiling.TileShape.parse(s) for s in data["shapes"]],
+            head_shape=[list(r) for r in data["head_shape"]],
+        )
 
 
 @dataclasses.dataclass(frozen=True)
@@ -81,7 +87,7 @@ def frames_from_latent_t(latent_t: int) -> int:
 def describe_grid(grid) -> str:
     """'1344x768 · 5.2 s' for a token grid (T, H, W)."""
     seconds = frames_from_latent_t(grid[0]) / FPS
-    return f'{grid[2] * 32}x{grid[1] * 32} · {seconds:.1f} s'
+    return f"{grid[2] * 32}x{grid[1] * 32} · {seconds:.1f} s"
 
 
 def _aspect(grid) -> float:
@@ -93,7 +99,7 @@ class PlanTable:
 
     def __init__(self, plans: list[TilePlan]):
         if not plans:
-            raise ValueError('a predictor bundle needs at least one plan')
+            raise ValueError("a predictor bundle needs at least one plan")
         self.plans = {p.name: p for p in plans}
         self._choices: dict[tuple[int, int, int], PlanChoice] = {}
 
@@ -115,20 +121,25 @@ class PlanTable:
 
         def cost(p):
             padding = sum(s.num_tiles(grid) for s in p.shapes)
-            return (round(abs(math.log(_aspect(p.grid)) - target), 3),
-                    abs(p.grid[0] - grid[0]), padding)
+            return (
+                round(abs(math.log(_aspect(p.grid)) - target), 3),
+                abs(p.grid[0] - grid[0]),
+                padding,
+            )
 
         exact_candidates = [p for p in candidates if p.grid == grid]
         plan = min(exact_candidates or candidates, key=cost)
         native = any(plan is p for p in self.plans.values())
         exact = plan.grid == grid and native
         if exact:
-            how = f'trained for this size ({describe_grid(grid)})'
+            how = f"trained for this size ({describe_grid(grid)})"
         elif plan.grid == grid:
-            how = f'transposed trained plan: {describe_grid(grid)} (not a native trained geometry)'
+            how = f"transposed trained plan: {describe_grid(grid)} (not a native trained geometry)"
         else:
-            how = (f'nearest trained size: {describe_grid(plan.grid)} '
-                   f'(this video: {describe_grid(grid)})')
+            how = (
+                f"nearest trained size: {describe_grid(plan.grid)} "
+                f"(this video: {describe_grid(grid)})"
+            )
         choice = PlanChoice(plan, exact, how)
         self._choices[grid] = choice
         return choice
@@ -137,12 +148,13 @@ class PlanTable:
         """e.g. '16:9, 9:16, 1:1, 4:3 x 5.2 / 10.1 / 14.4 s'."""
         aspects, lengths = [], set()
         for name in sorted(self.plans):
-            aspect, _, t = name.partition('_t')
-            label = aspect.replace('x', ':')
+            aspect, _, t = name.partition("_t")
+            label = aspect.replace("x", ":")
             if label not in aspects:
                 aspects.append(label)
             if t.isdigit():
                 lengths.add(int(t))
-        seconds = ' / '.join(f'{frames_from_latent_t(t) / FPS:.1f}'
-                             for t in sorted(lengths))
-        return f'{", ".join(aspects)} x {seconds} s'
+        seconds = " / ".join(
+            f"{frames_from_latent_t(t) / FPS:.1f}" for t in sorted(lengths)
+        )
+        return f"{', '.join(aspects)} x {seconds} s"

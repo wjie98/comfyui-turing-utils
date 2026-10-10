@@ -24,7 +24,9 @@ def register_model_adapter(adapter: ModelAdapter) -> None:
     for existing in _ADAPTERS:
         if existing.name == adapter.name:
             if existing != adapter:
-                raise ValueError(f"Model adapter {adapter.name!r} is already registered")
+                raise ValueError(
+                    f"Model adapter {adapter.name!r} is already registered"
+                )
             return
     _ADAPTERS.append(adapter)
 

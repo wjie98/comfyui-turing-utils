@@ -36,9 +36,13 @@ class RuntimeLoggingTest(unittest.TestCase):
     def test_profile_levels_and_default(self):
         self.addCleanup(profile_level.cache_clear)
         for value, expected in [(None, 0), ("0", 0), ("1", 1), ("2", 2)]:
-            with self.subTest(value=value), mock.patch.dict("os.environ", {}, clear=True):
+            with (
+                self.subTest(value=value),
+                mock.patch.dict("os.environ", {}, clear=True),
+            ):
                 if value is not None:
                     import os
+
                     os.environ["COMFYUI_TURING_UTILS_PROFILE"] = value
                 profile_level.cache_clear()
                 with self.assertNoLogs(ROOT_LOGGER, level="WARNING"):
@@ -46,7 +50,9 @@ class RuntimeLoggingTest(unittest.TestCase):
 
     def test_invalid_profile_warns_once_and_disables(self):
         self.addCleanup(profile_level.cache_clear)
-        with mock.patch.dict("os.environ", {"COMFYUI_TURING_UTILS_PROFILE": "99"}, clear=True):
+        with mock.patch.dict(
+            "os.environ", {"COMFYUI_TURING_UTILS_PROFILE": "99"}, clear=True
+        ):
             profile_level.cache_clear()
             with self.assertLogs(ROOT_LOGGER, level="WARNING") as captured:
                 self.assertEqual(profile_level(), 0)
@@ -55,8 +61,11 @@ class RuntimeLoggingTest(unittest.TestCase):
 
     def test_retired_settings_report_names_without_values(self):
         self.addCleanup(profile_level.cache_clear)
-        with mock.patch.dict("os.environ", {"SEC_DEBUG": "private-value",
-                "COMFYUI_TURING_UTILS_PROFILE_CALLS": "17"}, clear=True):
+        with mock.patch.dict(
+            "os.environ",
+            {"SEC_DEBUG": "private-value", "COMFYUI_TURING_UTILS_PROFILE_CALLS": "17"},
+            clear=True,
+        ):
             profile_level.cache_clear()
             with self.assertLogs(ROOT_LOGGER, level="WARNING") as captured:
                 self.assertEqual(profile_level(), 0)
@@ -78,20 +87,36 @@ class RuntimeLoggingTest(unittest.TestCase):
                 name = node.args[0]
                 if isinstance(name, ast.Constant) and isinstance(name.value, str):
                     names.add(name.value)
-        self.assertEqual(names, {
-            "COMFYUI_TURING_UTILS_PROFILE",
-            "COMFYUI_TURING_UTILS_H3_ACTIVATION_MODE",
-        })
+        self.assertEqual(
+            names,
+            {
+                "COMFYUI_TURING_UTILS_PROFILE",
+                "COMFYUI_TURING_UTILS_H3_ACTIVATION_MODE",
+            },
+        )
 
     def test_sec_debug_statistics_are_guarded(self):
-        path = Path(__file__).resolve().parents[1] / "comfyui_turing_utils/vendor/sec/modeling_sec.py"
+        path = (
+            Path(__file__).resolve().parents[1]
+            / "comfyui_turing_utils/vendor/sec/modeling_sec.py"
+        )
         tree = ast.parse(path.read_text(encoding="utf-8"))
-        assignments = [node for node in ast.walk(tree) if isinstance(node, ast.Assign)
-                       and any(isinstance(target, ast.Name) and target.id == "mask_pixels"
-                               for target in node.targets)]
+        assignments = [
+            node
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Assign)
+            and any(
+                isinstance(target, ast.Name) and target.id == "mask_pixels"
+                for target in node.targets
+            )
+        ]
         self.assertEqual(len(assignments), 1)
-        guards = [node for node in ast.walk(tree) if isinstance(node, ast.If)
-                  and "profile_level() == 2" in ast.unparse(node.test)]
+        guards = [
+            node
+            for node in ast.walk(tree)
+            if isinstance(node, ast.If)
+            and "profile_level() == 2" in ast.unparse(node.test)
+        ]
         self.assertTrue(any(assignments[0] in guard.body for guard in guards))
 
 

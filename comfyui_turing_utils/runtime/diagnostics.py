@@ -12,6 +12,7 @@ from .capabilities import runtime_capabilities
 FEATURES = (
     "core_fusions",
     "ffn_channel_sharding",
+    "grouped_w6a8",
     "stable_sage",
     "dense_w8a8",
     "sol",

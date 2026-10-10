@@ -97,7 +97,11 @@ def inspect_turing_attention_call(
 ) -> tuple[AttentionCall | None, str | None]:
     if kernel not in {"sage", "w8a8", "sol"}:
         raise ValueError(f"unsupported Turing attention kernel: {kernel}")
-    if not isinstance(q, torch.Tensor) or not isinstance(k, torch.Tensor) or not isinstance(v, torch.Tensor):
+    if (
+        not isinstance(q, torch.Tensor)
+        or not isinstance(k, torch.Tensor)
+        or not isinstance(v, torch.Tensor)
+    ):
         return None, "Q/K/V are not tensors"
     # W8A8 and Sol share the bundled sm75+ integer core.  Architecture-specific
     # MMA/copy variants are selected by the compiled cubin, not by Python.
@@ -123,7 +127,13 @@ def inspect_turing_attention_call(
 
     heads = int(heads)
     if skip_reshape:
-        if q.ndim != 4 or k.ndim != 4 or v.ndim != 4 or heads <= 0 or q.shape[1] != heads:
+        if (
+            q.ndim != 4
+            or k.ndim != 4
+            or v.ndim != 4
+            or heads <= 0
+            or q.shape[1] != heads
+        ):
             return None, "skip_reshape Q/K/V layout is incompatible"
         batch, _, query_tokens, head_dim = q.shape
         kv_heads = k.shape[1]
@@ -139,11 +149,22 @@ def inspect_turing_attention_call(
         ):
             return None, "Q/K/V shapes or head counts are incompatible"
     else:
-        if q.ndim != 3 or k.ndim != 3 or v.ndim != 3 or heads <= 0 or q.shape[-1] % heads:
+        if (
+            q.ndim != 3
+            or k.ndim != 3
+            or v.ndim != 3
+            or heads <= 0
+            or q.shape[-1] % heads
+        ):
             return None, "unreshaped Q/K/V layout is incompatible"
         batch = q.shape[0]
         head_dim = q.shape[-1] // heads
-        if head_dim <= 0 or k.shape[0] != batch or v.shape[0] != batch or k.shape != v.shape:
+        if (
+            head_dim <= 0
+            or k.shape[0] != batch
+            or v.shape[0] != batch
+            or k.shape != v.shape
+        ):
             return None, "unreshaped Q/K/V shapes are incompatible"
         kv_heads = k.shape[-1] // head_dim if enable_gqa else heads
         if kv_heads <= 0 or k.shape[-1] != kv_heads * head_dim or heads % kv_heads:
@@ -190,10 +211,16 @@ def normalize_turing_attention_tensors(
     return q, k, v
 
 
-def finish_turing_attention_output(output: torch.Tensor, call: AttentionCall) -> torch.Tensor:
+def finish_turing_attention_output(
+    output: torch.Tensor, call: AttentionCall
+) -> torch.Tensor:
     if call.tensor_layout == "HND":
-        result = output if call.skip_output_reshape else output.transpose(1, 2).reshape(
-            call.batch, -1, call.heads * call.head_dim
+        result = (
+            output
+            if call.skip_output_reshape
+            else output.transpose(1, 2).reshape(
+                call.batch, -1, call.heads * call.head_dim
+            )
         )
     elif call.skip_output_reshape:
         result = output.transpose(1, 2)
@@ -214,7 +241,8 @@ def register_attention_backend(backend: AttentionBackend) -> None:
     if backend.option in _BACKENDS:
         raise ValueError(f"duplicate attention backend option: {backend.option}")
     normalized_aliases = {
-        _normalize_key(alias) for alias in (backend.option, backend.label, *backend.aliases)
+        _normalize_key(alias)
+        for alias in (backend.option, backend.label, *backend.aliases)
     }
     collisions = {
         alias: _ALIASES[alias] for alias in normalized_aliases if alias in _ALIASES
@@ -267,6 +295,7 @@ register_attention_backend(
         aliases=("pytorch", "torch", "torch_sdpa"),
     )
 )
+
 
 def attention_backend_choices() -> tuple[str, ...]:
     return tuple(_BACKENDS)
@@ -543,7 +572,6 @@ def preflight_bundled_w8a8(device: torch.device) -> None:
     _PREFLIGHTED_W8A8_DEVICES.add(index)
 
 
-
 def _bundled_fallback(
     fallback: Callable,
     reason: str,
@@ -576,7 +604,9 @@ def turing_sage_attention(
 
     turing_kernel = kwargs.pop("_turing_kernel", "sage")
     if turing_kernel not in {"sage", "w8a8"}:
-        raise ValueError(f"unsupported bundled Turing attention kernel: {turing_kernel}")
+        raise ValueError(
+            f"unsupported bundled Turing attention kernel: {turing_kernel}"
+        )
 
     fallback_args = (q, k, v, heads)
     fallback_kwargs = {
@@ -611,7 +641,9 @@ def turing_sage_attention(
     tensor_layout = call.tensor_layout
     q, k, v = normalize_turing_attention_tensors(q, k, v, call)
 
-    index = q.device.index if q.device.index is not None else torch.cuda.current_device()
+    index = (
+        q.device.index if q.device.index is not None else torch.cuda.current_device()
+    )
     sequence_axis = 2 if tensor_layout == "HND" else 1
     head_axis = 1 if tensor_layout == "HND" else 2
     kernel_key = (

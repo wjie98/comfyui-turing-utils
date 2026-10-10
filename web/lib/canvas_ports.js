@@ -8,11 +8,9 @@ export function entries(node) {
 export function syncPorts(node, ports) {
   node._syncingPorts = true;
   for (let i = (node.inputs?.length || 0) - 1; i >= 0; i--)
-    if (node.inputs[i]._append || node.inputs[i].name === "＋")
-      node.removeInput(i);
+    if (node.inputs[i]._append || node.inputs[i].name === "＋") node.removeInput(i);
   for (let i = (node.outputs?.length || 0) - 1; i >= 0; i--)
-    if (node.outputs[i]._append || node.outputs[i].name === "＋")
-      node.removeOutput(i);
+    if (node.outputs[i]._append || node.outputs[i].name === "＋") node.removeOutput(i);
   const old = entries(node),
     ids = new Map(old.map((p) => [p.slot, p.id]));
   for (const input of node.inputs || [])

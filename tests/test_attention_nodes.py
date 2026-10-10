@@ -11,7 +11,10 @@ import torch
 PLUGIN_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PLUGIN_ROOT))
 
-from comfyui_turing_utils.attention import patches as attention_patches, runtime as attention_runtime  # noqa: E402
+from comfyui_turing_utils.attention import (
+    patches as attention_patches,
+    runtime as attention_runtime,
+)  # noqa: E402
 from comfyui_turing_utils.nodes import attention as attention_nodes  # noqa: E402
 
 
@@ -69,7 +72,8 @@ class SparseAttentionNodeTest(unittest.TestCase):
         model = FakePatcher()
         override = object()
         with mock.patch(
-            "comfyui_turing_utils.attention.patches.make_sparse_attention_override", return_value=override
+            "comfyui_turing_utils.attention.patches.make_sparse_attention_override",
+            return_value=override,
         ) as make_override:
             patched = attention_patches.apply_sparse_attention_patch(
                 model,
@@ -154,21 +158,26 @@ class SparseAttentionNodeTest(unittest.TestCase):
         model = object()
         patched = object()
         apply_patch = mock.Mock(return_value=patched)
-        with mock.patch.dict(attention_nodes._ATTENTION_STRATEGIES, {"sla": apply_patch}):
+        with mock.patch.dict(
+            attention_nodes._ATTENTION_STRATEGIES, {"sla": apply_patch}
+        ):
             output = attention_nodes.AttentionStrategy.execute(
-                model, dict(strategy="sla",
-                sparsity_ratio=0.8,
-                prefix_policy="manual",
-                manual_prefix_tokens=128,
-                sparse_reference_image=True,
-                sparse_reference_video=False,
-                sparse_reference_audio=True,
-                dense_prefix_steps=2,
-                dense_suffix_steps=1,
-                dense_prefix_layers=3,
-                dense_suffix_layers=4,
-                debug_route_density=False,
-            )).result
+                model,
+                dict(
+                    strategy="sla",
+                    sparsity_ratio=0.8,
+                    prefix_policy="manual",
+                    manual_prefix_tokens=128,
+                    sparse_reference_image=True,
+                    sparse_reference_video=False,
+                    sparse_reference_audio=True,
+                    dense_prefix_steps=2,
+                    dense_suffix_steps=1,
+                    dense_prefix_layers=3,
+                    dense_suffix_layers=4,
+                    debug_route_density=False,
+                ),
+            ).result
         self.assertEqual(output, (patched,))
         apply_patch.assert_called_once_with(
             model,
@@ -189,22 +198,27 @@ class SparseAttentionNodeTest(unittest.TestCase):
         model = object()
         patched = object()
         apply_patch = mock.Mock(return_value=patched)
-        with mock.patch.dict(attention_nodes._ATTENTION_STRATEGIES, {"sol": apply_patch}):
+        with mock.patch.dict(
+            attention_nodes._ATTENTION_STRATEGIES, {"sol": apply_patch}
+        ):
             output = attention_nodes.AttentionStrategy.execute(
-                model, dict(strategy="sol",
-                routing_threshold=0.85,
-                prefix_policy="manual",
-                manual_prefix_tokens=256,
-                skipped_residual="1x64",
-                sparse_reference_image=True,
-                sparse_reference_video=False,
-                sparse_reference_audio=True,
-                dense_prefix_steps=2,
-                dense_suffix_steps=1,
-                dense_prefix_layers=3,
-                dense_suffix_layers=4,
-                debug_route_density=False,
-            )).result
+                model,
+                dict(
+                    strategy="sol",
+                    routing_threshold=0.85,
+                    prefix_policy="manual",
+                    manual_prefix_tokens=256,
+                    skipped_residual="1x64",
+                    sparse_reference_image=True,
+                    sparse_reference_video=False,
+                    sparse_reference_audio=True,
+                    dense_prefix_steps=2,
+                    dense_suffix_steps=1,
+                    dense_prefix_layers=3,
+                    dense_suffix_layers=4,
+                    debug_route_density=False,
+                ),
+            ).result
         self.assertEqual(output, (patched,))
         apply_patch.assert_called_once_with(
             model,

@@ -1,7 +1,61 @@
 # comfyui-turing-utils-kernel
 
+Version 0.45.0 extends the existing grouped INT8 operator to uniform W6A8.
+The exported `turing_codebook_w4a8_linear` name is retained as an ABI entry point:
+W4 supplies a 16-entry codebook; W6 supplies `None`. W6 rows contain a K/2-byte
+low-nibble plane followed by a K/4-byte high-two-bit plane. Decode computes
+`round((code - 32) * group_scale)`, clamps to S8, then reuses the same INT8
+contraction and channel-scale epilogue. Long g16 sequences on SM75 decode inline
+into a spill-free 128x128 shared tile; newer GPUs default to bounded S8 staging
+to reuse the asynchronous INT8 schedule. Other shapes also use bounded S8
+chunks. There is no full expanded-weight cache. W6 requires K%32=0 and group sizes that are multiples of
+16. Rebuild when updating from 0.44.0; the old W4 calling convention still works.
+
+`scripts/benchmark_grouped_int8.py` measures auto W6, staged W6 and the equivalent
+resident S8 contraction separately from activation quantization. On A40 at
+M/N/K=8193/4096/5376, the initial 128x256 inline schedule took 5.13 ms, staged
+decode + GEMM 1.76 ms, and resident S8 GEMM 1.74 ms. This motivates the newer-GPU
+staged default. The final auto path measured 1.96 ms versus resident S8 1.89 ms;
+at M=65536 it measured 15.02 ms versus 15.17 ms, effectively similar within
+measurement variability. These are not H3 end-to-end speed or quality results. Exact SM75
+compilation of the W6 128x128 tile reports 168 registers, 32 KiB dynamic shared
+memory and zero spill bytes: one CTA/SM is register-limited on a 2080 Ti's SM75
+resource model. Actual SM75 latency still requires target-hardware validation.
+
 Separately installed CUDA/PyTorch extension for the ComfyUI plugin's quantized
-runtime. Version 0.43.0 adds per-token H3 modulation indices to all three
+runtime. Version 0.44.0 replaces the split FP16 VAE activation path with one
+fused quantizer: FP16 input storage, FP32 activation/regular-Hadamard rotation,
+FP32 row scale and division, then INT8 rounding. RMSNorm, SwiGLU and tanh-GELU
+are fused without an FP16/FP32 rotated-row allocation in global memory. Common
+widths reuse up to 32 KiB of shared memory; wider rows recompute warp-local
+rotation to avoid architecture-dependent shared-memory limits. Zero and subnormal rows
+retain valid FP32 scales. The W8A8 GEMM still uses the original INT8 weight
+layout and FP16 epilogue; BF16/INT4 behavior is unchanged. This deliberately
+does not reproduce Kitchen's intermediate FP16 scale/division rounding.
+Rebuild the kernel when updating from 0.43.0 or earlier.
+
+`scripts/benchmark_fp16_convrot.py` compares the fused FP32-math path with a
+split FP16-matmul/row-quantization baseline and native Kitchen fusion. On A40,
+PyTorch 2.9.1+cu130, warmed CUDA graphs (five batches of 80 replays) measured:
+
+| Rows / K / activation | Split baseline | Fused FP32 math | Speedup |
+|---|---:|---:|---:|
+| 8192 / 2048 / none | 0.236 ms | 0.128 ms | 1.84x |
+| 8192 / 2048 / SwiGLU | 0.540 ms | 0.209 ms | 2.58x |
+| 8192 / 8192 / none | 0.901 ms | 0.596 ms | 1.51x |
+
+Native Kitchen fusion was faster (0.113/0.144/0.473 ms for these rows), but uses
+different intermediate FP16 scale/division rounding. These timings exclude the
+GEMM and are not end-to-end VAE speedups. At 8192 x 2048, extra peak allocation
+(including the returned INT8 tensor) fell from 48 to 16 MiB without activation,
+and from 80 to 16 MiB with SwiGLU. The FP16-storage oracle tests cover zero,
+subnormal, nonfinite, noncontiguous and 65536-wide rows, activation fusion,
+graph capture, FP16 epilogue boundaries, and 36-block decoder scope restoration.
+The latter is a reduced-width synthetic decoder, not pretrained visual-quality
+validation. SM75/SM86 compilation has no register spills; target-card runtime
+and pretrained H3 video quality still require validation.
+
+Version 0.43.0 adds per-token H3 modulation indices to all three
 segmented AdaLN/gated-residual ops. The indexed path preserves native dtype
 boundaries and uses a block-local int64 row vector, without expanded parameter
 matrices or persistent mask caches. Older native binaries retain the plugin's
@@ -13,9 +67,9 @@ two gated-residual stages, including index packing. On A40/cu128 at
 end-to-end video speedup. RMS reduction order can change last-bit rounding;
 the indexed gated residual matches the tested native PyTorch output exactly.
 
-Version 0.42.0 adds FP16 row quantization and an FP16 W8A8 epilogue
-for the H3 video VAE, preserving native activation/rotation and original INT8 weight
-layout and the existing BF16 APIs. It does not force BF16 VAE execution.
+Version 0.42.0 added FP16 row quantization and an FP16 W8A8 epilogue
+for the H3 video VAE. Its split activation quantizer has been replaced in 0.44.0;
+the original INT8 weight layout, FP16 output and BF16 APIs are preserved.
 Version 0.41.0 completed the mapped physical-K/logical-RoPE Sol path
 for both integer and floating V. W8A8 uses mapped summaries plus its INT8-V
 gather, while Sage/SDPA-derived policies keep physical FP16/BF16 V and map both
@@ -95,6 +149,7 @@ csrc/
   tensor_bridge.h                        tensor/stream bridge used by CUDA entry points
   turing/
     convrot_quant.cu                      staged/row-buffer W8 and W4 ConvRot quantizers
+    fp16_convrot_quant.cu                 fused FP32-math ConvRot quantizer with FP16 input
     segmented_rms_adaln.cu                RMSNorm/LayerNorm + AdaLN kernels
     w4a8.cu                               legacy packed W4 and grouped-codebook W4 SM75 GEMMs
     sage/                                 bundled dense/sparse attention and fused Q/K preprocessing
@@ -180,8 +235,9 @@ indices and E4M3 g16 scales directly while filling the normal CUTLASS W8A8
 shared-memory tile for long sequences, then writes BF16 directly. Short
 sequences and non-g16 compatibility cases retain a bounded staged decoder. It
 does not materialize a full INT32 output workspace. Unsupported asymmetric
-correction layouts delegate to Kitchen rather than silently changing their
-math.
+correction layouts delegate to Kitchen at the operator boundary rather than
+silently changing their math. The ConvRot checkpoint loader rejects correction
+tensors, because the current ComfyUI grouped loader does not retain them.
 
 Version 0.23 retains the split prequantize/execute attention ABI used by current
 ComfyUI attention tensor containers. It releases the original Q/K/V storage

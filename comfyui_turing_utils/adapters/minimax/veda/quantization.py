@@ -3,6 +3,7 @@
 W8A8 uses shared Q/K Hadamard rotation, without chunk-local K centering.
 V scales span the complete sequence so compact and whole preparation agree.
 """
+
 from dataclasses import dataclass, replace
 from importlib import import_module
 
@@ -36,10 +37,15 @@ def finish_value(packed):
     if not isinstance(packed, AttentionPack):
         return packed
     b, h, n, d = packed.value.shape
-    vi = torch.empty((b, h, d, (n + 63) // 64 * 64),
-                     device=packed.value.device, dtype=torch.int8)
+    vi = torch.empty(
+        (b, h, d, (n + 63) // 64 * 64), device=packed.value.device, dtype=torch.int8
+    )
     vs = torch.empty((b, h, d), device=packed.value.device, dtype=torch.float32)
     load_kernel_extension("_sage_qattn_sm75").quantize_v_int8_sm75(packed.value, vi, vs)
     # Native W8A8 only needs the logical V dtype/head dimension, not its storage.
-    return replace(packed, value=packed.value.new_empty((b, h, 0, d)),
-                   value_int8=vi, value_scale=vs)
+    return replace(
+        packed,
+        value=packed.value.new_empty((b, h, 0, d)),
+        value_int8=vi,
+        value_scale=vs,
+    )

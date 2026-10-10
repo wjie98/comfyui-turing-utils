@@ -18,9 +18,7 @@ from ..log import get_logger
 LOG = get_logger("stage")
 STAGE_BARRIER_NODE_ID = "TuringUtilsStageBarrier"
 STAGE_PATH_NODE_ID = "TuringUtilsStagePath"
-STAGE_SCHEDULING_NODE_IDS = frozenset(
-    (STAGE_BARRIER_NODE_ID, STAGE_PATH_NODE_ID)
-)
+STAGE_SCHEDULING_NODE_IDS = frozenset((STAGE_BARRIER_NODE_ID, STAGE_PATH_NODE_ID))
 _PATCH_MARKER = "_turing_utils_stage_barrier_scheduler"
 _STAGE_PATCH_MARKER = "_turing_utils_stage_barrier_staging"
 _PLANNER_ATTRIBUTE = "_turing_utils_stage_barrier_planner"
@@ -96,9 +94,7 @@ def _barrier_predecessors(
     predecessors: Mapping[str, set[str]],
 ) -> dict[str, set[str]]:
     return {
-        node_id: _nearest_barrier_predecessors(
-            node_id, barriers, predecessors
-        )
+        node_id: _nearest_barrier_predecessors(node_id, barriers, predecessors)
         for node_id in barriers
     }
 
@@ -108,8 +104,7 @@ def _barrier_topological_order(
 ) -> list[str]:
     successors = {node_id: set() for node_id in barrier_predecessors}
     indegree = {
-        node_id: len(sources)
-        for node_id, sources in barrier_predecessors.items()
+        node_id: len(sources) for node_id, sources in barrier_predecessors.items()
     }
     for target, sources in barrier_predecessors.items():
         for source in sources:
@@ -220,9 +215,7 @@ class BarrierPlanner:
     def _record_completed(self, current_barriers: set[str]) -> None:
         disappeared = self._visible_barriers - current_barriers
         completed = [
-            self._phases[node_id]
-            for node_id in disappeared
-            if node_id in self._phases
+            self._phases[node_id] for node_id in disappeared if node_id in self._phases
         ]
         if completed:
             latest = max(completed)
@@ -243,9 +236,7 @@ class BarrierPlanner:
         dynamic_refresh: bool,
     ) -> None:
         barrier_ids = set(stages)
-        direct_predecessors = _barrier_predecessors(
-            barrier_ids, predecessors
-        )
+        direct_predecessors = _barrier_predecessors(barrier_ids, predecessors)
         order = _barrier_topological_order(direct_predecessors)
         assigned: dict[str, BarrierPhase] = {}
 
@@ -261,8 +252,7 @@ class BarrierPlanner:
                 source_phase = assigned[source]
                 round_id = max(
                     round_id,
-                    source_phase.round
-                    + int(stage < source_phase.stage),
+                    source_phase.round + int(stage < source_phase.stage),
                 )
             assigned[node_id] = BarrierPhase(round_id, stage)
 
@@ -296,17 +286,12 @@ class BarrierPlanner:
         stages = {
             node_id: stage
             for node_id in pending
-            if (
-                stage := _barrier_stage(self.dynprompt, node_id)
-            )
-            is not None
+            if (stage := _barrier_stage(self.dynprompt, node_id)) is not None
         }
         barrier_ids = set(stages)
         self._record_completed(barrier_ids)
         predecessors = _graph_predecessors(pending, blocking)
-        hidden_consumers = _direct_hidden_stage_inputs(
-            self.dynprompt, pending
-        )
+        hidden_consumers = _direct_hidden_stage_inputs(self.dynprompt, pending)
         hidden_phases = {
             node_id: min(
                 BarrierPhase(self._minimum_round(stage), stage)
@@ -324,9 +309,7 @@ class BarrierPlanner:
                     if phase == discovery_phase
                 ]
                 required = _ancestors(discovery_targets, predecessors)
-                candidates = [
-                    node_id for node_id in available if node_id in required
-                ]
+                candidates = [node_id for node_id in available if node_id in required]
                 if candidates:
                     return candidates
             return available
@@ -335,12 +318,9 @@ class BarrierPlanner:
         stale_phases = {
             node_id
             for node_id in barrier_ids
-            if self._phases.get(node_id, BarrierPhase(-1, -1)).stage
-            != stages[node_id]
+            if self._phases.get(node_id, BarrierPhase(-1, -1)).stage != stages[node_id]
             or self._phases.get(node_id, BarrierPhase(-1, -1))
-            < BarrierPhase(
-                self._minimum_round(stages[node_id]), stages[node_id]
-            )
+            < BarrierPhase(self._minimum_round(stages[node_id]), stages[node_id])
         }
         if new_barriers or stale_phases or not self._logged_initial_plan:
             self._assign_phases(
@@ -351,35 +331,25 @@ class BarrierPlanner:
 
         active_phase = min(self._phases[node_id] for node_id in barrier_ids)
         discoverable = [
-            node_id
-            for node_id, phase in hidden_phases.items()
-            if phase <= active_phase
+            node_id for node_id, phase in hidden_phases.items() if phase <= active_phase
         ]
         if discoverable:
-            discovery_phase = min(
-                hidden_phases[node_id] for node_id in discoverable
-            )
+            discovery_phase = min(hidden_phases[node_id] for node_id in discoverable)
             discovery_targets = [
                 node_id
                 for node_id in discoverable
                 if hidden_phases[node_id] == discovery_phase
             ]
             required = _ancestors(discovery_targets, predecessors)
-            candidates = [
-                node_id for node_id in available if node_id in required
-            ]
+            candidates = [node_id for node_id in available if node_id in required]
             if candidates:
                 return candidates
 
         targets = [
-            node_id
-            for node_id in barrier_ids
-            if self._phases[node_id] == active_phase
+            node_id for node_id in barrier_ids if self._phases[node_id] == active_phase
         ]
         required = _ancestors(targets, predecessors)
-        candidates = [
-            node_id for node_id in available if node_id in required
-        ]
+        candidates = [node_id for node_id in available if node_id in required]
         if candidates:
             self._warned_unavailable_phase = None
             return candidates

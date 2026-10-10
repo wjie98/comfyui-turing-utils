@@ -79,10 +79,18 @@ class _FakeModel:
         init_mask,
         mllm_memory_size,
     ):
-        self.calls.append((start_frame_idx, max_frame_num_to_track, reverse, mllm_memory_size))
-        indexes = range(start_frame_idx, -1, -1) if reverse else range(start_frame_idx, self.frame_count)
+        self.calls.append(
+            (start_frame_idx, max_frame_num_to_track, reverse, mllm_memory_size)
+        )
+        indexes = (
+            range(start_frame_idx, -1, -1)
+            if reverse
+            else range(start_frame_idx, self.frame_count)
+        )
         for index in indexes:
-            logits = torch.full((1, 1, self.height, self.width), 1.0 if index % 2 == 0 else -1.0)
+            logits = torch.full(
+                (1, 1, self.height, self.width), 1.0 if index % 2 == 0 else -1.0
+            )
             yield index, [1], logits
 
 
@@ -173,7 +181,9 @@ class SeCNodeTest(unittest.TestCase):
         tracker_by_id = {item.id: item for item in tracker.inputs}
         self.assertFalse(tracker_by_id["bounding_box"].socketless)
         self.assertTrue(tracker_by_id["bounding_box"].force_input)
-        self.assertEqual(tracker_inputs[3:6], ["positive_coords", "negative_coords", "bounding_box"])
+        self.assertEqual(
+            tracker_inputs[3:6], ["positive_coords", "negative_coords", "bounding_box"]
+        )
         for name in ("positive_coords", "negative_coords"):
             self.assertTrue(tracker_by_id[name].force_input)
             self.assertTrue(tracker_by_id[name].optional)
@@ -196,7 +206,9 @@ class SeCNodeTest(unittest.TestCase):
             mock.patch.object(sec, "_module_available", return_value=False),
         ):
             turing_with_fa2 = sec.resolve_sec_attention("auto", cuda, torch.float16)
-        self.assertEqual((turing_with_fa2.vision, turing_with_fa2.llm), ("sdpa", "sdpa"))
+        self.assertEqual(
+            (turing_with_fa2.vision, turing_with_fa2.llm), ("sdpa", "sdpa")
+        )
 
         with (
             mock.patch.object(sec, "_device_capability", return_value=(7, 5)),
@@ -204,7 +216,9 @@ class SeCNodeTest(unittest.TestCase):
             mock.patch.object(sec, "_module_available", return_value=False),
         ):
             turing_with_fa1 = sec.resolve_sec_attention("auto", cuda, torch.float16)
-        self.assertEqual((turing_with_fa1.vision, turing_with_fa1.llm), ("flash_attention_1", "sdpa"))
+        self.assertEqual(
+            (turing_with_fa1.vision, turing_with_fa1.llm), ("flash_attention_1", "sdpa")
+        )
 
         with (
             mock.patch.object(sec, "_device_capability", return_value=(9, 0)),
@@ -216,14 +230,18 @@ class SeCNodeTest(unittest.TestCase):
 
     def test_attention_sdpa_is_explicit_and_portable(self):
         plan = sec.resolve_sec_attention("sdpa", torch.device("cpu"), torch.float32)
-        self.assertEqual((plan.vision, plan.llm, plan.tracker), ("sdpa", "sdpa", "sdpa"))
+        self.assertEqual(
+            (plan.vision, plan.llm, plan.tracker), ("sdpa", "sdpa", "sdpa")
+        )
         legacy = sec.resolve_sec_attention(False, torch.device("cpu"), torch.float16)
         self.assertEqual(legacy.requested, "sdpa")
         with self.assertRaisesRegex(ValueError, "expected auto or sdpa"):
             sec.resolve_sec_attention("w8a8", torch.device("cpu"), torch.float16)
 
     def test_intern_vit_sdpa_matches_reference_attention(self):
-        from comfyui_turing_utils.vendor.sec.configuration_intern_vit import InternVisionConfig
+        from comfyui_turing_utils.vendor.sec.configuration_intern_vit import (
+            InternVisionConfig,
+        )
         from comfyui_turing_utils.vendor.sec.modeling_intern_vit import InternAttention
 
         torch.manual_seed(947)
@@ -247,7 +265,9 @@ class SeCNodeTest(unittest.TestCase):
         torch.testing.assert_close(actual, expected, rtol=1e-5, atol=1e-6)
 
     def test_intern_vit_flash_failure_is_cached_as_sdpa_fallback(self):
-        from comfyui_turing_utils.vendor.sec.configuration_intern_vit import InternVisionConfig
+        from comfyui_turing_utils.vendor.sec.configuration_intern_vit import (
+            InternVisionConfig,
+        )
         from comfyui_turing_utils.vendor.sec.modeling_intern_vit import InternAttention
 
         config = InternVisionConfig(
@@ -261,7 +281,9 @@ class SeCNodeTest(unittest.TestCase):
         attention = InternAttention(config).eval()
         hidden_states = torch.randn(1, 9, 32)
 
-        with mock.patch.object(attention, "_flash_attn", side_effect=RuntimeError("no kernel image")):
+        with mock.patch.object(
+            attention, "_flash_attn", side_effect=RuntimeError("no kernel image")
+        ):
             actual = attention(hidden_states)
 
         self.assertEqual(attention.attention_backend, "sdpa")
@@ -333,8 +355,14 @@ class SeCNodeTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "final frame"):
             sec._resolve_annotation_frame_idx(-5, 4)
 
-    @mock.patch.object(sec.comfy.model_management, "throw_exception_if_processing_interrupted")
-    @mock.patch.object(sec.comfy.model_management, "intermediate_device", return_value=torch.device("cpu"))
+    @mock.patch.object(
+        sec.comfy.model_management, "throw_exception_if_processing_interrupted"
+    )
+    @mock.patch.object(
+        sec.comfy.model_management,
+        "intermediate_device",
+        return_value=torch.device("cpu"),
+    )
     @mock.patch.object(sec.comfy.model_management, "load_models_gpu")
     def test_tracking_uses_comfy_lifecycle_and_cleans_state(
         self,

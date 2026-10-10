@@ -16,6 +16,8 @@ from comfyui_turing_utils.nodes.video_roi import (  # noqa: E402
     VideoMaskGuidedCrop,
     VideoMaskGuidedStitch,
     VideoPadForOutpaint,
+)
+from comfyui_turing_utils.media.geometry import (
     crop_video_by_mask,
     pad_video_for_outpaint,
     stitch_video_crops,
@@ -42,25 +44,33 @@ class VideoMaskRoiTest(unittest.TestCase):
         self.assertEqual(crop.node_id, "TuringUtilsVideoMaskGuidedCrop")
         self.assertFalse(any(item.advanced for item in crop.inputs))
         self.assertEqual(stitch.node_id, "TuringUtilsVideoMaskGuidedStitch")
-        self.assertEqual([item.id for item in crop.outputs], ["images", "masks", "crop_info"])
+        self.assertEqual(
+            [item.id for item in crop.outputs], ["images", "masks", "crop_info"]
+        )
         self.assertEqual(crop.outputs[-1].io_type, stitch.inputs[3].io_type)
-        self.assertEqual([item.id for item in stitch.inputs[:4]], [
-            "base_images",
-            "cropped_images",
-            "cropped_masks",
-            "crop_info",
-        ])
+        self.assertEqual(
+            [item.id for item in stitch.inputs[:4]],
+            [
+                "base_images",
+                "cropped_images",
+                "cropped_masks",
+                "crop_info",
+            ],
+        )
 
     def test_moving_masks_are_cropped_per_frame_and_align_with_images(self):
         masks = torch.zeros(3, 40, 100)
         for index, x in enumerate((10, 35, 65)):
-            masks[index, 12:24, x:x + 12] = 1
+            masks[index, 12:24, x : x + 12] = 1
         # Change the interior without changing the third frame's bounding box.
         masks[2, 16:20, 69:73] = 0
         images = masks.unsqueeze(-1).repeat(1, 1, 1, 3)
         for smoothing in (1, 5):
             crops, cropped_masks, info = _crop(
-                images, masks, context_scale=2.0, smooth_window=smoothing,
+                images,
+                masks,
+                context_scale=2.0,
+                smooth_window=smoothing,
             )
             torch.testing.assert_close(crops[..., 0], cropped_masks)
             self.assertNotEqual(info["boxes"][0], info["boxes"][2])
@@ -68,7 +78,9 @@ class VideoMaskRoiTest(unittest.TestCase):
         # A translating shape becomes stationary in the moving crop, without
         # duplication: frame-specific shape changes above still survive.
         _, cropped_masks, _ = _crop(images, masks, context_scale=2.0)
-        torch.testing.assert_close(cropped_masks[0], cropped_masks[1], atol=2e-6, rtol=1e-5)
+        torch.testing.assert_close(
+            cropped_masks[0], cropped_masks[1], atol=2e-6, rtol=1e-5
+        )
 
     def test_single_frame_mask_is_not_broadcast_over_video(self):
         with self.assertRaisesRegex(ValueError, "same frame count"):
@@ -156,7 +168,9 @@ class VideoMaskRoiTest(unittest.TestCase):
         masks = torch.zeros(2, 32, 64)
         masks[0, 12:20, 20:28] = 1.0
         crops, crop_masks, info = _crop(base, masks, width=16, height=16)
-        output = stitch_video_crops(base, torch.ones_like(crops), crop_masks, info, feather=0)
+        output = stitch_video_crops(
+            base, torch.ones_like(crops), crop_masks, info, feather=0
+        )
         self.assertGreater(float(output[0].max()), 0.99)
         self.assertEqual(float(output[1].max()), 0.0)
 
@@ -203,7 +217,9 @@ class VideoOutpaintTest(unittest.TestCase):
 
         layout = schema.inputs[1]
         self.assertEqual(layout.id, "layout")
-        self.assertEqual([option.key for option in layout.options], ["pixels", "relative_frame"])
+        self.assertEqual(
+            [option.key for option in layout.options], ["pixels", "relative_frame"]
+        )
         self.assertEqual(
             [item.id for item in layout.options[0].inputs],
             ["left", "top", "right", "bottom"],
@@ -300,9 +316,13 @@ class VideoOutpaintTest(unittest.TestCase):
             padding_mode="neutral_gray",
         )
 
-        self.assertTrue(torch.allclose(output[:, :, :15], torch.full_like(output[:, :, :15], 0.5)))
+        self.assertTrue(
+            torch.allclose(output[:, :, :15], torch.full_like(output[:, :, :15], 0.5))
+        )
         self.assertEqual(float(output[:, :, 16:80].abs().max()), 0.0)
-        self.assertTrue(torch.allclose(output[:, :, 81:], torch.full_like(output[:, :, 81:], 0.5)))
+        self.assertTrue(
+            torch.allclose(output[:, :, 81:], torch.full_like(output[:, :, 81:], 0.5))
+        )
 
     def test_node_execution_and_invalid_layout_fail_clearly(self):
         images = torch.zeros(1, 32, 32, 3)

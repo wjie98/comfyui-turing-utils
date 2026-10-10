@@ -146,7 +146,9 @@ class StageBarrierTest(unittest.TestCase):
         self.assertEqual(schema.inputs[0].id, "stage")
         self.assertEqual(schema.inputs[0].min, 0)
         self.assertTrue(schema.inputs[0].socketless)
-        self.assertEqual([item.id for item in schema.inputs[1:]], [f"value_{i}" for i in range(8)])
+        self.assertEqual(
+            [item.id for item in schema.inputs[1:]], [f"value_{i}" for i in range(8)]
+        )
         self.assertTrue(schema.inputs[1].optional)
         self.assertEqual(schema.inputs[1].io_type, "*")
         self.assertEqual(len(schema.outputs), 8)
@@ -157,7 +159,8 @@ class StageBarrierTest(unittest.TestCase):
         third = {"samples": torch.ones(1)}
         output = StageBarrier.execute(
             3,
-            value_2=third, value_0=first,
+            value_2=third,
+            value_0=first,
         ).result
         self.assertEqual(len(output), 8)
         self.assertIs(output[0], first)

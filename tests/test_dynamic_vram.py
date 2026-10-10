@@ -72,17 +72,18 @@ class DynamicVramFenceTest(unittest.TestCase):
                 events.append("sample")
                 return "ok"
 
-        wrapper = dynamic_vram.make_dynamic_vram_sample_fence(
-            torch.device("cuda", 0)
-        )
-        with mock.patch(
-            "comfyui_turing_utils.adapters.dynamic_vram.torch.cuda.synchronize",
-            side_effect=lambda device: events.append(("sync", device)),
-        ) as synchronize, mock.patch.object(
-            dynamic_vram.CUDA_PHASE_PROFILER,
-            "report_after_synchronize",
-            side_effect=lambda: events.append("profile"),
-        ) as report:
+        wrapper = dynamic_vram.make_dynamic_vram_sample_fence(torch.device("cuda", 0))
+        with (
+            mock.patch(
+                "comfyui_turing_utils.adapters.dynamic_vram.torch.cuda.synchronize",
+                side_effect=lambda device: events.append(("sync", device)),
+            ) as synchronize,
+            mock.patch.object(
+                dynamic_vram.CUDA_PHASE_PROFILER,
+                "report_after_synchronize",
+                side_effect=lambda: events.append("profile"),
+            ) as report,
+        ):
             result = wrapper(Executor())
 
         self.assertEqual(result, "ok")
@@ -103,15 +104,16 @@ class DynamicVramFenceTest(unittest.TestCase):
             def __call__(self, *args, **kwargs):
                 raise RuntimeError("sample failed")
 
-        wrapper = dynamic_vram.make_dynamic_vram_sample_fence(
-            torch.device("cuda", 0)
-        )
-        with mock.patch(
-            "comfyui_turing_utils.adapters.dynamic_vram.torch.cuda.synchronize"
-        ) as synchronize, mock.patch.object(
-            dynamic_vram.CUDA_PHASE_PROFILER,
-            "report_after_synchronize",
-        ) as report:
+        wrapper = dynamic_vram.make_dynamic_vram_sample_fence(torch.device("cuda", 0))
+        with (
+            mock.patch(
+                "comfyui_turing_utils.adapters.dynamic_vram.torch.cuda.synchronize"
+            ) as synchronize,
+            mock.patch.object(
+                dynamic_vram.CUDA_PHASE_PROFILER,
+                "report_after_synchronize",
+            ) as report,
+        ):
             with self.assertRaisesRegex(RuntimeError, "sample failed"):
                 wrapper(Executor())
 
