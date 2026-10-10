@@ -543,21 +543,6 @@ def preflight_bundled_w8a8(device: torch.device) -> None:
     _PREFLIGHTED_W8A8_DEVICES.add(index)
 
 
-def _reshape_qkv(q, k, v, heads: int, enable_gqa: bool):
-    if q.ndim != 3 or k.ndim != 3 or v.ndim != 3:
-        raise ValueError("unreshaped Q/K/V must be three-dimensional")
-    batch = q.shape[0]
-    if heads <= 0 or q.shape[-1] % heads != 0:
-        raise ValueError("Q inner dimension must be divisible by the head count")
-    head_dim = q.shape[-1] // heads
-    kv_heads = k.shape[-1] // head_dim if enable_gqa else heads
-    if kv_heads <= 0 or k.shape[-1] != kv_heads * head_dim or v.shape[-1] != kv_heads * head_dim:
-        raise ValueError("K/V inner dimensions do not match the Q head dimension")
-    q = q.reshape(batch, -1, heads, head_dim)
-    k = k.reshape(batch, -1, kv_heads, head_dim)
-    v = v.reshape(batch, -1, kv_heads, head_dim)
-    return q, k, v, batch, head_dim
-
 
 def _bundled_fallback(
     fallback: Callable,

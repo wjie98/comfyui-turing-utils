@@ -11,7 +11,7 @@ import torch
 PLUGIN_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PLUGIN_ROOT))
 
-import attention as attention_backends  # noqa: E402
+from comfyui_turing_utils.attention import patches as attention_patches, runtime as attention_runtime  # noqa: E402
 from comfyui_turing_utils.nodes import attention as attention_nodes  # noqa: E402
 
 
@@ -69,9 +69,9 @@ class SparseAttentionNodeTest(unittest.TestCase):
         model = FakePatcher()
         override = object()
         with mock.patch(
-            "attention.make_sparse_attention_override", return_value=override
+            "comfyui_turing_utils.attention.patches.make_sparse_attention_override", return_value=override
         ) as make_override:
-            patched = attention_backends.apply_sparse_attention_patch(
+            patched = attention_patches.apply_sparse_attention_patch(
                 model,
                 min_sequence_tokens=8192,
                 routing_threshold=0.85,
@@ -92,7 +92,7 @@ class SparseAttentionNodeTest(unittest.TestCase):
             "optimized_attention_override", model.model_options["transformer_options"]
         )
         options = patched.model_options["transformer_options"]
-        runtime = options[attention_backends.ATTENTION_RUNTIME_CONFIG_KEY]
+        runtime = options[attention_runtime.ATTENTION_RUNTIME_CONFIG_KEY]
         self.assertEqual(runtime.strategy, "sol")
         self.assertEqual(runtime.dense_backend, "sdpa")
         self.assertIs(runtime.strategy_override, override)
@@ -112,7 +112,6 @@ class SparseAttentionNodeTest(unittest.TestCase):
             dense_prefix_layers=3,
             dense_suffix_layers=4,
             debug_route_density=False,
-            use_w8a8=None,
             dense_backend="sdpa",
             dense_override=mock.ANY,
         )

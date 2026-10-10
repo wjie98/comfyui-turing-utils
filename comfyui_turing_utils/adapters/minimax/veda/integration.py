@@ -142,7 +142,7 @@ def configure(model, *, predictor_name: str, predictor_precision: str = "w8a8",
         for block in blocks
     ):
         raise ValueError("Veda predictor layer/head dimensions do not match this H3 model")
-    runtime = attention_base_runtime(model, use_w8a8=None)
+    runtime = attention_base_runtime(model)
     import comfy.patcher_extension
     previous = model.model_options.get("transformer_options", {}).get("turing_utils_attention_strategy")
     if previous and previous != "veda":

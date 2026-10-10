@@ -117,12 +117,17 @@ def save_instance(root, identity, workflow, prompt, revision):
         return read_instance(root, identity)["revision"]
 
 
-def document(root):
-    canvas = load_json(Path(root) / "canvas.json")
+def document(root, canvas=None, card_ids=None):
+    if canvas is None:
+        canvas = load_json(Path(root) / "canvas.json")
     if canvas.get("format") != 3:
         raise ValueError("Unsupported Canvas project format")
-    prompt, cards = {}, []
+    prompt, cards, connections = {}, [], {}
+    for connection in canvas.get("connections", []):
+        connections.setdefault(connection["target"], {})[connection["port"]] = connection
     for instance in canvas["cards"]:
+        if card_ids is not None and instance["id"] not in card_ids:
+            continue
         try:
             workflow = load_json(card_path(root, instance["id"]))
             data, interface = unpack(workflow)
@@ -139,7 +144,7 @@ def document(root):
                     value[0] = identities[value[0]]
             prompt[identities[node_id]] = node
         # External bindings replace endpoint defaults without running their local branches.
-        bindings = {c["port"]: c for c in canvas.get("connections", []) if c["target"] == instance["id"]}
+        bindings = connections.get(instance["id"], {})
         if bindings:
             replacements = {p["id"]:[bindings[p["id"]]["source"],bindings[p["id"]].get("slot",0)] for p in interface["inputs"] if p["id"] in bindings}
             # Apply links after local ID namespacing so cross-card material IDs stay intact.
@@ -176,38 +181,6 @@ def document(root):
         cards.append({**instance, "materials": materials, "fields": fields, "layout":layout, "instance":True, "outputs":outputs,
             "ports":[p for p in interface["inputs"] if p["kind"] == "value"], "bindings":bindings})
     return {"revision":canvas["revision"], "prompt":prompt, "workflow":{}, "cards":cards, "format":3}
-
-
-def connect(root, revision, target, port_id, source, source_slot=None):
-    with LOCK:
-        path=Path(root)/"canvas.json"
-        canvas=load_json(path)
-        if canvas["revision"] != revision:
-            raise ValueError("Canvas changed; reload before connecting")
-        workflow=load_json(card_path(root,target))
-        _,interface=unpack(workflow)
-        port=next((p for p in interface["inputs"] if p["id"] == port_id and p["kind"] == "value"),None)
-        if port is None:
-            raise ValueError("Unknown input port")
-        connections=[c for c in canvas.get("connections",[]) if (c["target"],c["port"]) != (target,port_id)]
-        if source:
-            doc=document(root)
-            graph=doc["prompt"]
-            kind=graph.get(source,{}).get("class_type")
-            allowed={"TuringMaterialText":{"STRING"},"TuringMaterialImage":{"IMAGE"},
-                     "TuringMaterialVideo":{"VIDEO"},"TuringMaterialAudio":{"AUDIO"}}
-            if port["type"] not in allowed.get(kind,set()):
-                raise ValueError("Material type does not match this input")
-            slot=0
-            if source_slot is not None and source_slot != slot:
-                raise ValueError("Selected output modality does not match the input")
-            if not any(p["source"] == source and p["source_slot"] == slot for c in doc["cards"] for p in c["outputs"]):
-                raise ValueError("Source must be exported by Canvas Outputs")
-            connections.append({"target":target,"port":port_id,"source":source,"slot":slot})
-        canvas["connections"]=connections
-        canvas["revision"]+=1
-        atomic_json(path,canvas)
-        return canvas["revision"]
 
 
 def patch(root, revision, changes):

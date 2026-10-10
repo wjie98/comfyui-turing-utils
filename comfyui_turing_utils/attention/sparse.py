@@ -260,14 +260,6 @@ def _sparse_dense_schedule(
     return dense
 
 
-def _sparse_dense_prefix_steps(
-    transformer_options,
-    steps: int,
-    state: dict[str, object],
-) -> bool:
-    """Compatibility wrapper retained for callers testing the prefix-step policy."""
-    return _sparse_dense_schedule(transformer_options, steps, 0, state)
-
 
 def _sparse_dense_layer(
     transformer_options,

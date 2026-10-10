@@ -82,64 +82,51 @@ const directoryPicker = (create) =>
   new DirectoryPicker(request, prompt, (message) =>
     app.extensionManager.dialog.confirm({ title: "删除空目录", message }),
   ).choose(create);
+function configureCard(node, card, document, directory) {
+  if (card.error) throw Error(card.error);
+  node.properties.card = card;
+  node.properties.directory = directory;
+  node.properties.values = Object.fromEntries(
+    card.fields.map((f) => [f.input, document.prompt[f.node].inputs[f.input]]),
+  );
+  const names = new Map(card.outputs.map((p) => [p.source, p.name]));
+  node.properties.materials = card.materials.map((id) => ({
+    id,
+    name: names.get(id) || "素材",
+    kind: document.prompt[id].class_type.replace("TuringMaterial", "").toLowerCase(),
+    selection: document.selections[id] || {},
+    executable: ["value", "images", "text"].some((name) =>
+      Array.isArray(document.prompt[id].inputs[name]),
+    ),
+  }));
+  node.inputs = card.ports.map((p) => ({ name: p.name, type: p.type, link: null }));
+  node.outputs = card.outputs.map((p) => ({ name: p.name, type: p.type, links: [] }));
+}
 function prepare({ workflow, document, statistics }) {
-  workflow.nodes.find((n) => n.type === ROOT).properties.statistics =
-    statistics;
+  workflow.nodes.find((n) => n.type === ROOT).properties.statistics = statistics;
+  const cards = new Map(document.cards.map((c) => [c.id, c]));
+  const outputs = new Map();
   for (const node of workflow.nodes) {
     if (node.type !== CARD) continue;
-    const card = document.cards.find((c) => c.id === node.properties.instance);
-    if (card.error) throw Error(card.error);
-    node.properties.card = card;
-    node.properties.directory = workflow.extra.turing_project.directory;
-    node.properties.values = Object.fromEntries(
-      card.fields.map((f) => [
-        f.input,
-        document.prompt[f.node].inputs[f.input],
-      ]),
-    );
-    node.properties.materials = card.materials.map((id) => ({
-      id,
-      name: card.outputs.find((p) => p.source === id)?.name || "素材",
-      kind: document.prompt[id].class_type
-        .replace("TuringMaterial", "")
-        .toLowerCase(),
-      selection: document.selections[id] || {},
-      executable: ["value", "images", "text"].some((name) =>
-        Array.isArray(document.prompt[id].inputs[name]),
-      ),
-    }));
-    node.inputs = card.ports.map((p) => ({
-      name: p.name,
-      type: p.type,
-      link: null,
-    }));
-    node.outputs = card.outputs.map((p) => ({
-      name: p.name,
-      type: p.type,
-      links: [],
-    }));
+    configureCard(node, cards.get(node.properties.instance), document,
+      workflow.extra.turing_project.directory);
+    node.properties.card.outputs.forEach((p, slot) => {
+      const key = p.source + ":" + p.source_slot;
+      if (!outputs.has(key)) outputs.set(key, { node, slot });
+    });
   }
   let id = 0;
-  for (const target of workflow.nodes.filter((n) => n.type === CARD))
+  for (const target of workflow.nodes) {
+    if (target.type !== CARD) continue;
     for (const [slot, port] of target.properties.card.ports.entries()) {
       const binding = target.properties.card.bindings?.[port.id];
-      if (!binding) continue;
-      const source = workflow.nodes.find(
-        (n) =>
-          n.type === CARD &&
-          n.properties.card.outputs.some(
-            (p) =>
-              p.source === binding.source && p.source_slot === binding.slot,
-          ),
-      );
+      const source = binding && outputs.get(binding.source + ":" + binding.slot);
       if (!source) continue;
-      const out = source.properties.card.outputs.findIndex(
-        (p) => p.source === binding.source && p.source_slot === binding.slot,
-      );
-      workflow.links.push([++id, source.id, out, target.id, slot, port.type]);
+      workflow.links.push([++id, source.node.id, source.slot, target.id, slot, port.type]);
       target.inputs[slot].link = id;
-      source.outputs[out].links.push(id);
+      source.node.outputs[source.slot].links.push(id);
     }
+  }
   workflow.last_link_id = id;
   return workflow;
 }
@@ -192,7 +179,7 @@ export async function saveProject(directory = project()?.directory) {
   try {
     const result = await enqueueSave(state, (revision) => {
       // Capture at queue execution, not enqueue time: adding a card may have
-      // refreshed the native tab while this autosave was waiting.
+      // changed the native graph while this autosave was waiting.
       const current = snapshot(directory);
       if (!current) return { revision };
       current.nodes = current.nodes.map((n) => ({
@@ -214,22 +201,36 @@ export async function saveProject(directory = project()?.directory) {
     throw error;
   }
 }
-async function addCard(spec, position) {
+export async function addCard(spec, position) {
   const state = { ...project() },
     directory = state.directory;
   await saveProject(directory);
   const result = await enqueueSave(state, async (revision) => {
     const added = await request("card/add", { directory, revision, ...spec });
-    await openProject(directory);
+    const definition = {
+      type: CARD, title: added.document.cards[0].title,
+      properties: { instance: added.id },
+      pos: position || [360, 20], size: [320, 300],
+    };
+    configureCard(definition, added.document.cards[0], added.document, directory);
+    if (project()?.directory === directory) {
+      const node = LiteGraph.createNode(CARD);
+      node.configure(definition);
+      app.graph.add(node);
+    } else {
+      const tab = app.extensionManager.workflow.openWorkflows.find(
+        (w) => w.activeState?.extra?.turing_project?.directory === directory,
+      );
+      if (tab) {
+        definition.id = ++tab.activeState.last_node_id;
+        tab.activeState.nodes.push(definition);
+      }
+    }
+    setProjectStatus(directory, "已保存", added.statistics);
     return added;
   });
-  if (position) {
-    const node = app.graph._nodes.find(
-      (n) => n.properties.instance === result.id,
-    );
-    node.pos = position;
-    await saveProject(directory);
-  }
+  await saveProject(directory);
+  return result;
 }
 async function editCard(node) {
   await saveProject();
@@ -449,12 +450,13 @@ function controls(node, m) {
       { values: [m.selection.asset?.split("/").at(-1) || ""] },
     );
     w.label = m.name;
+    const directory = node.properties.directory;
     bindMaterialCombo(node, w, {
-      key: `${node.properties.directory}:${m.kind}`,
+      key: `${directory}:${m.kind}`,
       list: async () =>
         (
           await request("history", {
-            directory: node.properties.directory,
+            directory,
             kind: m.kind,
             limit: 0,
           })

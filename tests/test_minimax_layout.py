@@ -14,7 +14,7 @@ COMFY_ROOT = PLUGIN_ROOT.parents[1]
 sys.path.insert(0, str(COMFY_ROOT))
 sys.path.insert(0, str(PLUGIN_ROOT))
 
-import attention  # noqa: E402
+from comfyui_turing_utils.attention import patches as attention_patches, runtime as attention_runtime  # noqa: E402
 from comfyui_turing_utils.adapters.minimax import layout as minimax_layout  # noqa: E402
 from comfyui_turing_utils.attention.layout import (  # noqa: E402
     ATTENTION_LAYOUT_REQUIREMENT_KEY,
@@ -306,16 +306,16 @@ class MiniMaxLayoutProviderTest(unittest.TestCase):
         override = object()
         with (
             self._minimax_type_patch(),
-            mock.patch("attention.make_sparse_attention_override", return_value=override),
+            mock.patch("comfyui_turing_utils.attention.patches.make_sparse_attention_override", return_value=override),
         ):
-            patched = attention.apply_sparse_attention_patch(model)
+            patched = attention_patches.apply_sparse_attention_patch(model)
 
         options = patched.model_options["transformer_options"]
         self.assertEqual(
             options[ATTENTION_LAYOUT_REQUIREMENT_KEY],
             minimax_layout.MINIMAX_H3_LAYOUT_KIND,
         )
-        runtime = attention.attention_runtime_config(options)
+        runtime = attention_runtime.attention_runtime_config(options)
         self.assertEqual(runtime.strategy, "sol")
         self.assertIs(runtime.strategy_override, override)
         self.assertEqual(len(patched.object_patches), 3)

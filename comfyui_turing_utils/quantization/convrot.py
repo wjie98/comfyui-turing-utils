@@ -353,28 +353,3 @@ def _summarize_convrot_modules(root: torch.nn.Module) -> ConvRotSummary:
         w8a8=w8a8,
         nvfp4=nvfp4,
     )
-
-
-_LEGACY_LOADING_EXPORTS = {
-    "DIFFUSION_FOLDER_NAME",
-    "CLIP_FOLDER_NAME",
-    "_official_clip_loader_inputs",
-    "_official_clip_types",
-    "_convrot_model_names",
-    "_resolve_convrot_model_path",
-    "_validate_runtime_support",
-    "load_convrot_model",
-    "load_convrot_clip_patcher",
-    "load_convrot_clip",
-}
-
-
-def __getattr__(name: str):
-    """Lazily preserve the pre-refactor import surface without a reverse import."""
-    if name not in _LEGACY_LOADING_EXPORTS:
-        raise AttributeError(name)
-    from ..loading import convrot as loading
-
-    value = getattr(loading, name)
-    globals()[name] = value
-    return value

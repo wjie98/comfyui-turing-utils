@@ -9,7 +9,7 @@ export function bindMaterialCombo(
   if (!entry)
     lists.set(
       key,
-      (entry = { items: [], listeners: new Set(), load: null, list }),
+      (entry = { items: [], listeners: new Set(), load: null, loaded: false, list }),
     );
   const update = () => {
     widget.options.values = [
@@ -41,7 +41,7 @@ export function bindMaterialCombo(
   };
   update();
   widget.refreshMaterialList = () => refreshMaterialList(key);
-  return refreshMaterialList(key);
+  return entry.loaded ? Promise.resolve() : refreshMaterialList(key);
 }
 
 export async function refreshMaterialList(key) {
@@ -52,6 +52,7 @@ export async function refreshMaterialList(key) {
       .list()
       .then((items) => {
         entry.items = items;
+        entry.loaded = true;
         for (const update of entry.listeners) update();
       })
       .finally(() => {

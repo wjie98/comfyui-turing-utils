@@ -59,7 +59,7 @@ def compile_segment(prompt, target, selections, directory, run_id, revision, fre
             compiled[output_key] = {"class_type": "_TuringMaterialRead" + kind.title(), "inputs": {
                 "directory": directory, "asset": selected["asset"],
                 "start": selected.get("start", 0), "end": selected.get("end", 0),
-                "include_audio": selected.get("include_audio", True), "run_id": run_id,
+                "run_id": run_id,
             }}
             return output_key
         if key in visiting:

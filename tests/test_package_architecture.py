@@ -12,6 +12,16 @@ if str(ROOT) not in sys.path:
 
 
 class PackageArchitectureTest(unittest.TestCase):
+    def test_canvas_routes_have_no_retired_duplicate_entrypoints(self):
+        source = ROOT / "comfyui_turing_utils/workspace/routes.py"
+        routes = {node.args[1].value for node in ast.walk(ast.parse(source.read_text()))
+                  if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+                  and node.func.id == "endpoint"}
+        retired = {"/protocol", "/project/statistics", "/project", "/card/connect",
+                   "/text", "/run", "/metadata"}
+        self.assertFalse(routes & retired)
+        self.assertTrue({"/select", "/selection", "/project/save", "/compile"} <= routes)
+
     def test_frontend_extension_is_registered(self):
         source = (ROOT / "__init__.py").read_text(encoding="utf-8")
         self.assertIn('WEB_DIRECTORY = "./web"', source)
@@ -145,7 +155,7 @@ class PackageArchitectureTest(unittest.TestCase):
         self.assertTrue((sage / "records.py").is_file())
         self.assertTrue((sage / "sparse_policy.py").is_file())
 
-    def test_root_contains_only_the_attention_compatibility_facade(self):
+    def test_root_has_no_retired_implementation_or_compatibility_modules(self):
         retired_modules = (
             "attention_nodes.py",
             "bernini_nodes.py",
@@ -162,7 +172,9 @@ class PackageArchitectureTest(unittest.TestCase):
             "wan_nodes.py",
         )
         self.assertFalse(any((ROOT / name).exists() for name in retired_modules))
-        self.assertTrue((ROOT / "attention.py").is_file())
+        self.assertFalse((ROOT / "attention.py").exists())
+        self.assertFalse((ROOT / "comfyui_turing_utils/attention/api.py").exists())
+        self.assertFalse((ROOT / "comfyui_turing_utils/workspace/h3.py").exists())
 
     def test_registered_node_ids_match_the_maintained_surface(self):
         from comfyui_turing_utils.registration import NODE_CLASS_MAPPINGS
@@ -219,7 +231,6 @@ class PackageArchitectureTest(unittest.TestCase):
                 "_TuringMaterialReadImage", "_TuringMaterialWriteImage",
                 "_TuringMaterialReadVideo", "_TuringMaterialWriteVideo",
                 "_TuringMaterialReadAudio", "_TuringMaterialWriteAudio",
-                "_TuringMaterialH3Prepare", "_TuringMaterialH3Finish", "_TuringMaterialH3SigmaRefiner",
             ),
         )
 

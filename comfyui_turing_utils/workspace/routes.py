@@ -122,10 +122,6 @@ def install_routes():
     async def new_template(request):
         return web.json_response(material_template()[0])
 
-    @endpoint("get", "/protocol")
-    async def protocol(request):
-        return web.json_response({"materials": MATERIALS})
-
     @endpoint("post", "/project/create")
     async def create_project(request):
         data = await request.json()
@@ -147,11 +143,6 @@ def install_routes():
         revision = await asyncio.to_thread(lambda: Project(data["directory"]).save_settings(data["settings"], data["revision"]))
         return web.json_response({"revision": revision})
 
-    @endpoint("post", "/project/statistics")
-    async def statistics(request):
-        data = await request.json()
-        return web.json_response(await asyncio.to_thread(lambda: Project(data["directory"]).statistics()))
-
     @endpoint("post", "/directory/create")
     async def create_directory(request):
         data = await request.json()
@@ -164,11 +155,6 @@ def install_routes():
         data = await request.json()
         await asyncio.to_thread(remove_empty_directory, data["directory"])
         return web.json_response({"directory": data["directory"]})
-
-    @endpoint("post", "/project")
-    async def project(request):
-        data = await request.json()
-        return web.json_response(await asyncio.to_thread(lambda: Project(data["directory"]).document()))
 
     def library(request):
         return Path(server.user_manager.get_request_user_filepath(request, "canvas_cards", create_dir=False))
@@ -253,18 +239,13 @@ def install_routes():
             identity=workflow_files.add_instance(project.root, workflow, title)
             for stub,selection in selections.items():
                 project.select(f"{identity}:{stub}",selection)
-            return {"id": identity, "revision": workflow_files.load_json(project.root / "canvas.json")["revision"]}
+            document = project.document(card_ids={identity})
+            return {"id": identity, "revision": document["revision"], "document": document,
+                    "statistics": project.statistics()}
         def locked_add():
             with workflow_files.LOCK:
                 return add()
         return web.json_response(await asyncio.to_thread(locked_add))
-
-    @endpoint("post", "/card/connect")
-    async def connect_card(request):
-        data=await request.json()
-        revision=await asyncio.to_thread(lambda: workflow_files.connect(Project(data["directory"]).root,
-            data["revision"],data["target"],data["port"],data.get("source"),data.get("source_slot")))
-        return web.json_response({"revision":revision})
 
     @endpoint("post", "/card/open")
     async def open_card(request):
@@ -306,15 +287,6 @@ def install_routes():
         data = await request.json()
         return web.json_response(await asyncio.to_thread(lambda: Project(data["directory"]).selections().get(data["node"], {})))
 
-    @endpoint("post", "/text")
-    async def text(request):
-        data = await request.json()
-        def edit():
-            project = Project(data["directory"])
-            revision = project.select(data["node"], {"text": data["text"]}, data["revision"])
-            return {"text": data["text"], "revision": revision}
-        return web.json_response(await asyncio.to_thread(edit))
-
     @endpoint("post", "/compile")
     async def compile_request(request):
         data = await request.json()
@@ -336,16 +308,6 @@ def install_routes():
                                      data["directory"], run_id, revision, fresh_type)
             return {"prompt": prompt, "run_id": run_id, "target": target}
         return web.json_response(await asyncio.to_thread(build))
-
-    @endpoint("post", "/run")
-    async def run(request):
-        data = await request.json()
-        return web.json_response(await asyncio.to_thread(lambda: Project(data["directory"]).run(data["run_id"])))
-
-    @endpoint("post", "/metadata")
-    async def metadata(request):
-        data = await request.json()
-        return web.json_response(await asyncio.to_thread(lambda: Project(data["directory"]).asset(data["asset"])))
 
     @endpoint("post", "/import")
     async def upload(request):

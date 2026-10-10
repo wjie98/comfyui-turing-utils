@@ -12,13 +12,13 @@ The maintained source tree is intentionally shallow:
 ```text
 comfyui-turing-utils/
 ├── __init__.py                  # ComfyUI entry point
-├── attention.py                 # sole legacy Python compatibility facade
 ├── comfyui_turing_utils/
 │   ├── attention/               # dense/sparse backends, layout and patches
 │   ├── quantization/            # ConvRot formats, dispatch and fusions
 │   ├── loading/                 # ComfyUI model/CLIP construction orchestration
 │   ├── adapters/                # MiniMax, Wan and Bernini integration
 │   ├── nodes/                   # thin ComfyUI schemas
+│   ├── workspace/               # material storage, workflow cards and local execution
 │   ├── runtime/                 # device/kernel capability resolution and diagnostics
 │   ├── hardware.py
 │   ├── kernel_api.py            # independent-kernel boundary
@@ -34,6 +34,7 @@ comfyui-turing-utils/
 │   ├── scripts/                 # validation and benchmarks
 │   └── setup.py
 ├── docs/
+├── web/                         # native-editor extensions and small shared UI helpers
 └── tests/
 ```
 
@@ -89,13 +90,13 @@ effects.
 | `adapters/minimax/memory_planning.py` | ComfyUI packed-shape and staged-workspace memory hooks |
 | `adapters/minimax/activation_policy.py` | pure tier/chunk/head/channel decisions with compatibility exports |
 | `adapters/minimax/acceleration.py` | H3 attention/MLP hot-path installation and execution |
-| `adapters/minimax/image_sol.py` | H3 image-mode static Sol policy and strategy composition |
-| `adapters/minimax/virtual_kv.py` | H3-only five-frame validation, virtual temporal mapping, and strategy composition |
 | `adapters/krea2.py` | Krea2 Identity Edit reference fitting, grounded conditioning and centered reference RoPE patching |
 | `adapters/wan.py` | Wan/Bernini packed-context planning and supported self-attention preprocessing |
 | `adapters/wan_layout.py` | loader-independent Wan/Bernini self-attention sequence semantics |
 | `adapters/bernini.py` | Bernini context-window and absolute-RoPE integration |
 | `nodes/` | thin ComfyUI schemas and calls into the implementation packages |
+| `workspace/` | project-owned material storage, native graph projection, card validation and segment compilation |
+| `web/lib/` | native combo adaptation, directory selection, endpoint interaction and port reordering |
 
 `hardware.py` owns architecture facts. `runtime/capabilities.py` combines those
 facts with operator-level ABI probes without launching CUDA. `kernel_api.py` is the only module
@@ -114,9 +115,21 @@ template instantiation, launch ABI, or generated architecture coverage.
 ComfyUI workflow compatibility is governed by the stable
 `NODE_CLASS_MAPPINGS` keys, input names, and defaults rather than Python
 filenames. Implementation and tests import canonical `comfyui_turing_utils`
-paths. The sole top-level compatibility module is `attention.py`; it preserves
-the old monkey-patchable attention facade while downstream integrations migrate
-to `comfyui_turing_utils.attention`.
+paths. No top-level Attention facade, dynamic module proxy or ConvRot loading
+alias is maintained. Tests patch dependencies in the module that actually uses
+them rather than synchronizing globals through a compatibility facade.
+
+Sol/SLA inherit one dense-backend configuration from the model runtime; there
+is no second `use_w8a8` override at the strategy boundary. Their scheduling and
+dense fallback contracts remain shared, while their distinct routing policies
+stay explicit. Ordinary node input names, order and defaults are unchanged.
+
+Canvas retains only the native-editor API. Opening a project derives its graph
+from one request-local project snapshot; inserting a card expands that card
+alone without reloading existing nodes. Layout saves validate the interfaces of
+connected cards without flattening their computation graphs. File-format hashes,
+revision checks and server-side type checks remain authoritative. No persistent
+execution-graph cache or additional model-weight cache is introduced.
 
 Sparse attention remains explicit and is never selected by a loader backend.
 Model-specific topology is installed through the attention-layout provider

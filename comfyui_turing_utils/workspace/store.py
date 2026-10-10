@@ -67,9 +67,16 @@ class Project:
         finally:
             db.close()
 
-    def document(self):
+    def document(self, canvas=None, card_ids=None):
         with workflow_files.LOCK:
-            return {**workflow_files.document(self.root), "selections": self.selections()}
+            if canvas is None:
+                canvas = workflow_files.load_json(self.root / "canvas.json")
+            document = workflow_files.document(self.root, canvas, card_ids)
+            selections = canvas["selections"]
+            if card_ids is not None:
+                selections = {node: selections[node] for card in document["cards"]
+                              for node in card["materials"] if node in selections}
+            return {**document, "selections": selections}
 
     def selections(self):
         with workflow_files.LOCK:
@@ -86,13 +93,12 @@ class Project:
         if "text" in content and (not isinstance(content["text"], str) or "asset" in content):
             raise ValueError("Text must be an inline string")
         with workflow_files.LOCK:
-            selections = self.selections()
-            revision = selections.get(node, {}).get("revision", 0)
+            canvas = workflow_files.load_json(self.root / "canvas.json")
+            revision = canvas["selections"].get(node, {}).get("revision", 0)
             if expected is not None and revision != expected:
                 raise Conflict("Material changed while editing; reload before replacing it")
             if content.get("asset"):
                 self.asset(content["asset"])
-            canvas = workflow_files.load_json(self.root / "canvas.json")
             canvas["selections"][node] = {**content, "revision": revision + 1}
             workflow_files.atomic_json(self.root / "canvas.json", canvas)
         return revision + 1
@@ -138,10 +144,12 @@ class Project:
                 (kind, prefix, -1 if limit == 0 else max(1, min(int(limit), 1000)), max(0, int(offset)))).fetchall()
         return [dict(row) for row in rows]
 
-    def settings(self):
+    def settings(self, canvas=None):
         with workflow_files.LOCK:
+            if canvas is None:
+                canvas = workflow_files.load_json(self.root / "canvas.json")
             return {"name": self.root.name, "max_megapixels": 4.,
-                    **workflow_files.load_json(self.root / "canvas.json").get("settings", {})}
+                    **canvas.get("settings", {})}
 
     def save_settings(self, settings, revision):
         if set(settings) != {"name", "max_megapixels"} or not isinstance(settings["name"], str) or not settings["name"].strip():
@@ -158,11 +166,12 @@ class Project:
             workflow_files.atomic_json(self.root / "canvas.json", canvas)
         return canvas["revision"]
 
-    def statistics(self):
+    def statistics(self, canvas=None):
         with self.connect() as db:
             media = db.execute("SELECT kind, count(*) AS count, sum(COALESCE(json_extract(metadata,'$.bytes'),0)) AS bytes FROM materials GROUP BY kind").fetchall()
         with workflow_files.LOCK:
-            canvas = workflow_files.load_json(self.root / "canvas.json")
+            if canvas is None:
+                canvas = workflow_files.load_json(self.root / "canvas.json")
         counts = {kind: 0 for kind in ("image", "video", "audio", "text")}
         counts.update({row["kind"]: row["count"] for row in media})
         counts["text"] = sum("text" in value for value in canvas["selections"].values())

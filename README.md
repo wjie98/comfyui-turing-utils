@@ -207,8 +207,8 @@ original loading functions; callers bypassing the prompt server must invoke
   both positive and negative sockets.
 - `Bernini Context Windows` applies reference-aware Wan context windows with
   selectable absolute or official relative temporal positions.
-- `Wan Video Frames Padding` exposes Wan-compatible frame padding.
-- `MiniMax H3 Video Frames Padding` pads to H3's `17*n+5` frame grid.
+- `Video Frames Padding` selects the model frame grid through `type`, including
+  Wan and H3's `17*n+5` frame grid.
 - `Load/Save Indexed Video Segment` read and atomically write six-digit MP4
   segments such as `000324.mp4`. Relative root directories resolve below the
   active ComfyUI instance's output directory, while absolute roots are used

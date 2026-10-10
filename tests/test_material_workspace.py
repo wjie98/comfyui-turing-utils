@@ -50,6 +50,47 @@ class AddTextV3(io.ComfyNode):
 
 
 class WorkspaceTest(unittest.TestCase):
+    def test_layout_save_does_not_expand_or_read_unconnected_cards(self):
+        source, prompt = material_template(("text",))
+        for _ in range(8):
+            workflow_files.add_instance(self.project.root, workflow_files.pack(source, prompt), "text")
+        data = project_workflow(self.project)
+        with (
+            mock.patch.object(self.project, "document", side_effect=AssertionError("Layout is not execution")),
+            mock.patch.object(workflow_files, "unpack", side_effect=AssertionError("Unconnected cards need no interface read")),
+            mock.patch.object(workflow_files, "load_json", wraps=workflow_files.load_json) as load,
+        ):
+            save_layout(self.project, data["workflow"], data["document"]["revision"])
+        self.assertEqual(load.call_count, 1)
+
+    def test_partial_document_reads_only_requested_card(self):
+        source, prompt = material_template(("text",))
+        stub = prompt["3"]["inputs"]["stub_id"]
+        ids = [workflow_files.add_instance(self.project.root, workflow_files.pack(source, prompt), "text") for _ in range(8)]
+        for identity in ids:
+            self.project.select(identity + ":" + stub, {"text": identity})
+        with mock.patch.object(workflow_files, "load_json", wraps=workflow_files.load_json) as load:
+            document = self.project.document(card_ids={ids[-1]})
+        self.assertEqual([card["id"] for card in document["cards"]], [ids[-1]])
+        self.assertEqual(load.call_count, 2)
+        self.assertEqual(document["selections"], {ids[-1] + ":" + stub: {"text": ids[-1], "revision": 1}})
+
+    def test_project_projection_reuses_one_canvas_snapshot(self):
+        with mock.patch.object(workflow_files, "load_json", wraps=workflow_files.load_json) as load:
+            project_workflow(self.project)
+        self.assertEqual(load.call_count, 1)
+
+    def test_audio_crop_keeps_duration_and_empty_intervals_fail(self):
+        value = {"waveform": torch.ones(1, 2, 44100), "sample_rate": 44100}
+        run = self.project.begin_run("audio", 0)
+        asset = INTERNAL_NODES["_TuringMaterialWriteAudio"]().write("test", "audio", run, 0, "audio", value)["result"][0]
+        cropped = read_selected("audio", "test", asset, .2, .5)[0]
+        self.assertEqual(cropped["sample_rate"], 44100)
+        self.assertEqual(cropped["waveform"].shape, (1, 2, 13230))
+        for start, end in ((2, 3), (-1, 0), (0, float("nan"))):
+            with self.assertRaises(ValueError):
+                read_selected("audio", "test", asset, start, end)
+
     def test_native_project_layout_and_validation(self):
         source, prompt = material_template(("text",))
         identity = workflow_files.add_instance(self.project.root, workflow_files.pack(source,prompt), "text")
@@ -444,7 +485,12 @@ class WorkspaceTest(unittest.TestCase):
         self.assertEqual(document["prompt"][a+":node:compute"]["inputs"]["text"],"only A")
         self.assertEqual(document["prompt"][b+":node:compute"]["inputs"]["text"],"hello")
         self.assertEqual(package["extra"]["turing_card"]["overrides"],{})
-        workflow_files.connect(self.project.root,document["revision"],b,"parameter",a+":stable")
+        native = project_workflow(self.project)["workflow"]
+        source = next(n for n in native["nodes"] if n["properties"].get("instance") == a)
+        target = next(n for n in native["nodes"] if n["properties"].get("instance") == b)
+        native["links"] = [[1, source["id"], 0, target["id"], 0, "STRING"]]
+        with mock.patch.object(workflow_files, "flatten", side_effect=AssertionError("Connections need interfaces only")):
+            save_layout(self.project, native, document["revision"])
         self.assertEqual(self.project.document()["prompt"][b+":node:compute"]["inputs"]["text"],[a+":stable",0])
         original_file = workflow_files.read_instance(self.project.root, b)
         changed = copy.deepcopy(graph)

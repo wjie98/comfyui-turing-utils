@@ -12,10 +12,10 @@ CARD = "TuringCanvasCard"
 def project_workflow(project):
     with files.LOCK:
         canvas = files.load_json(project.root / "canvas.json")
-        document = project.document()
+        document = project.document(canvas)
         positions = canvas.get("layout", {})
         nodes = [{"id":1, "type":PROJECT, "pos":[20,20], "size":[310,110],
-                  "flags":{"pinned":True}, "properties":{"directory":project.directory, "settings":project.settings()}, "order":0, "mode":0}]
+                  "flags":{"pinned":True}, "properties":{"directory":project.directory, "settings":project.settings(canvas)}, "order":0, "mode":0}]
         for i, card in enumerate(document["cards"], 2):
             layout = positions.get(card["id"], {})
             nodes.append({"id":i, "type":CARD, "title":card["title"],
@@ -27,7 +27,7 @@ def project_workflow(project):
                     "last_node_id":len(nodes), "last_link_id":0, "nodes":nodes, "links":[], "groups":canvas.get("groups", []),
                     "extra":{"turing_project":{"directory":project.directory, "revision":canvas["revision"]},
                              "ds":canvas.get("view", {"scale":1, "offset":[0,0]})}}
-        return {"workflow":workflow, "document":document, "statistics":project.statistics()}
+        return {"workflow":workflow, "document":document, "statistics":project.statistics(canvas)}
 
 
 def save_layout(project, workflow, revision):
@@ -53,8 +53,18 @@ def save_layout(project, workflow, revision):
                     raise ValueError("Invalid node geometry")
             layout[identity] = {"pos":node["pos"], "size":node["size"]}
             node_ids[node["id"]] = identity
-        doc = project.document()
-        descriptors = {c["id"]:c for c in doc["cards"]}
+        interfaces = {}
+        def interface(identity):
+            if identity not in interfaces:
+                data, ports = files.unpack(files.load_json(files.card_path(project.root, identity)))
+                inputs = [p for p in ports["inputs"] if p["kind"] == "value"]
+                stubs = {node: stub for stub, node in ports["stubs"].items()}
+                outputs = []
+                for port in ports["outputs"]:
+                    source, slot = data["prompt"][ports["output_node"]]["inputs"][f"port_{port['slot']}"]
+                    outputs.append({"type": port["type"], "source": f"{identity}:{stubs[source]}", "slot": slot})
+                interfaces[identity] = inputs, outputs
+            return interfaces[identity]
         connections, targets = [], set()
         for link in workflow.get("links", []):
             _, source_id, source_slot, target_id, target_slot, _ = link
@@ -64,17 +74,17 @@ def save_layout(project, workflow, revision):
             if (target_id,target_slot) in targets:
                 raise ValueError("A card input can have only one source")
             targets.add((target_id,target_slot))
-            if source_slot >= len(descriptors[source]["outputs"]) or target_slot >= len(descriptors[target]["ports"]):
+            outputs, inputs = interface(source)[1], interface(target)[0]
+            if source_slot >= len(outputs) or target_slot >= len(inputs):
                 raise ValueError("Unknown material slot")
-            out = descriptors[source]["outputs"][source_slot]
-            port = descriptors[target]["ports"][target_slot]
+            out, port = outputs[source_slot], inputs[target_slot]
             if out["type"] != port["type"]:
                 raise ValueError("Connected material types differ")
-            connections.append({"source":out["source"], "slot":out["source_slot"], "target":target, "port":port["id"]})
+            connections.append({"source":out["source"], "slot":out["slot"], "target":target, "port":port["id"]})
         canvas["cards"] = [c for c in canvas["cards"] if c["id"] in layout]
         canvas["layout"], canvas["connections"] = layout, connections
         canvas["view"] = copy.deepcopy(workflow.get("extra", {}).get("ds", {}))
         canvas["groups"] = copy.deepcopy(workflow.get("groups", []))
         canvas["revision"] += 1
         files.atomic_json(path, canvas)
-        return {"revision":canvas["revision"], "statistics":project.statistics()}
+        return {"revision":canvas["revision"], "statistics":project.statistics(canvas)}

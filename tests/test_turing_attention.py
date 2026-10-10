@@ -12,7 +12,7 @@ PLUGIN_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PLUGIN_ROOT / "kernel"))
 sys.path.insert(0, str(PLUGIN_ROOT))
 
-import attention as turing_attention  # noqa: E402
+from comfyui_turing_utils.attention import sparse as attention_sparse, stable as attention_stable  # noqa: E402
 
 
 class TuringAttentionContractTest(unittest.TestCase):
@@ -20,10 +20,10 @@ class TuringAttentionContractTest(unittest.TestCase):
         q = torch.zeros((1, 1, 32, 128), dtype=torch.float32)
         kernel_output = torch.ones_like(q, dtype=torch.bfloat16)
         with (
-            mock.patch("attention.is_supported_turing_device", return_value=True),
-            mock.patch("attention._sageattn", return_value=kernel_output) as sage,
+            mock.patch("comfyui_turing_utils.attention.stable.is_supported_turing_device", return_value=True),
+            mock.patch("comfyui_turing_utils.attention.stable._sageattn", return_value=kernel_output) as sage,
         ):
-            output = turing_attention.turing_sage_attention(
+            output = attention_stable.turing_sage_attention(
                 mock.Mock(), q, q, q, 1, skip_reshape=True, skip_output_reshape=True
             )
         q_arg, k_arg, v_arg = sage.call_args.args[:3]
@@ -37,10 +37,10 @@ class TuringAttentionContractTest(unittest.TestCase):
         q = torch.zeros((1, 1, 32, 256), dtype=torch.float32)
         original = mock.Mock(return_value=q)
         with (
-            mock.patch("attention.is_supported_turing_device", return_value=True),
-            mock.patch("attention._sageattn") as sage,
+            mock.patch("comfyui_turing_utils.attention.stable.is_supported_turing_device", return_value=True),
+            mock.patch("comfyui_turing_utils.attention.stable._sageattn") as sage,
         ):
-            output = turing_attention.turing_sage_attention(
+            output = attention_stable.turing_sage_attention(
                 original, q, q, q, 1, skip_reshape=True
             )
         self.assertIs(output, q)
@@ -51,8 +51,8 @@ class TuringAttentionContractTest(unittest.TestCase):
     def test_mask_uses_original_attention(self):
         q = torch.zeros((1, 1, 32, 128), dtype=torch.bfloat16)
         original = mock.Mock(return_value="fallback")
-        with mock.patch("attention.is_supported_turing_device", return_value=True):
-            output = turing_attention.turing_sage_attention(
+        with mock.patch("comfyui_turing_utils.attention.stable.is_supported_turing_device", return_value=True):
+            output = attention_stable.turing_sage_attention(
                 original, q, q, q, 1, mask=torch.ones(1), skip_reshape=True
             )
         self.assertEqual(output, "fallback")
@@ -61,10 +61,10 @@ class TuringAttentionContractTest(unittest.TestCase):
     def test_fp16_hnd_input_and_output_are_preserved(self):
         q = torch.zeros((1, 4, 32, 64), dtype=torch.float16)
         with (
-            mock.patch("attention.is_supported_turing_device", return_value=True),
-            mock.patch("attention._sageattn", return_value=q) as sage,
+            mock.patch("comfyui_turing_utils.attention.stable.is_supported_turing_device", return_value=True),
+            mock.patch("comfyui_turing_utils.attention.stable._sageattn", return_value=q) as sage,
         ):
-            output = turing_attention.turing_sage_attention(
+            output = attention_stable.turing_sage_attention(
                 mock.Mock(),
                 q,
                 q[:, :2],
@@ -80,10 +80,10 @@ class TuringAttentionContractTest(unittest.TestCase):
     def test_causal_and_scale_options_are_forwarded_to_stable_sage(self):
         q = torch.zeros((1, 4, 32, 64), dtype=torch.bfloat16)
         with (
-            mock.patch("attention.is_supported_turing_device", return_value=True),
-            mock.patch("attention._sageattn", return_value=q) as sage,
+            mock.patch("comfyui_turing_utils.attention.stable.is_supported_turing_device", return_value=True),
+            mock.patch("comfyui_turing_utils.attention.stable._sageattn", return_value=q) as sage,
         ):
-            turing_attention.turing_sage_attention(
+            attention_stable.turing_sage_attention(
                 mock.Mock(),
                 q,
                 q,
@@ -101,14 +101,14 @@ class TuringAttentionContractTest(unittest.TestCase):
     def test_distinct_sequence_shapes_each_report_bundled_dispatch_once(self):
         q_short = torch.zeros((1, 4, 32, 64), dtype=torch.bfloat16)
         q_long = torch.zeros((1, 4, 96, 64), dtype=torch.bfloat16)
-        turing_attention._LOGGED_TURING_KERNELS.clear()
+        attention_stable._LOGGED_TURING_KERNELS.clear()
         with (
-            mock.patch("attention.is_supported_turing_device", return_value=True),
+            mock.patch("comfyui_turing_utils.attention.stable.is_supported_turing_device", return_value=True),
             mock.patch("torch.cuda.current_device", return_value=0),
-            mock.patch("attention._sageattn", side_effect=lambda q, *args, **kwargs: q),
+            mock.patch("comfyui_turing_utils.attention.stable._sageattn", side_effect=lambda q, *args, **kwargs: q),
             self.assertLogs("comfyui-turing-utils", level="DEBUG") as captured,
         ):
-            turing_attention.turing_sage_attention(
+            attention_stable.turing_sage_attention(
                 mock.Mock(),
                 q_short,
                 q_short,
@@ -117,7 +117,7 @@ class TuringAttentionContractTest(unittest.TestCase):
                 skip_reshape=True,
                 skip_output_reshape=True,
             )
-            turing_attention.turing_sage_attention(
+            attention_stable.turing_sage_attention(
                 mock.Mock(),
                 q_long,
                 q_long,
@@ -126,7 +126,7 @@ class TuringAttentionContractTest(unittest.TestCase):
                 skip_reshape=True,
                 skip_output_reshape=True,
             )
-            turing_attention.turing_sage_attention(
+            attention_stable.turing_sage_attention(
                 mock.Mock(),
                 q_long,
                 q_long,
@@ -149,10 +149,10 @@ class TuringAttentionContractTest(unittest.TestCase):
         v = torch.zeros_like(k)
         kernel_output = torch.zeros((1, 32, 4, 64), dtype=torch.bfloat16)
         with (
-            mock.patch("attention.is_supported_turing_device", return_value=True),
-            mock.patch("attention._sageattn", return_value=kernel_output) as sage,
+            mock.patch("comfyui_turing_utils.attention.stable.is_supported_turing_device", return_value=True),
+            mock.patch("comfyui_turing_utils.attention.stable._sageattn", return_value=kernel_output) as sage,
         ):
-            output = turing_attention.turing_sage_attention(
+            output = attention_stable.turing_sage_attention(
                 mock.Mock(), q, k, v, 4, enable_gqa=True
             )
         q_arg, k_arg, v_arg = sage.call_args.args[:3]
@@ -165,8 +165,8 @@ class TuringAttentionContractTest(unittest.TestCase):
     def test_unsupported_head_dimension_uses_original_attention(self):
         q = torch.zeros((1, 1, 32, 256), dtype=torch.bfloat16)
         original = mock.Mock(return_value="fallback")
-        with mock.patch("attention.is_supported_turing_device", return_value=True):
-            output = turing_attention.turing_sage_attention(
+        with mock.patch("comfyui_turing_utils.attention.stable.is_supported_turing_device", return_value=True):
+            output = attention_stable.turing_sage_attention(
                 original, q, q, q, 1, skip_reshape=True
             )
         self.assertEqual(output, "fallback")
@@ -174,10 +174,10 @@ class TuringAttentionContractTest(unittest.TestCase):
     def test_experimental_sparse_uses_kernel_for_generic_long_attention(self):
         q = torch.zeros((1, 4, 4096, 128), dtype=torch.bfloat16)
         with (
-            mock.patch("attention.is_supported_turing_device", return_value=True),
-            mock.patch("attention._sol_sparse_sageattn", return_value=q) as sparse,
+            mock.patch("comfyui_turing_utils.attention.stable.is_supported_turing_device", return_value=True),
+            mock.patch("comfyui_turing_utils.attention.sparse._sol_sparse_sageattn", return_value=q) as sparse,
         ):
-            output = turing_attention.turing_sol_sparse_attention(
+            output = attention_sparse.turing_sol_sparse_attention(
                 mock.Mock(),
                 q,
                 q,
@@ -197,10 +197,10 @@ class TuringAttentionContractTest(unittest.TestCase):
         q = torch.zeros((1, 4, 4096, 128), dtype=torch.bfloat16)
         baseline = mock.Mock(return_value=q)
         with (
-            mock.patch("attention.is_supported_turing_device", return_value=True),
-            mock.patch("attention._sol_sparse_sageattn") as sparse,
+            mock.patch("comfyui_turing_utils.attention.stable.is_supported_turing_device", return_value=True),
+            mock.patch("comfyui_turing_utils.attention.sparse._sol_sparse_sageattn") as sparse,
         ):
-            output = turing_attention.turing_sol_sparse_attention(
+            output = attention_sparse.turing_sol_sparse_attention(
                 baseline,
                 q,
                 q,
@@ -219,10 +219,10 @@ class TuringAttentionContractTest(unittest.TestCase):
     def test_h3_sparse_accepts_complete_loader_independent_runtime_layout(self):
         q = torch.zeros((1, 4, 4096, 128), dtype=torch.bfloat16)
         with (
-            mock.patch("attention.is_supported_turing_device", return_value=True),
-            mock.patch("attention._sol_sparse_sageattn", return_value=q) as sparse,
+            mock.patch("comfyui_turing_utils.attention.stable.is_supported_turing_device", return_value=True),
+            mock.patch("comfyui_turing_utils.attention.sparse._sol_sparse_sageattn", return_value=q) as sparse,
         ):
-            output = turing_attention.turing_sol_sparse_attention(
+            output = attention_sparse.turing_sol_sparse_attention(
                 mock.Mock(),
                 q,
                 q,
@@ -259,10 +259,10 @@ class TuringAttentionContractTest(unittest.TestCase):
         q = torch.zeros((1, 4, 256, 128), dtype=torch.bfloat16)
         baseline = mock.Mock(return_value=q)
         with (
-            mock.patch("attention.is_supported_turing_device", return_value=True),
-            mock.patch("attention._sol_sparse_sageattn") as sparse,
+            mock.patch("comfyui_turing_utils.attention.stable.is_supported_turing_device", return_value=True),
+            mock.patch("comfyui_turing_utils.attention.sparse._sol_sparse_sageattn") as sparse,
         ):
-            output = turing_attention.turing_sol_sparse_attention(
+            output = attention_sparse.turing_sol_sparse_attention(
                 baseline,
                 q,
                 q,
@@ -279,10 +279,10 @@ class TuringAttentionContractTest(unittest.TestCase):
         k = torch.zeros((1, 2, 4608, 128), dtype=torch.bfloat16)
         v = torch.zeros_like(k)
         with (
-            mock.patch("attention.is_supported_turing_device", return_value=True),
-            mock.patch("attention._sol_sparse_sageattn", return_value=q) as sparse,
+            mock.patch("comfyui_turing_utils.attention.stable.is_supported_turing_device", return_value=True),
+            mock.patch("comfyui_turing_utils.attention.sparse._sol_sparse_sageattn", return_value=q) as sparse,
         ):
-            output = turing_attention.turing_sol_sparse_attention(
+            output = attention_sparse.turing_sol_sparse_attention(
                 mock.Mock(),
                 q,
                 k,
@@ -304,9 +304,9 @@ class TuringAttentionContractTest(unittest.TestCase):
             for head_dim in (1, 32, 63, 64, 65, 96, 127, 128):
                 q = torch.zeros((1, 2, 4096, head_dim), dtype=torch.bfloat16)
                 with mock.patch(
-                    "attention.is_supported_turing_device", return_value=True
+                    "comfyui_turing_utils.attention.stable.is_supported_turing_device", return_value=True
                 ):
-                    call, reason = turing_attention.inspect_turing_attention_call(
+                    call, reason = attention_stable.inspect_turing_attention_call(
                         q,
                         q,
                         q,
@@ -321,8 +321,8 @@ class TuringAttentionContractTest(unittest.TestCase):
 
     def test_dense_w8a8_accepts_causal_while_sol_rejects_it(self):
         q = torch.zeros((1, 2, 4096, 128), dtype=torch.bfloat16)
-        with mock.patch("attention.is_supported_turing_device", return_value=True):
-            call, reason = turing_attention.inspect_turing_attention_call(
+        with mock.patch("comfyui_turing_utils.attention.stable.is_supported_turing_device", return_value=True):
+            call, reason = attention_stable.inspect_turing_attention_call(
                 q,
                 q,
                 q,
@@ -333,7 +333,7 @@ class TuringAttentionContractTest(unittest.TestCase):
                 kernel="w8a8",
                 require_long_sequence=True,
             )
-            sol_call, sol_reason = turing_attention.inspect_turing_attention_call(
+            sol_call, sol_reason = attention_stable.inspect_turing_attention_call(
                 q,
                 q,
                 q,
@@ -353,15 +353,15 @@ class TuringAttentionContractTest(unittest.TestCase):
         q = torch.zeros((1, 4, 4096, 128), dtype=torch.bfloat16)
         route_keys = set()
         with (
-            mock.patch("attention.is_supported_turing_device", return_value=True),
+            mock.patch("comfyui_turing_utils.attention.stable.is_supported_turing_device", return_value=True),
             mock.patch(
-                "attention._sol_sparse_sageattn",
+                "comfyui_turing_utils.attention.sparse._sol_sparse_sageattn",
                 side_effect=[(q, torch.tensor([1024]), 16384), q],
             ) as sparse,
             self.assertLogs("comfyui-turing-utils", level="INFO") as captured,
         ):
             for _ in range(2):
-                output = turing_attention.turing_sol_sparse_attention(
+                output = attention_sparse.turing_sol_sparse_attention(
                     mock.Mock(),
                     q,
                     q,
@@ -386,9 +386,9 @@ class TuringAttentionContractTest(unittest.TestCase):
         q = torch.zeros((1, 4, 4096, 128), dtype=torch.bfloat16)
         route_state = {}
         with (
-            mock.patch("attention.is_supported_turing_device", return_value=True),
+            mock.patch("comfyui_turing_utils.attention.stable.is_supported_turing_device", return_value=True),
             mock.patch(
-                "attention._sol_sparse_sageattn",
+                "comfyui_turing_utils.attention.sparse._sol_sparse_sageattn",
                 side_effect=[
                     (q, torch.tensor([1024]), 16384),
                     (q, torch.tensor([2048]), 16384),
@@ -397,7 +397,7 @@ class TuringAttentionContractTest(unittest.TestCase):
             self.assertLogs("comfyui-turing-utils", level="INFO") as captured,
         ):
             for layer_index in (2, 3):
-                output = turing_attention.turing_sol_sparse_attention(
+                output = attention_sparse.turing_sol_sparse_attention(
                     mock.Mock(),
                     q,
                     q,
@@ -432,12 +432,12 @@ class TuringAttentionContractTest(unittest.TestCase):
         v = torch.zeros_like(k)
         kernel_output = torch.zeros((1, 4, 4096, 128), dtype=torch.float16)
         with (
-            mock.patch("attention.is_supported_turing_device", return_value=True),
+            mock.patch("comfyui_turing_utils.attention.stable.is_supported_turing_device", return_value=True),
             mock.patch(
-                "attention._sol_sparse_sageattn", return_value=kernel_output
+                "comfyui_turing_utils.attention.sparse._sol_sparse_sageattn", return_value=kernel_output
             ) as sparse,
         ):
-            output = turing_attention.turing_sol_sparse_attention(
+            output = attention_sparse.turing_sol_sparse_attention(
                 mock.Mock(), q, k, v, 4, enable_gqa=True, min_sequence_tokens=4096
             )
         self.assertEqual(output.shape, q.shape)
@@ -447,9 +447,9 @@ class TuringAttentionContractTest(unittest.TestCase):
         q = torch.zeros((1, 4096, 4 * 64), dtype=torch.bfloat16)
         baseline = mock.Mock(return_value=q)
         with (
-            mock.patch("attention._sol_sparse_sageattn") as sparse,
+            mock.patch("comfyui_turing_utils.attention.sparse._sol_sparse_sageattn") as sparse,
         ):
-            output = turing_attention.turing_sol_sparse_attention(baseline, q, q, q, 4)
+            output = attention_sparse.turing_sol_sparse_attention(baseline, q, q, q, 4)
         self.assertIs(output, q)
         baseline.assert_called_once()
         self.assertIs(baseline.call_args.args[0], q)
@@ -458,10 +458,10 @@ class TuringAttentionContractTest(unittest.TestCase):
     def test_experimental_sparse_forwards_patch_parameters(self):
         q = torch.zeros((1, 4, 8192, 128), dtype=torch.bfloat16)
         with (
-            mock.patch("attention.is_supported_turing_device", return_value=True),
-            mock.patch("attention._sol_sparse_sageattn", return_value=q) as sparse,
+            mock.patch("comfyui_turing_utils.attention.stable.is_supported_turing_device", return_value=True),
+            mock.patch("comfyui_turing_utils.attention.sparse._sol_sparse_sageattn", return_value=q) as sparse,
         ):
-            turing_attention.turing_sol_sparse_attention(
+            attention_sparse.turing_sol_sparse_attention(
                 mock.Mock(),
                 q,
                 q,
@@ -507,19 +507,19 @@ class TuringAttentionContractTest(unittest.TestCase):
     def test_sparse_prefix_policy_never_guesses_a_generic_layout(self):
         options = {"turing_utils_attention_layout": {"dense_prefix_tokens": 640}}
         self.assertEqual(
-            turing_attention._sparse_prefix_tokens("auto", 128, options, 4096),
+            attention_sparse._sparse_prefix_tokens("auto", 128, options, 4096),
             640,
         )
         self.assertEqual(
-            turing_attention._sparse_prefix_tokens("none", 128, options, 4096),
+            attention_sparse._sparse_prefix_tokens("none", 128, options, 4096),
             0,
         )
         self.assertEqual(
-            turing_attention._sparse_prefix_tokens("manual", 128, options, 4096),
+            attention_sparse._sparse_prefix_tokens("manual", 128, options, 4096),
             128,
         )
         self.assertEqual(
-            turing_attention._sparse_prefix_tokens("auto", 128, {}, 4096),
+            attention_sparse._sparse_prefix_tokens("auto", 128, {}, 4096),
             0,
         )
 
@@ -538,7 +538,7 @@ class TuringAttentionContractTest(unittest.TestCase):
                 )
             }
         }
-        default_ranges = turing_attention._sparse_protected_ranges(
+        default_ranges = attention_sparse._sparse_protected_ranges(
             "auto",
             0,
             options,
@@ -551,7 +551,7 @@ class TuringAttentionContractTest(unittest.TestCase):
             default_ranges,
             ((0, 1048), (63080, 64256)),
         )
-        image_sparse_video_exact = turing_attention._sparse_protected_ranges(
+        image_sparse_video_exact = attention_sparse._sparse_protected_ranges(
             "auto",
             0,
             options,
@@ -564,7 +564,7 @@ class TuringAttentionContractTest(unittest.TestCase):
             image_sparse_video_exact,
             ((0, 64), (1048, 63080), (64000, 64256)),
         )
-        all_reference_sparse = turing_attention._sparse_protected_ranges(
+        all_reference_sparse = attention_sparse._sparse_protected_ranges(
             "auto",
             0,
             options,
@@ -574,7 +574,7 @@ class TuringAttentionContractTest(unittest.TestCase):
             sparse_reference_audio=True,
         )
         self.assertEqual(all_reference_sparse, ((0, 64), (64128, 64256)))
-        no_reference_sparse = turing_attention._sparse_protected_ranges(
+        no_reference_sparse = attention_sparse._sparse_protected_ranges(
             "auto",
             0,
             options,
@@ -595,7 +595,7 @@ class TuringAttentionContractTest(unittest.TestCase):
                 )
             }
         }
-        ranges = turing_attention._sparse_protected_ranges(
+        ranges = attention_sparse._sparse_protected_ranges(
             "auto",
             0,
             options,
@@ -610,16 +610,18 @@ class TuringAttentionContractTest(unittest.TestCase):
         sample_sigmas = torch.tensor([1.0, 0.8, 0.5, 0.2, 0.0])
         state = {}
         self.assertTrue(
-            turing_attention._sparse_dense_prefix_steps(
+            attention_sparse._sparse_dense_schedule(
                 {"sample_sigmas": sample_sigmas, "sigmas": sample_sigmas[0:1]},
                 1,
+                0,
                 state,
             )
         )
         self.assertFalse(
-            turing_attention._sparse_dense_prefix_steps(
+            attention_sparse._sparse_dense_schedule(
                 {"sample_sigmas": sample_sigmas, "sigmas": sample_sigmas[1:2]},
                 1,
+                0,
                 state,
             )
         )
@@ -630,22 +632,24 @@ class TuringAttentionContractTest(unittest.TestCase):
             sample_sigmas = torch.tensor([1.0, 0.8, 0.5, 0.2, 0.0])
             current_sigmas = sample_sigmas[0:1]
             self.assertTrue(
-                turing_attention._sparse_dense_prefix_steps(
+                attention_sparse._sparse_dense_schedule(
                     {
                         "sample_sigmas": sample_sigmas,
                         "sigmas": current_sigmas,
                     },
                     1,
+                0,
                     state,
                 )
             )
             self.assertTrue(
-                turing_attention._sparse_dense_prefix_steps(
+                attention_sparse._sparse_dense_schedule(
                     {
                         "sample_sigmas": sample_sigmas,
                         "sigmas": current_sigmas,
                     },
                     1,
+                0,
                     state,
                 )
             )
@@ -653,7 +657,7 @@ class TuringAttentionContractTest(unittest.TestCase):
     def test_sparse_dense_schedule_supports_a_tail_and_layer_metadata(self):
         sample_sigmas = torch.tensor([1.0, 0.8, 0.5, 0.2, 0.0])
         self.assertTrue(
-            turing_attention._sparse_dense_schedule(
+            attention_sparse._sparse_dense_schedule(
                 {"sample_sigmas": sample_sigmas, "sigmas": sample_sigmas[3:4]},
                 0,
                 1,
@@ -661,7 +665,7 @@ class TuringAttentionContractTest(unittest.TestCase):
             )
         )
         self.assertTrue(
-            turing_attention._sparse_dense_layer(
+            attention_sparse._sparse_dense_layer(
                 {
                     "turing_utils_attention_layout": {
                         "layer_index": 1,
@@ -673,7 +677,7 @@ class TuringAttentionContractTest(unittest.TestCase):
             )
         )
         self.assertFalse(
-            turing_attention._sparse_dense_layer(
+            attention_sparse._sparse_dense_layer(
                 {
                     "turing_utils_attention_layout": {
                         "layer_index": 2,
@@ -685,7 +689,7 @@ class TuringAttentionContractTest(unittest.TestCase):
             )
         )
         self.assertTrue(
-            turing_attention._sparse_dense_layer(
+            attention_sparse._sparse_dense_layer(
                 {
                     "turing_utils_attention_layout": {
                         "layer_index": 48,
@@ -701,7 +705,7 @@ class TuringAttentionContractTest(unittest.TestCase):
         sample_sigmas = torch.tensor([1.0, 0.8, 0.5, 0.2, 0.0])
         state = {}
         self.assertFalse(
-            turing_attention._sparse_dense_schedule(
+            attention_sparse._sparse_dense_schedule(
                 {"sample_sigmas": sample_sigmas, "sigmas": sample_sigmas[2:3]},
                 0,
                 0,
@@ -719,14 +723,14 @@ class TuringAttentionContractTest(unittest.TestCase):
         partial_options = {"sample_sigmas": partial, "sigmas": partial[0:1]}
 
         self.assertTrue(
-            turing_attention._sparse_dense_schedule(
+            attention_sparse._sparse_dense_schedule(
                 full_options,
                 1,
                 0,
             )
         )
         self.assertTrue(
-            turing_attention._sparse_dense_schedule(
+            attention_sparse._sparse_dense_schedule(
                 partial_options,
                 1,
                 0,
@@ -734,7 +738,7 @@ class TuringAttentionContractTest(unittest.TestCase):
         )
         partial_options["sigmas"] = partial[1:2]
         self.assertFalse(
-            turing_attention._sparse_dense_schedule(
+            attention_sparse._sparse_dense_schedule(
                 partial_options,
                 1,
                 0,
@@ -747,12 +751,12 @@ class TuringAttentionContractTest(unittest.TestCase):
         q = torch.zeros((1, 1, 4096, 128), dtype=torch.float32)
         kernel_output = torch.ones_like(q, dtype=torch.bfloat16)
         with (
-            mock.patch("attention.is_supported_turing_device", return_value=True),
+            mock.patch("comfyui_turing_utils.attention.stable.is_supported_turing_device", return_value=True),
             mock.patch(
-                "attention._sol_sparse_sageattn", return_value=kernel_output
+                "comfyui_turing_utils.attention.sparse._sol_sparse_sageattn", return_value=kernel_output
             ) as sparse,
         ):
-            output = turing_attention.turing_sol_sparse_attention(
+            output = attention_sparse.turing_sol_sparse_attention(
                 mock.Mock(),
                 q,
                 q,

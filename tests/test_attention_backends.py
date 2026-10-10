@@ -16,7 +16,7 @@ COMFY_ROOT = PLUGIN_ROOT.parents[1]
 sys.path.insert(0, str(COMFY_ROOT))
 sys.path.insert(0, str(PLUGIN_ROOT))
 
-import attention as attention_backends  # noqa: E402
+from comfyui_turing_utils.attention import patches as attention_patches, protocol as attention_protocol, stable as attention_stable  # noqa: E402
 from comfy.ldm.modules import attention as comfy_attention  # noqa: E402
 
 
@@ -34,26 +34,26 @@ class AttentionBackendsTest(unittest.TestCase):
         q, k, v = (
             comfy_attention.AttentionTensorContainer(tensor) for tensor in tensors
         )
-        spec = attention_backends.QKTransformSpec(
-            attention_backends.RMSNormSpec(
+        spec = attention_protocol.QKTransformSpec(
+            attention_protocol.RMSNormSpec(
                 torch.ones(128, dtype=torch.bfloat16), 1e-6, "head"
             ),
-            attention_backends.RMSNormSpec(
+            attention_protocol.RMSNormSpec(
                 torch.ones(128, dtype=torch.bfloat16), 1e-6, "head"
             ),
-            attention_backends.RotaryEmbeddingSpec(None, 0, "none"),
+            attention_protocol.RotaryEmbeddingSpec(None, 0, "none"),
         )
         output = torch.zeros((1, 64, 256), dtype=torch.bfloat16)
         dense = mock.Mock(return_value=output)
-        executor = attention_backends._make_external_prepared_executor(
+        executor = attention_patches._make_external_prepared_executor(
             dense, "sage"
         )
-        request = attention_backends.PreparedAttention.from_hnd(
+        request = attention_protocol.PreparedAttention.from_hnd(
             q, k, v, heads=2, qk_transform=spec, transformer_options={}
         )
 
         with mock.patch(
-            "attention._prepared_qk_transform",
+            "comfyui_turing_utils.attention.patches._prepared_qk_transform",
             return_value=(tensors[0], tensors[1]),
         ) as transform:
             outcome = executor(request)
@@ -80,17 +80,17 @@ class AttentionBackendsTest(unittest.TestCase):
         freqs = rope_rotation_table(
             torch.randn((8, 64), dtype=torch.float32), torch.bfloat16
         )
-        spec = attention_backends.QKTransformSpec(
-            attention_backends.RMSNormSpec(
+        spec = attention_protocol.QKTransformSpec(
+            attention_protocol.RMSNormSpec(
                 query_weight, 1e-6, "head"
             ),
-            attention_backends.RMSNormSpec(key_weight, 1e-6, "head"),
-            attention_backends.RotaryEmbeddingSpec(
+            attention_protocol.RMSNormSpec(key_weight, 1e-6, "head"),
+            attention_protocol.RotaryEmbeddingSpec(
                 freqs, 64, "split_half"
             ),
         )
 
-        actual_query, actual_key = attention_backends._prepared_qk_transform(
+        actual_query, actual_key = attention_patches._prepared_qk_transform(
             query.clone(), key.clone(), spec
         )
         expected_query, expected_key = comfy.quant_ops.ck.rms_rope_split_half(
@@ -118,15 +118,15 @@ class AttentionBackendsTest(unittest.TestCase):
         query_weight = torch.randn(heads * head_dim)
         key_weight = torch.randn(heads * head_dim)
         freqs = rope(torch.randn((batch, tokens)), head_dim, 10_000).unsqueeze(2)
-        spec = attention_backends.QKTransformSpec(
-            attention_backends.RMSNormSpec(query_weight, 1e-6, "row"),
-            attention_backends.RMSNormSpec(key_weight, 1e-6, "row"),
-            attention_backends.RotaryEmbeddingSpec(
+        spec = attention_protocol.QKTransformSpec(
+            attention_protocol.RMSNormSpec(query_weight, 1e-6, "row"),
+            attention_protocol.RMSNormSpec(key_weight, 1e-6, "row"),
+            attention_protocol.RotaryEmbeddingSpec(
                 freqs, head_dim, "interleaved"
             ),
         )
 
-        actual_query, actual_key = attention_backends._prepared_qk_transform(
+        actual_query, actual_key = attention_patches._prepared_qk_transform(
             query.clone(), key.clone(), spec
         )
 
@@ -155,7 +155,7 @@ class AttentionBackendsTest(unittest.TestCase):
                 },
             ):
                 self.assertEqual(
-                    attention_backends.fused_qk_preprocessing_available(), expected
+                    attention_stable.fused_qk_preprocessing_available(), expected
                 )
 
     def test_adapter_qk_preprocessor_consumes_inputs_before_attention(self):
@@ -177,14 +177,14 @@ class AttentionBackendsTest(unittest.TestCase):
             tensor_layout="HND",
             skip_output_reshape=False,
         )
-        spec = attention_backends.QKTransformSpec(
-            attention_backends.RMSNormSpec(
+        spec = attention_protocol.QKTransformSpec(
+            attention_protocol.RMSNormSpec(
                 torch.ones(128, dtype=torch.bfloat16), 1e-6, "head"
             ),
-            attention_backends.RMSNormSpec(
+            attention_protocol.RMSNormSpec(
                 torch.ones(128, dtype=torch.bfloat16), 1e-6, "head"
             ),
-            attention_backends.RotaryEmbeddingSpec(None, 0, "none"),
+            attention_protocol.RotaryEmbeddingSpec(None, 0, "none"),
         )
 
         qk_calls = []
@@ -209,21 +209,21 @@ class AttentionBackendsTest(unittest.TestCase):
 
         with (
             mock.patch(
-                "attention.inspect_turing_attention_call",
+                "comfyui_turing_utils.attention.patches.inspect_turing_attention_call",
                 new=inspect,
             ),
-            mock.patch("attention.prequantize_turing_qk", new=quantize),
+            mock.patch("comfyui_turing_utils.attention.patches.prequantize_turing_qk", new=quantize),
             mock.patch(
-                "attention.prequantize_turing_attention_from_qk",
+                "comfyui_turing_utils.attention.patches.prequantize_turing_attention_from_qk",
                 new=finish,
             ),
             mock.patch(
-                "attention.turing_attention_from_prequantized",
+                "comfyui_turing_utils.attention.patches.turing_attention_from_prequantized",
                 new=execute,
             ),
         ):
-            processor = attention_backends._make_dense_prepared_executor("sage")
-            request = attention_backends.PreparedAttention.from_hnd(
+            processor = attention_patches._make_dense_prepared_executor("sage")
+            request = attention_protocol.PreparedAttention.from_hnd(
                 q, k, v, heads=2, qk_transform=spec, transformer_options={}
             )
             outcome = processor(request)
@@ -260,14 +260,14 @@ class AttentionBackendsTest(unittest.TestCase):
             exact_kv_ranges=(),
             residual_subblocks=1,
         )
-        spec = attention_backends.QKTransformSpec(
-            attention_backends.RMSNormSpec(
+        spec = attention_protocol.QKTransformSpec(
+            attention_protocol.RMSNormSpec(
                 torch.ones(128, dtype=torch.bfloat16), 1e-6, "head"
             ),
-            attention_backends.RMSNormSpec(
+            attention_protocol.RMSNormSpec(
                 torch.ones(128, dtype=torch.bfloat16), 1e-6, "head"
             ),
-            attention_backends.RotaryEmbeddingSpec(None, 0, "none"),
+            attention_protocol.RotaryEmbeddingSpec(None, 0, "none"),
         )
 
         def finish(qk, value, inspected, **kwargs):
@@ -288,26 +288,26 @@ class AttentionBackendsTest(unittest.TestCase):
             return "sol-output"
 
         with (
-            mock.patch("attention.is_supported_turing_device", return_value=True),
-            mock.patch("attention.bundled_sparse_available", return_value=True),
-            mock.patch("attention.preflight_bundled"),
-            mock.patch("attention.preflight_bundled_sparse"),
-            mock.patch("attention.fused_qk_preprocessing_available", return_value=True),
-            mock.patch("attention.inspect_sol_attention_call", new=inspect),
-            mock.patch("attention.prequantize_turing_qk", new=quantize),
+            mock.patch("comfyui_turing_utils.attention.patches.is_supported_turing_device", return_value=True),
+            mock.patch("comfyui_turing_utils.attention.patches.bundled_sparse_available", return_value=True),
+            mock.patch("comfyui_turing_utils.attention.patches.preflight_bundled"),
+            mock.patch("comfyui_turing_utils.attention.patches.preflight_bundled_sparse"),
+            mock.patch("comfyui_turing_utils.attention.patches.fused_qk_preprocessing_available", return_value=True),
+            mock.patch("comfyui_turing_utils.attention.patches.inspect_sol_attention_call", new=inspect),
+            mock.patch("comfyui_turing_utils.attention.patches.prequantize_turing_qk", new=quantize),
             mock.patch(
-                "attention.prequantize_turing_sol_attention_from_qk", new=finish
+                "comfyui_turing_utils.attention.patches.prequantize_turing_sol_attention_from_qk", new=finish
             ),
             mock.patch(
-                "attention.turing_sol_attention_from_prequantized", new=execute
+                "comfyui_turing_utils.attention.patches.turing_sol_attention_from_prequantized", new=execute
             ),
         ):
-            override = attention_backends.make_sparse_attention_override(
+            override = attention_patches.make_sparse_attention_override(
                 torch.device("cuda", 0),
                 dense_prefix_layers=0,
-                use_w8a8=False,
+                dense_backend="sage",
             )
-            request = attention_backends.PreparedAttention.from_hnd(
+            request = attention_protocol.PreparedAttention.from_hnd(
                 q, k, v, heads=2, qk_transform=spec, transformer_options={}
             )
             outcome = override.prepared_attention_executor(request)
@@ -328,7 +328,7 @@ class AttentionBackendsTest(unittest.TestCase):
                 },
             ):
                 self.assertEqual(
-                    attention_backends.split_prequantization_available(), expected
+                    attention_stable.split_prequantization_available(), expected
                 )
 
     def test_sla_adapter_preprocessor_reuses_fused_qk_and_releases_inputs(self):
@@ -356,14 +356,14 @@ class AttentionBackendsTest(unittest.TestCase):
             dense_query_ranges=(),
             exact_kv_ranges=(),
         )
-        spec = attention_backends.QKTransformSpec(
-            attention_backends.RMSNormSpec(
+        spec = attention_protocol.QKTransformSpec(
+            attention_protocol.RMSNormSpec(
                 torch.ones(128, dtype=torch.bfloat16), 1e-6, "head"
             ),
-            attention_backends.RMSNormSpec(
+            attention_protocol.RMSNormSpec(
                 torch.ones(128, dtype=torch.bfloat16), 1e-6, "head"
             ),
-            attention_backends.RotaryEmbeddingSpec(None, 0, "none"),
+            attention_protocol.RotaryEmbeddingSpec(None, 0, "none"),
         )
 
         def finish(qk, value, inspected, **kwargs):
@@ -384,29 +384,29 @@ class AttentionBackendsTest(unittest.TestCase):
             return "sla-output"
 
         with (
-            mock.patch("attention.is_supported_turing_device", return_value=True),
-            mock.patch("attention.is_supported_attention_device", return_value=True),
-            mock.patch("attention.bundled_available", return_value=True),
-            mock.patch("attention.bundled_sla_available", return_value=True),
-            mock.patch("attention.preflight_bundled"),
-            mock.patch("attention.preflight_bundled_sla"),
-            mock.patch("attention.fused_qk_preprocessing_available", return_value=True),
-            mock.patch("attention.inspect_sla_attention_call", new=inspect),
-            mock.patch("attention.prequantize_turing_qk", new=quantize),
+            mock.patch("comfyui_turing_utils.attention.patches.is_supported_turing_device", return_value=True),
+            mock.patch("comfyui_turing_utils.attention.patches.is_supported_attention_device", return_value=True),
+            mock.patch("comfyui_turing_utils.attention.patches.bundled_available", return_value=True),
+            mock.patch("comfyui_turing_utils.attention.patches.bundled_sla_available", return_value=True),
+            mock.patch("comfyui_turing_utils.attention.patches.preflight_bundled"),
+            mock.patch("comfyui_turing_utils.attention.patches.preflight_bundled_sla"),
+            mock.patch("comfyui_turing_utils.attention.patches.fused_qk_preprocessing_available", return_value=True),
+            mock.patch("comfyui_turing_utils.attention.patches.inspect_sla_attention_call", new=inspect),
+            mock.patch("comfyui_turing_utils.attention.patches.prequantize_turing_qk", new=quantize),
             mock.patch(
-                "attention.prequantize_turing_sla_attention_from_qk", new=finish
+                "comfyui_turing_utils.attention.patches.prequantize_turing_sla_attention_from_qk", new=finish
             ),
             mock.patch(
-                "attention.turing_sla_attention_from_prequantized", new=execute
+                "comfyui_turing_utils.attention.patches.turing_sla_attention_from_prequantized", new=execute
             ),
         ):
-            override = attention_backends.make_sla_attention_override(
+            override = attention_patches.make_sla_attention_override(
                 torch.device("cuda", 0),
                 dense_prefix_steps=0,
                 dense_prefix_layers=0,
-                use_w8a8=False,
+                dense_backend="sage",
             )
-            request = attention_backends.PreparedAttention.from_hnd(
+            request = attention_protocol.PreparedAttention.from_hnd(
                 q, k, v, heads=2, qk_transform=spec, transformer_options={}
             )
             outcome = override.prepared_attention_executor(request)
@@ -440,15 +440,15 @@ class AttentionBackendsTest(unittest.TestCase):
 
         q, k, v = containers()
         with (
-            mock.patch("attention.is_supported_turing_device", return_value=True),
+            mock.patch("comfyui_turing_utils.attention.patches.is_supported_turing_device", return_value=True),
             mock.patch(
-                "attention.prequantize_turing_attention", new=prequantize
+                "comfyui_turing_utils.attention.patches.prequantize_turing_attention", new=prequantize
             ),
             mock.patch(
-                "attention.turing_attention_from_prequantized", side_effect=consume
+                "comfyui_turing_utils.attention.patches.turing_attention_from_prequantized", side_effect=consume
             ),
         ):
-            function = attention_backends._make_dense_container_function("w8a8")
+            function = attention_patches._make_dense_container_function("w8a8")
             output = function(
                 q,
                 k,
@@ -472,14 +472,14 @@ class AttentionBackendsTest(unittest.TestCase):
         )
         fallback = mock.Mock(return_value="fallback")
         with (
-            mock.patch("attention._default_attention_fallback", return_value=fallback),
+            mock.patch("comfyui_turing_utils.attention.patches._default_attention_fallback", return_value=fallback),
             mock.patch(
-                "attention.inspect_turing_attention_call",
+                "comfyui_turing_utils.attention.patches.inspect_turing_attention_call",
                 return_value=(None, "unsupported"),
             ),
-            mock.patch("attention.prequantize_turing_attention") as prequant,
+            mock.patch("comfyui_turing_utils.attention.patches.prequantize_turing_attention") as prequant,
         ):
-            function = attention_backends._make_dense_container_function("sage")
+            function = attention_patches._make_dense_container_function("sage")
             output = function(q, k, v, 2, skip_reshape=True)
 
         self.assertEqual(output, "fallback")
@@ -499,7 +499,7 @@ class AttentionBackendsTest(unittest.TestCase):
                 "comfyui_turing_utils_kernel.turing_sage": sage_module,
             },
         ):
-            self.assertFalse(attention_backends.bundled_sparse_available())
+            self.assertFalse(attention_stable.bundled_sparse_available())
         with mock.patch.dict(
             sys.modules,
             {
@@ -507,7 +507,7 @@ class AttentionBackendsTest(unittest.TestCase):
                 "comfyui_turing_utils_kernel.turing_sage": sage_module,
             },
         ):
-            self.assertFalse(attention_backends.bundled_sparse_available())
+            self.assertFalse(attention_stable.bundled_sparse_available())
         with mock.patch.dict(
             sys.modules,
             {
@@ -515,7 +515,7 @@ class AttentionBackendsTest(unittest.TestCase):
                 "comfyui_turing_utils_kernel.turing_sage": sage_module,
             },
         ):
-            self.assertFalse(attention_backends.bundled_sparse_available())
+            self.assertFalse(attention_stable.bundled_sparse_available())
         with mock.patch.dict(
             sys.modules,
             {
@@ -523,7 +523,7 @@ class AttentionBackendsTest(unittest.TestCase):
                 "comfyui_turing_utils_kernel.turing_sage": sage_module,
             },
         ):
-            self.assertFalse(attention_backends.bundled_sparse_available())
+            self.assertFalse(attention_stable.bundled_sparse_available())
         with mock.patch.dict(
             sys.modules,
             {
@@ -531,7 +531,7 @@ class AttentionBackendsTest(unittest.TestCase):
                 "comfyui_turing_utils_kernel.turing_sage": sage_module,
             },
         ):
-            self.assertFalse(attention_backends.bundled_sparse_available())
+            self.assertFalse(attention_stable.bundled_sparse_available())
         with mock.patch.dict(
             sys.modules,
             {
@@ -539,7 +539,7 @@ class AttentionBackendsTest(unittest.TestCase):
                 "comfyui_turing_utils_kernel.turing_sage": sage_module,
             },
         ):
-            self.assertFalse(attention_backends.bundled_sparse_available())
+            self.assertFalse(attention_stable.bundled_sparse_available())
         with mock.patch.dict(
             sys.modules,
             {
@@ -547,7 +547,7 @@ class AttentionBackendsTest(unittest.TestCase):
                 "comfyui_turing_utils_kernel.turing_sage": sage_module,
             },
         ):
-            self.assertTrue(attention_backends.bundled_sparse_available())
+            self.assertTrue(attention_stable.bundled_sparse_available())
 
     def test_w8a8_backend_requires_023_kernel_abi(self):
         sage_module = SimpleNamespace(w8a8_available=lambda: True)
@@ -558,7 +558,7 @@ class AttentionBackendsTest(unittest.TestCase):
                 "comfyui_turing_utils_kernel.turing_sage": sage_module,
             },
         ):
-            self.assertFalse(attention_backends.bundled_w8a8_available())
+            self.assertFalse(attention_stable.bundled_w8a8_available())
         with mock.patch.dict(
             sys.modules,
             {
@@ -566,41 +566,41 @@ class AttentionBackendsTest(unittest.TestCase):
                 "comfyui_turing_utils_kernel.turing_sage": sage_module,
             },
         ):
-            self.assertTrue(attention_backends.bundled_w8a8_available())
+            self.assertTrue(attention_stable.bundled_w8a8_available())
 
     def test_backend_choices_are_stable(self):
         self.assertEqual(
-            attention_backends.attention_backend_choices(),
+            attention_stable.attention_backend_choices(),
             ("w8a8", "sage", "sdpa"),
         )
 
     def test_aliases_normalize_to_node_options(self):
-        self.assertEqual(attention_backends.normalize_attention_backend(None), "w8a8")
-        self.assertEqual(attention_backends.normalize_attention_backend("torch-sdpa"), "sdpa")
-        self.assertEqual(attention_backends.normalize_attention_backend("sage attention"), "sage")
-        self.assertEqual(attention_backends.normalize_attention_backend("sage_attn"), "sage")
-        self.assertEqual(attention_backends.normalize_attention_backend("sage_"), "sage")
-        self.assertEqual(attention_backends.normalize_attention_backend("turing-sage"), "sage")
+        self.assertEqual(attention_stable.normalize_attention_backend(None), "w8a8")
+        self.assertEqual(attention_stable.normalize_attention_backend("torch-sdpa"), "sdpa")
+        self.assertEqual(attention_stable.normalize_attention_backend("sage attention"), "sage")
+        self.assertEqual(attention_stable.normalize_attention_backend("sage_attn"), "sage")
+        self.assertEqual(attention_stable.normalize_attention_backend("sage_"), "sage")
+        self.assertEqual(attention_stable.normalize_attention_backend("turing-sage"), "sage")
         with self.assertRaises(ValueError):
-            attention_backends.normalize_attention_backend("flash-attn")
+            attention_stable.normalize_attention_backend("flash-attn")
         with self.assertRaises(ValueError):
-            attention_backends.normalize_attention_backend("auto")
+            attention_stable.normalize_attention_backend("auto")
         with self.assertRaises(ValueError):
-            attention_backends.normalize_attention_backend("default")
+            attention_stable.normalize_attention_backend("default")
         with self.assertRaises(ValueError):
-            attention_backends.normalize_attention_backend("sage1")
+            attention_stable.normalize_attention_backend("sage1")
         with self.assertRaises(ValueError):
-            attention_backends.normalize_attention_backend("sol-sparse")
+            attention_stable.normalize_attention_backend("sol-sparse")
 
     def test_backend_registration_rejects_alias_collisions_without_partial_registration(self):
-        backend = attention_backends.AttentionBackend(
+        backend = attention_stable.AttentionBackend(
             option="test_collision",
             attention_function="unused",
             label="sage",
         )
         with self.assertRaisesRegex(ValueError, "alias collision"):
-            attention_backends.register_attention_backend(backend)
-        self.assertNotIn("test_collision", attention_backends.attention_backend_choices())
+            attention_stable.register_attention_backend(backend)
+        self.assertNotIn("test_collision", attention_stable.attention_backend_choices())
 
     def test_external_sage_sends_fp32_qkv_to_pytorch_attention(self):
         sage = mock.Mock()
@@ -612,7 +612,7 @@ class AttentionBackendsTest(unittest.TestCase):
                 sage if name == "sage" else pytorch if name == "pytorch" else default
             ),
         ):
-            override = attention_backends.make_attention_override("sage")
+            override = attention_patches.make_attention_override("sage")
             q = torch.randn(1, 2, 4, 8, dtype=torch.float32)
             self.assertEqual(override(original, q, q, q, 2, skip_reshape=True), "pytorch")
         pytorch.assert_called_once()
@@ -626,7 +626,7 @@ class AttentionBackendsTest(unittest.TestCase):
             "comfy.ldm.modules.attention.get_attention_function",
             side_effect=lambda name, default: sage if name == "sage" else default,
         ):
-            override = attention_backends.make_attention_override("sage")
+            override = attention_patches.make_attention_override("sage")
 
         bf16 = torch.randn(1, 2, 4, 8, dtype=torch.bfloat16)
         fp32 = bf16.float()
@@ -645,7 +645,7 @@ class AttentionBackendsTest(unittest.TestCase):
             "comfy.ldm.modules.attention.get_attention_function",
             side_effect=lambda name, default: sage if name == "sage" else default,
         ):
-            override = attention_backends.make_attention_override("sage")
+            override = attention_patches.make_attention_override("sage")
 
         q = torch.randn(1, 2, 4, 8, dtype=torch.float16)
         out = override(lambda *args, **kwargs: None, q, q, q, 2, skip_reshape=True)
@@ -665,7 +665,7 @@ class AttentionBackendsTest(unittest.TestCase):
                 kitchen if name == "comfy_kitchen_int8" else default
             ),
         ):
-            override = attention_backends.make_attention_override("w8a8")
+            override = attention_patches.make_attention_override("w8a8")
 
         q = torch.randn(1, 2, 4, 8, dtype=torch.bfloat16)
         self.assertEqual(
@@ -685,9 +685,9 @@ class AttentionBackendsTest(unittest.TestCase):
                     kitchen if name == "comfy_kitchen_int8" else default
                 ),
             ),
-            mock.patch("attention._default_attention_fallback", return_value=fallback),
+            mock.patch("comfyui_turing_utils.attention.patches._default_attention_fallback", return_value=fallback),
         ):
-            override = attention_backends.make_attention_override("w8a8")
+            override = attention_patches.make_attention_override("w8a8")
 
         containers = tuple(
             comfy_attention.AttentionTensorContainer(
@@ -714,7 +714,7 @@ class AttentionBackendsTest(unittest.TestCase):
             ),
             mock.patch("comfy.ldm.modules.attention.sageattn") as sage,
         ):
-            attention_backends.apply_attention_backend(model, "sage")
+            attention_patches.apply_attention_backend(model, "sage")
             transformer_options = model.model_options["transformer_options"]
             q = torch.randn(1, 2, 4, 8, dtype=torch.float32)
             output = comfy_attention.optimized_attention(
@@ -739,7 +739,7 @@ class AttentionBackendsTest(unittest.TestCase):
             "comfy.ldm.modules.attention.get_attention_function",
             side_effect=lambda name, default: sdpa if name == "pytorch" else default,
         ):
-            override = attention_backends.make_attention_override("sdpa")
+            override = attention_patches.make_attention_override("sdpa")
 
         q = torch.randn(1, 2, 4, 8, dtype=torch.float32)
         out = override(lambda *args, **kwargs: None, q, q, q, 2, skip_reshape=True)
@@ -760,9 +760,9 @@ class AttentionBackendsTest(unittest.TestCase):
                 "comfy.ldm.modules.attention.get_attention_function",
                 side_effect=lambda name, default: sdpa if name == "pytorch" else default,
             ),
-            mock.patch("attention.is_supported_turing_device", return_value=True),
+            mock.patch("comfyui_turing_utils.attention.patches.is_supported_turing_device", return_value=True),
         ):
-            override = attention_backends.make_attention_override(
+            override = attention_patches.make_attention_override(
                 "sdpa", device=torch.device("cuda", 0)
             )
             q = torch.randn(1, 2, 4, 8, dtype=torch.bfloat16)
@@ -793,9 +793,9 @@ class AttentionBackendsTest(unittest.TestCase):
                 "comfy.ldm.modules.attention.get_attention_function",
                 side_effect=lambda name, default: sdpa if name == "pytorch" else default,
             ),
-            mock.patch("attention.is_supported_turing_device", return_value=True),
+            mock.patch("comfyui_turing_utils.attention.patches.is_supported_turing_device", return_value=True),
         ):
-            override = attention_backends.make_attention_override(
+            override = attention_patches.make_attention_override(
                 "sdpa", device=torch.device("cuda", 0)
             )
             containers = tuple(
@@ -812,7 +812,7 @@ class AttentionBackendsTest(unittest.TestCase):
 
     def test_sdpa_backend_overrides_optimized_attention(self):
         model = FakeModel()
-        attention_backends.apply_attention_backend(model, "sdpa")
+        attention_patches.apply_attention_backend(model, "sdpa")
         transformer_options = model.model_options["transformer_options"]
         self.assertEqual(transformer_options["turing_utils_attention_backend"], "sdpa")
         self.assertIn("optimized_attention_override", transformer_options)
@@ -827,12 +827,12 @@ class AttentionBackendsTest(unittest.TestCase):
         model = FakeModel()
         q = torch.randn(1, 2, 4, 8, dtype=torch.bfloat16)
         with (
-            mock.patch("attention.is_supported_turing_device", return_value=True),
-            mock.patch("attention.bundled_available", return_value=True),
-            mock.patch("attention.preflight_bundled") as preflight,
-            mock.patch("attention.turing_sage_attention", return_value=q) as kernel,
+            mock.patch("comfyui_turing_utils.attention.patches.is_supported_turing_device", return_value=True),
+            mock.patch("comfyui_turing_utils.attention.patches.bundled_available", return_value=True),
+            mock.patch("comfyui_turing_utils.attention.patches.preflight_bundled") as preflight,
+            mock.patch("comfyui_turing_utils.attention.patches.turing_sage_attention", return_value=q) as kernel,
         ):
-            attention_backends.apply_attention_backend(model, "sage", device=torch.device("cuda", 0))
+            attention_patches.apply_attention_backend(model, "sage", device=torch.device("cuda", 0))
             override = model.model_options["transformer_options"]["optimized_attention_override"]
             out = override(lambda *args, **kwargs: None, q, q, q, 2, skip_reshape=True)
 
@@ -850,19 +850,19 @@ class AttentionBackendsTest(unittest.TestCase):
 
     def test_non_turing_sage_exposes_external_prepared_executor(self):
         target = mock.Mock(return_value="sage")
-        backend = attention_backends.AttentionBackend(
+        backend = attention_stable.AttentionBackend(
             option="sage",
             attention_function="sage",
             label="sage",
         )
         with (
-            mock.patch("attention.is_supported_turing_device", return_value=False),
+            mock.patch("comfyui_turing_utils.attention.patches.is_supported_turing_device", return_value=False),
             mock.patch(
-                "attention._select_attention_backend",
+                "comfyui_turing_utils.attention.patches._select_attention_backend",
                 return_value=(backend, target),
             ),
         ):
-            override = attention_backends.make_attention_override(
+            override = attention_patches.make_attention_override(
                 "sage", device=torch.device("cuda", 0)
             )
 
@@ -882,12 +882,12 @@ class AttentionBackendsTest(unittest.TestCase):
         model = FakeModel()
         q = torch.randn(1, 2, 4, 8, dtype=torch.bfloat16)
         with (
-            mock.patch("attention.is_supported_turing_device", return_value=True),
-            mock.patch("attention.bundled_available", return_value=True),
-            mock.patch("attention.preflight_bundled") as preflight,
-            mock.patch("attention.turing_sage_attention", return_value=q) as kernel,
+            mock.patch("comfyui_turing_utils.attention.patches.is_supported_turing_device", return_value=True),
+            mock.patch("comfyui_turing_utils.attention.patches.bundled_available", return_value=True),
+            mock.patch("comfyui_turing_utils.attention.patches.preflight_bundled") as preflight,
+            mock.patch("comfyui_turing_utils.attention.patches.turing_sage_attention", return_value=q) as kernel,
         ):
-            attention_backends.apply_attention_backend(
+            attention_patches.apply_attention_backend(
                 model, "sage", device=torch.device("cuda", 0)
             )
             override = model.model_options["transformer_options"]["optimized_attention_override"]
@@ -900,13 +900,13 @@ class AttentionBackendsTest(unittest.TestCase):
         model = FakeModel()
         q = torch.randn(1, 2, 4, 128, dtype=torch.bfloat16)
         with (
-            mock.patch("attention.is_supported_turing_device", return_value=True),
-            mock.patch("attention.bundled_available", return_value=True),
-            mock.patch("attention.bundled_w8a8_available", return_value=True),
-            mock.patch("attention.preflight_bundled_w8a8") as preflight,
-            mock.patch("attention.turing_w8a8_attention", return_value=q) as kernel,
+            mock.patch("comfyui_turing_utils.attention.patches.is_supported_turing_device", return_value=True),
+            mock.patch("comfyui_turing_utils.attention.patches.bundled_available", return_value=True),
+            mock.patch("comfyui_turing_utils.attention.patches.bundled_w8a8_available", return_value=True),
+            mock.patch("comfyui_turing_utils.attention.patches.preflight_bundled_w8a8") as preflight,
+            mock.patch("comfyui_turing_utils.attention.patches.turing_w8a8_attention", return_value=q) as kernel,
         ):
-            attention_backends.apply_attention_backend(
+            attention_patches.apply_attention_backend(
                 model, "w8a8", device=torch.device("cuda", 0)
             )
             transformer_options = model.model_options["transformer_options"]
@@ -933,8 +933,8 @@ class AttentionBackendsTest(unittest.TestCase):
         kitchen = mock.Mock(return_value="kitchen")
         kitchen.container_function = mock.Mock(return_value="container")
         with (
-            mock.patch("attention.is_supported_turing_device", return_value=False),
-            mock.patch("attention.is_supported_attention_device", return_value=False),
+            mock.patch("comfyui_turing_utils.attention.patches.is_supported_turing_device", return_value=False),
+            mock.patch("comfyui_turing_utils.attention.patches.is_supported_attention_device", return_value=False),
             mock.patch(
                 "comfy.ldm.modules.attention.get_attention_function",
                 side_effect=lambda name, default: (
@@ -942,7 +942,7 @@ class AttentionBackendsTest(unittest.TestCase):
                 ),
             ),
         ):
-            override = attention_backends.make_attention_override(
+            override = attention_patches.make_attention_override(
                 "w8a8", device=torch.device("cuda", 0)
             )
         self.assertEqual(override.turing_utils_attention_implementation, "comfy:comfy_kitchen_int8")
@@ -960,13 +960,13 @@ class AttentionBackendsTest(unittest.TestCase):
 
     def test_explicit_w8a8_uses_same_bundled_path_on_ampere(self):
         with (
-            mock.patch("attention.is_supported_turing_device", return_value=False),
-            mock.patch("attention.is_supported_attention_device", return_value=True),
-            mock.patch("attention.bundled_available", return_value=True),
-            mock.patch("attention.bundled_w8a8_available", return_value=True),
-            mock.patch("attention.preflight_bundled_w8a8") as preflight,
+            mock.patch("comfyui_turing_utils.attention.patches.is_supported_turing_device", return_value=False),
+            mock.patch("comfyui_turing_utils.attention.patches.is_supported_attention_device", return_value=True),
+            mock.patch("comfyui_turing_utils.attention.patches.bundled_available", return_value=True),
+            mock.patch("comfyui_turing_utils.attention.patches.bundled_w8a8_available", return_value=True),
+            mock.patch("comfyui_turing_utils.attention.patches.preflight_bundled_w8a8") as preflight,
         ):
-            override = attention_backends.make_attention_override(
+            override = attention_patches.make_attention_override(
                 "w8a8", device=torch.device("cuda", 0)
             )
 
@@ -982,13 +982,13 @@ class AttentionBackendsTest(unittest.TestCase):
     def test_legacy_sage_alias_uses_external_sage_on_non_turing_device(self):
         sage = mock.Mock(return_value="sage")
         with (
-            mock.patch("attention.is_supported_turing_device", return_value=False),
+            mock.patch("comfyui_turing_utils.attention.patches.is_supported_turing_device", return_value=False),
             mock.patch(
                 "comfy.ldm.modules.attention.get_attention_function",
                 side_effect=lambda name, default: sage if name == "sage" else default,
             ),
         ):
-            override = attention_backends.make_attention_override(
+            override = attention_patches.make_attention_override(
                 "sage", device=torch.device("cuda", 0)
             )
         self.assertEqual(override.turing_utils_attention_backend, "sage")
@@ -997,13 +997,13 @@ class AttentionBackendsTest(unittest.TestCase):
     def test_sparse_override_preflights_independent_kernel(self):
         q = torch.zeros((1, 2, 256, 128), dtype=torch.bfloat16)
         with (
-            mock.patch("attention.is_supported_turing_device", return_value=True),
-            mock.patch("attention.bundled_sparse_available", return_value=True),
-            mock.patch("attention.preflight_bundled") as stable_preflight,
-            mock.patch("attention.preflight_bundled_sparse") as preflight,
-            mock.patch("attention.turing_sol_sparse_attention", return_value=q) as sparse,
+            mock.patch("comfyui_turing_utils.attention.patches.is_supported_turing_device", return_value=True),
+            mock.patch("comfyui_turing_utils.attention.patches.bundled_sparse_available", return_value=True),
+            mock.patch("comfyui_turing_utils.attention.patches.preflight_bundled") as stable_preflight,
+            mock.patch("comfyui_turing_utils.attention.patches.preflight_bundled_sparse") as preflight,
+            mock.patch("comfyui_turing_utils.attention.patches.turing_sol_sparse_attention", return_value=q) as sparse,
         ):
-            override = attention_backends.make_sparse_attention_override(
+            override = attention_patches.make_sparse_attention_override(
                 torch.device("cuda", 0),
                 min_sequence_tokens=8192,
                 routing_threshold=0.85,
@@ -1018,7 +1018,7 @@ class AttentionBackendsTest(unittest.TestCase):
                 dense_prefix_layers=3,
                 dense_suffix_layers=4,
                 debug_route_density=True,
-                use_w8a8=False,
+                dense_backend="sage",
             )
             output = override(
                 mock.Mock(),
@@ -1053,15 +1053,15 @@ class AttentionBackendsTest(unittest.TestCase):
     def test_sparse_override_uses_stable_sage_for_first_and_last_layers(self):
         q = torch.zeros((1, 2, 4096, 128), dtype=torch.bfloat16)
         with (
-            mock.patch("attention.is_supported_turing_device", return_value=True),
-            mock.patch("attention.bundled_sparse_available", return_value=True),
-            mock.patch("attention.preflight_bundled"),
-            mock.patch("attention.preflight_bundled_sparse"),
-            mock.patch("attention.turing_sage_attention", return_value=q) as stable,
-            mock.patch("attention.turing_sol_sparse_attention", return_value=q) as sparse,
+            mock.patch("comfyui_turing_utils.attention.patches.is_supported_turing_device", return_value=True),
+            mock.patch("comfyui_turing_utils.attention.patches.bundled_sparse_available", return_value=True),
+            mock.patch("comfyui_turing_utils.attention.patches.preflight_bundled"),
+            mock.patch("comfyui_turing_utils.attention.patches.preflight_bundled_sparse"),
+            mock.patch("comfyui_turing_utils.attention.patches.turing_sage_attention", return_value=q) as stable,
+            mock.patch("comfyui_turing_utils.attention.patches.turing_sol_sparse_attention", return_value=q) as sparse,
         ):
-            override = attention_backends.make_sparse_attention_override(
-                torch.device("cuda", 0), debug_route_density=True, use_w8a8=False
+            override = attention_patches.make_sparse_attention_override(
+                torch.device("cuda", 0), debug_route_density=True, dense_backend="sage"
             )
             for layer_index in (0, 1, 49):
                 override(
@@ -1086,26 +1086,26 @@ class AttentionBackendsTest(unittest.TestCase):
         )
 
     def test_sol_and_sla_dense_protection_use_external_sage_prepared_path(self):
-        spec = attention_backends.QKTransformSpec(
-            attention_backends.RMSNormSpec(
+        spec = attention_protocol.QKTransformSpec(
+            attention_protocol.RMSNormSpec(
                 torch.ones(128, dtype=torch.bfloat16), 1e-6, "head"
             ),
-            attention_backends.RMSNormSpec(
+            attention_protocol.RMSNormSpec(
                 torch.ones(128, dtype=torch.bfloat16), 1e-6, "head"
             ),
-            attention_backends.RotaryEmbeddingSpec(None, 0, "none"),
+            attention_protocol.RotaryEmbeddingSpec(None, 0, "none"),
         )
         expected = torch.zeros((1, 4096, 256), dtype=torch.bfloat16)
         for maker, available, preflight in (
             (
-                attention_backends.make_sparse_attention_override,
-                "attention.bundled_sparse_available",
-                "attention.preflight_bundled_sparse",
+                attention_patches.make_sparse_attention_override,
+                "comfyui_turing_utils.attention.patches.bundled_sparse_available",
+                "comfyui_turing_utils.attention.patches.preflight_bundled_sparse",
             ),
             (
-                attention_backends.make_sla_attention_override,
-                "attention.bundled_sla_available",
-                "attention.preflight_bundled_sla",
+                attention_patches.make_sla_attention_override,
+                "comfyui_turing_utils.attention.patches.bundled_sla_available",
+                "comfyui_turing_utils.attention.patches.preflight_bundled_sla",
             ),
         ):
             with self.subTest(strategy=maker.__name__):
@@ -1120,19 +1120,19 @@ class AttentionBackendsTest(unittest.TestCase):
                 dense = mock.Mock()
                 dense.turing_utils_attention_implementation = "comfy:sage"
                 dense.prepared_attention_executor = mock.Mock(
-                    return_value=attention_backends.AttentionExecutionOutcome(
+                    return_value=attention_protocol.AttentionExecutionOutcome(
                         expected
                     )
                 )
                 with (
                     mock.patch(
-                        "attention.is_supported_attention_device",
+                        "comfyui_turing_utils.attention.patches.is_supported_attention_device",
                         return_value=True,
                     ),
                     mock.patch(available, return_value=True),
                     mock.patch(preflight),
                     mock.patch(
-                        "attention.fused_qk_preprocessing_available",
+                        "comfyui_turing_utils.attention.patches.fused_qk_preprocessing_available",
                         return_value=True,
                     ),
                 ):
@@ -1143,7 +1143,7 @@ class AttentionBackendsTest(unittest.TestCase):
                         dense_prefix_steps=0,
                         dense_prefix_layers=1,
                     )
-                request = attention_backends.PreparedAttention.from_hnd(
+                request = attention_protocol.PreparedAttention.from_hnd(
                     *qkv,
                     heads=2,
                     qk_transform=spec,
@@ -1166,17 +1166,17 @@ class AttentionBackendsTest(unittest.TestCase):
     def test_sparse_w8a8_preflights_and_uses_w8a8_for_protected_layers(self):
         q = torch.zeros((1, 2, 4096, 128), dtype=torch.bfloat16)
         with (
-            mock.patch("attention.is_supported_turing_device", return_value=True),
-            mock.patch("attention.bundled_sparse_available", return_value=True),
-            mock.patch("attention.bundled_w8a8_available", return_value=True),
-            mock.patch("attention.preflight_bundled"),
-            mock.patch("attention.preflight_bundled_sparse"),
-            mock.patch("attention.preflight_bundled_w8a8") as w8a8_preflight,
-            mock.patch("attention.turing_w8a8_attention", return_value=q) as dense,
-            mock.patch("attention.turing_sol_sparse_attention", return_value=q) as sparse,
+            mock.patch("comfyui_turing_utils.attention.patches.is_supported_turing_device", return_value=True),
+            mock.patch("comfyui_turing_utils.attention.patches.bundled_sparse_available", return_value=True),
+            mock.patch("comfyui_turing_utils.attention.patches.bundled_w8a8_available", return_value=True),
+            mock.patch("comfyui_turing_utils.attention.patches.preflight_bundled"),
+            mock.patch("comfyui_turing_utils.attention.patches.preflight_bundled_sparse"),
+            mock.patch("comfyui_turing_utils.attention.patches.preflight_bundled_w8a8") as w8a8_preflight,
+            mock.patch("comfyui_turing_utils.attention.patches.turing_w8a8_attention", return_value=q) as dense,
+            mock.patch("comfyui_turing_utils.attention.patches.turing_sol_sparse_attention", return_value=q) as sparse,
         ):
-            override = attention_backends.make_sparse_attention_override(
-                torch.device("cuda", 0), use_w8a8=True
+            override = attention_patches.make_sparse_attention_override(
+                torch.device("cuda", 0), dense_backend="w8a8"
             )
             override(
                 mock.Mock(),
@@ -1214,16 +1214,16 @@ class AttentionBackendsTest(unittest.TestCase):
 
     def test_sparse_ampere_uses_bundled_sol_and_shared_dense_backend(self):
         with (
-            mock.patch("attention.is_supported_turing_device", return_value=False),
-            mock.patch("attention.is_supported_attention_device", return_value=True),
-            mock.patch("attention.bundled_available", return_value=True),
-            mock.patch("attention.bundled_sparse_available", return_value=True),
-            mock.patch("attention.bundled_w8a8_available", return_value=True),
-            mock.patch("attention.preflight_bundled_sparse") as sparse_preflight,
-            mock.patch("attention.preflight_bundled_w8a8") as w8a8_preflight,
+            mock.patch("comfyui_turing_utils.attention.patches.is_supported_turing_device", return_value=False),
+            mock.patch("comfyui_turing_utils.attention.patches.is_supported_attention_device", return_value=True),
+            mock.patch("comfyui_turing_utils.attention.patches.bundled_available", return_value=True),
+            mock.patch("comfyui_turing_utils.attention.patches.bundled_sparse_available", return_value=True),
+            mock.patch("comfyui_turing_utils.attention.patches.bundled_w8a8_available", return_value=True),
+            mock.patch("comfyui_turing_utils.attention.patches.preflight_bundled_sparse") as sparse_preflight,
+            mock.patch("comfyui_turing_utils.attention.patches.preflight_bundled_w8a8") as w8a8_preflight,
         ):
-            override = attention_backends.make_sparse_attention_override(
-                torch.device("cuda", 0), use_w8a8=True
+            override = attention_patches.make_sparse_attention_override(
+                torch.device("cuda", 0), dense_backend="w8a8"
             )
 
         sparse_preflight.assert_called_once_with(torch.device("cuda", 0))
@@ -1240,16 +1240,16 @@ class AttentionBackendsTest(unittest.TestCase):
     def test_overlapping_dense_layer_ranges_bypass_sol_for_every_layer(self):
         q = torch.zeros((1, 2, 4096, 128), dtype=torch.bfloat16)
         with (
-            mock.patch("attention.is_supported_turing_device", return_value=True),
-            mock.patch("attention.bundled_sparse_available", return_value=True),
-            mock.patch("attention.bundled_w8a8_available", return_value=True),
-            mock.patch("attention.preflight_bundled"),
-            mock.patch("attention.preflight_bundled_sparse"),
-            mock.patch("attention.preflight_bundled_w8a8"),
-            mock.patch("attention.turing_w8a8_attention", return_value=q) as dense,
-            mock.patch("attention.turing_sol_sparse_attention", return_value=q) as sparse,
+            mock.patch("comfyui_turing_utils.attention.patches.is_supported_turing_device", return_value=True),
+            mock.patch("comfyui_turing_utils.attention.patches.bundled_sparse_available", return_value=True),
+            mock.patch("comfyui_turing_utils.attention.patches.bundled_w8a8_available", return_value=True),
+            mock.patch("comfyui_turing_utils.attention.patches.preflight_bundled"),
+            mock.patch("comfyui_turing_utils.attention.patches.preflight_bundled_sparse"),
+            mock.patch("comfyui_turing_utils.attention.patches.preflight_bundled_w8a8"),
+            mock.patch("comfyui_turing_utils.attention.patches.turing_w8a8_attention", return_value=q) as dense,
+            mock.patch("comfyui_turing_utils.attention.patches.turing_sol_sparse_attention", return_value=q) as sparse,
         ):
-            override = attention_backends.make_sparse_attention_override(
+            override = attention_patches.make_sparse_attention_override(
                 torch.device("cuda", 0),
                 dense_prefix_layers=26,
                 dense_suffix_layers=25,
@@ -1275,24 +1275,24 @@ class AttentionBackendsTest(unittest.TestCase):
 
     def test_sparse_rejects_unsupported_device(self):
         with (
-            mock.patch("attention.is_supported_turing_device", return_value=False),
-            mock.patch("attention.is_supported_attention_device", return_value=False),
+            mock.patch("comfyui_turing_utils.attention.patches.is_supported_turing_device", return_value=False),
+            mock.patch("comfyui_turing_utils.attention.patches.is_supported_attention_device", return_value=False),
             self.assertRaisesRegex(RuntimeError, "CUDA Tensor Core GPU"),
         ):
-            attention_backends.make_sparse_attention_override(torch.device("cuda", 0))
+            attention_patches.make_sparse_attention_override(torch.device("cuda", 0))
 
     def test_sla_override_forwards_fixed_topk_and_semantic_controls(self):
         q = torch.zeros((1, 2, 4096, 128), dtype=torch.bfloat16)
         with (
-            mock.patch("attention.is_supported_turing_device", return_value=True),
-            mock.patch("attention.is_supported_attention_device", return_value=True),
-            mock.patch("attention.bundled_available", return_value=True),
-            mock.patch("attention.bundled_sla_available", return_value=True),
-            mock.patch("attention.preflight_bundled"),
-            mock.patch("attention.preflight_bundled_sla") as preflight,
-            mock.patch("attention.turing_sla_sparse_attention", return_value=q) as sparse,
+            mock.patch("comfyui_turing_utils.attention.patches.is_supported_turing_device", return_value=True),
+            mock.patch("comfyui_turing_utils.attention.patches.is_supported_attention_device", return_value=True),
+            mock.patch("comfyui_turing_utils.attention.patches.bundled_available", return_value=True),
+            mock.patch("comfyui_turing_utils.attention.patches.bundled_sla_available", return_value=True),
+            mock.patch("comfyui_turing_utils.attention.patches.preflight_bundled"),
+            mock.patch("comfyui_turing_utils.attention.patches.preflight_bundled_sla") as preflight,
+            mock.patch("comfyui_turing_utils.attention.patches.turing_sla_sparse_attention", return_value=q) as sparse,
         ):
-            override = attention_backends.make_sla_attention_override(
+            override = attention_patches.make_sla_attention_override(
                 torch.device("cuda", 0),
                 min_sequence_tokens=2048,
                 sparsity_ratio=0.85,
@@ -1303,7 +1303,7 @@ class AttentionBackendsTest(unittest.TestCase):
                 sparse_reference_audio=True,
                 dense_prefix_steps=0,
                 dense_prefix_layers=0,
-                use_w8a8=False,
+                dense_backend="sage",
                 debug_route_density=True,
             )
             output = override(mock.Mock(), q, q, q, 2, skip_reshape=True)
@@ -1329,16 +1329,16 @@ class AttentionBackendsTest(unittest.TestCase):
     def test_sla_overlapping_dense_layers_bypass_sparse_kernel(self):
         q = torch.zeros((1, 2, 4096, 128), dtype=torch.bfloat16)
         with (
-            mock.patch("attention.is_supported_turing_device", return_value=True),
-            mock.patch("attention.is_supported_attention_device", return_value=True),
-            mock.patch("attention.bundled_sla_available", return_value=True),
-            mock.patch("attention.bundled_w8a8_available", return_value=True),
-            mock.patch("attention.preflight_bundled_sla"),
-            mock.patch("attention.preflight_bundled_w8a8"),
-            mock.patch("attention.turing_w8a8_attention", return_value=q) as dense,
-            mock.patch("attention.turing_sla_sparse_attention", return_value=q) as sparse,
+            mock.patch("comfyui_turing_utils.attention.patches.is_supported_turing_device", return_value=True),
+            mock.patch("comfyui_turing_utils.attention.patches.is_supported_attention_device", return_value=True),
+            mock.patch("comfyui_turing_utils.attention.patches.bundled_sla_available", return_value=True),
+            mock.patch("comfyui_turing_utils.attention.patches.bundled_w8a8_available", return_value=True),
+            mock.patch("comfyui_turing_utils.attention.patches.preflight_bundled_sla"),
+            mock.patch("comfyui_turing_utils.attention.patches.preflight_bundled_w8a8"),
+            mock.patch("comfyui_turing_utils.attention.patches.turing_w8a8_attention", return_value=q) as dense,
+            mock.patch("comfyui_turing_utils.attention.patches.turing_sla_sparse_attention", return_value=q) as sparse,
         ):
-            override = attention_backends.make_sla_attention_override(
+            override = attention_patches.make_sla_attention_override(
                 torch.device("cuda", 0),
                 dense_prefix_layers=26,
                 dense_suffix_layers=25,
@@ -1364,23 +1364,23 @@ class AttentionBackendsTest(unittest.TestCase):
 
     def test_sla_rejects_invalid_sparsity_before_preflight(self):
         with self.assertRaisesRegex(ValueError, "sparsity_ratio"):
-            attention_backends.make_sla_attention_override(
+            attention_patches.make_sla_attention_override(
                 torch.device("cuda", 0), sparsity_ratio=1.0
             )
 
     def test_zero_sla_sparsity_dispatches_directly_to_dense_backend(self):
         q = torch.zeros((1, 2, 4096, 128), dtype=torch.bfloat16)
         with (
-            mock.patch("attention.is_supported_turing_device", return_value=True),
-            mock.patch("attention.is_supported_attention_device", return_value=True),
-            mock.patch("attention.bundled_sla_available", return_value=True),
-            mock.patch("attention.bundled_w8a8_available", return_value=True),
-            mock.patch("attention.preflight_bundled_sla"),
-            mock.patch("attention.preflight_bundled_w8a8"),
-            mock.patch("attention.turing_w8a8_attention", return_value=q) as dense,
-            mock.patch("attention.turing_sla_sparse_attention") as sparse,
+            mock.patch("comfyui_turing_utils.attention.patches.is_supported_turing_device", return_value=True),
+            mock.patch("comfyui_turing_utils.attention.patches.is_supported_attention_device", return_value=True),
+            mock.patch("comfyui_turing_utils.attention.patches.bundled_sla_available", return_value=True),
+            mock.patch("comfyui_turing_utils.attention.patches.bundled_w8a8_available", return_value=True),
+            mock.patch("comfyui_turing_utils.attention.patches.preflight_bundled_sla"),
+            mock.patch("comfyui_turing_utils.attention.patches.preflight_bundled_w8a8"),
+            mock.patch("comfyui_turing_utils.attention.patches.turing_w8a8_attention", return_value=q) as dense,
+            mock.patch("comfyui_turing_utils.attention.patches.turing_sla_sparse_attention") as sparse,
         ):
-            override = attention_backends.make_sla_attention_override(
+            override = attention_patches.make_sla_attention_override(
                 torch.device("cuda", 0), sparsity_ratio=0.0
             )
             output = override(mock.Mock(), q, q, q, 2, skip_reshape=True)

@@ -980,6 +980,19 @@ def make_attention_override(
     return attention_override
 
 
+def _sparse_options(min_sequence_tokens, prefix_policy, manual_prefix_tokens):
+    min_sequence_tokens = int(min_sequence_tokens)
+    prefix_policy = str(prefix_policy).strip().lower()
+    manual_prefix_tokens = int(manual_prefix_tokens)
+    if min_sequence_tokens < 0:
+        raise ValueError("min_sequence_tokens must be non-negative")
+    if prefix_policy not in {"auto", "none", "manual"}:
+        raise ValueError("prefix_policy must be auto, none, or manual")
+    if manual_prefix_tokens < 0:
+        raise ValueError("manual_prefix_tokens must be non-negative")
+    return min_sequence_tokens, prefix_policy, manual_prefix_tokens
+
+
 def make_sparse_attention_override(
     device: torch.device,
     min_sequence_tokens: int = 0,
@@ -995,14 +1008,13 @@ def make_sparse_attention_override(
     dense_prefix_layers: int = SPARSE_DENSE_PREFIX_LAYERS,
     dense_suffix_layers: int = SPARSE_DENSE_SUFFIX_LAYERS,
     debug_route_density: bool = False,
-    use_w8a8: bool | None = None,
-    dense_backend: str | None = None,
+    dense_backend: str = "w8a8",
     dense_override: Callable | None = None,
 ) -> Callable:
-    min_sequence_tokens = int(min_sequence_tokens)
+    min_sequence_tokens, prefix_policy, manual_prefix_tokens = _sparse_options(
+        min_sequence_tokens, prefix_policy, manual_prefix_tokens,
+    )
     routing_threshold = float(routing_threshold)
-    prefix_policy = str(prefix_policy).strip().lower()
-    manual_prefix_tokens = int(manual_prefix_tokens)
     skipped_residual = str(skipped_residual).strip().lower()
     sparse_reference_image = bool(sparse_reference_image)
     sparse_reference_video = bool(sparse_reference_video)
@@ -1012,20 +1024,10 @@ def make_sparse_attention_override(
     dense_prefix_layers = int(dense_prefix_layers)
     dense_suffix_layers = int(dense_suffix_layers)
     debug_route_density = bool(debug_route_density)
-    if dense_backend is None:
-        # Direct API callers retain the historical W8A8 default.  Runtime
-        # configuration nodes pass the loader's explicit dense backend.
-        dense_backend = "w8a8" if use_w8a8 is not False else "sage"
     dense_backend = normalize_attention_backend(dense_backend)
     use_w8a8 = dense_backend == "w8a8"
-    if min_sequence_tokens < 0:
-        raise ValueError("min_sequence_tokens must be non-negative")
     if not math.isfinite(routing_threshold):
         raise ValueError("routing_threshold must be finite")
-    if prefix_policy not in {"auto", "none", "manual"}:
-        raise ValueError("prefix_policy must be auto, none, or manual")
-    if manual_prefix_tokens < 0:
-        raise ValueError("manual_prefix_tokens must be non-negative")
     if skipped_residual not in {"1x64", "2x32"}:
         raise ValueError("skipped_residual must be 1x64 or 2x32")
     if dense_prefix_steps < 0:
@@ -1593,14 +1595,13 @@ def make_sla_attention_override(
     dense_prefix_layers: int = SLA_DENSE_PREFIX_LAYERS,
     dense_suffix_layers: int = SLA_DENSE_SUFFIX_LAYERS,
     debug_route_density: bool = False,
-    use_w8a8: bool | None = None,
-    dense_backend: str | None = None,
+    dense_backend: str = "w8a8",
     dense_override: Callable | None = None,
 ) -> Callable:
-    min_sequence_tokens = int(min_sequence_tokens)
+    min_sequence_tokens, prefix_policy, manual_prefix_tokens = _sparse_options(
+        min_sequence_tokens, prefix_policy, manual_prefix_tokens,
+    )
     sparsity_ratio = float(sparsity_ratio)
-    prefix_policy = str(prefix_policy).strip().lower()
-    manual_prefix_tokens = int(manual_prefix_tokens)
     sparse_reference_image = bool(sparse_reference_image)
     sparse_reference_video = bool(sparse_reference_video)
     sparse_reference_audio = bool(sparse_reference_audio)
@@ -1609,18 +1610,10 @@ def make_sla_attention_override(
     dense_prefix_layers = int(dense_prefix_layers)
     dense_suffix_layers = int(dense_suffix_layers)
     debug_route_density = bool(debug_route_density)
-    if dense_backend is None:
-        dense_backend = "w8a8" if use_w8a8 is not False else "sage"
     dense_backend = normalize_attention_backend(dense_backend)
     use_w8a8 = dense_backend == "w8a8"
-    if min_sequence_tokens < 0:
-        raise ValueError("min_sequence_tokens must be non-negative")
     if not math.isfinite(sparsity_ratio) or not 0.0 <= sparsity_ratio < 1.0:
         raise ValueError("sparsity_ratio must be finite and in [0, 1)")
-    if prefix_policy not in {"auto", "none", "manual"}:
-        raise ValueError("prefix_policy must be auto, none, or manual")
-    if manual_prefix_tokens < 0:
-        raise ValueError("manual_prefix_tokens must be non-negative")
     if (
         min(
             dense_prefix_steps,
@@ -1997,48 +1990,28 @@ def make_sla_attention_override(
     return attention_override
 
 
-def attention_base_runtime(
-    model,
-    *,
-    use_w8a8: bool | None,
-) -> AttentionRuntimeConfig:
+def attention_base_runtime(model) -> AttentionRuntimeConfig:
     """Resolve the immutable dense base used by a Sol/SLA strategy.
 
     Models loaded by the ConvRot loader already carry this capability marker.
     Official and third-party loaders are bootstrapped from their current
-    override when possible, otherwise from SDPA.  ``use_w8a8`` is accepted
-    only for legacy node/workflow compatibility.
+    override when possible, otherwise from SDPA.
     """
     _bootstrap_attention_integrations()
     transformer_options = model.model_options.setdefault("transformer_options", {})
     config = attention_runtime_config(transformer_options)
     if config is not None:
-        if use_w8a8 is None:
-            return config
-        requested = "w8a8" if bool(use_w8a8) else "sage"
-        if requested == config.dense_backend:
-            return config
-        dense_override = make_attention_override(requested, device=model.load_device)
-        return AttentionRuntimeConfig(
-            dense_backend=requested,
-            dense_implementation=dense_override.turing_utils_attention_implementation,
-            dense_override=dense_override,
-            native_runtime=config.native_runtime,
-        )
+        return config
 
     current = transformer_options.get("optimized_attention_override")
-    if use_w8a8 is not None:
-        dense_backend = "w8a8" if bool(use_w8a8) else "sage"
-        current = None
-    else:
-        dense_backend = transformer_options.get(
-            "turing_utils_attention_base_backend",
-            transformer_options.get("turing_utils_attention_backend", "sdpa"),
-        )
-        if dense_backend not in {"w8a8", "sage", "sdpa"}:
-            dense_backend = getattr(current, "turing_utils_attention_backend", "sdpa")
-        if dense_backend not in {"w8a8", "sage", "sdpa"}:
-            dense_backend = "sdpa"
+    dense_backend = transformer_options.get(
+        "turing_utils_attention_base_backend",
+        transformer_options.get("turing_utils_attention_backend", "sdpa"),
+    )
+    if dense_backend not in {"w8a8", "sage", "sdpa"}:
+        dense_backend = getattr(current, "turing_utils_attention_backend", "sdpa")
+    if dense_backend not in {"w8a8", "sage", "sdpa"}:
+        dense_backend = "sdpa"
 
     if not callable(current):
         current = make_attention_override(dense_backend, device=model.load_device)
@@ -2070,9 +2043,8 @@ def apply_sparse_attention_patch(
     dense_prefix_layers: int = SPARSE_DENSE_PREFIX_LAYERS,
     dense_suffix_layers: int = SPARSE_DENSE_SUFFIX_LAYERS,
     debug_route_density: bool = False,
-    use_w8a8: bool | None = None,
 ):
-    runtime = attention_base_runtime(model, use_w8a8=use_w8a8)
+    runtime = attention_base_runtime(model)
     override = make_sparse_attention_override(
         model.load_device,
         min_sequence_tokens=min_sequence_tokens,
@@ -2088,7 +2060,6 @@ def apply_sparse_attention_patch(
         dense_prefix_layers=dense_prefix_layers,
         dense_suffix_layers=dense_suffix_layers,
         debug_route_density=debug_route_density,
-        use_w8a8=use_w8a8,
         dense_backend=runtime.dense_backend,
         dense_override=runtime.dense_override,
     )
@@ -2149,9 +2120,8 @@ def apply_sla_attention_patch(
     dense_prefix_layers: int = SLA_DENSE_PREFIX_LAYERS,
     dense_suffix_layers: int = SLA_DENSE_SUFFIX_LAYERS,
     debug_route_density: bool = False,
-    use_w8a8: bool | None = None,
 ):
-    runtime = attention_base_runtime(model, use_w8a8=use_w8a8)
+    runtime = attention_base_runtime(model)
     override = make_sla_attention_override(
         model.load_device,
         min_sequence_tokens=min_sequence_tokens,
@@ -2166,7 +2136,6 @@ def apply_sla_attention_patch(
         dense_prefix_layers=dense_prefix_layers,
         dense_suffix_layers=dense_suffix_layers,
         debug_route_density=debug_route_density,
-        use_w8a8=use_w8a8,
         dense_backend=runtime.dense_backend,
         dense_override=runtime.dense_override,
     )

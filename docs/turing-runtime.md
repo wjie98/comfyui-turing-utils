@@ -278,10 +278,11 @@ invisibly to `sage` and are not displayed by the loader.
 |---|---|---|---|
 | `sage` on Turing | INT8, per-16-token Q-warp scales | disabled | FP16 V tiles with direct FP32 accumulation |
 | `w8a8` on sm75+ | stable-Sage INT8 score domain | optional adaptive K anchor | channel-wise signed INT8 V and unsigned INT8 probabilities, INT32 Tensor Core PV, FP32 online state |
-| `Configure Sol Sparse Attention` | fused 64-token centroid routing; selected tiles reuse stable Sage INT8 QK | input-adaptive `mean + tau * std` threshold | inherited W8A8 exact PV, or FP16 exact V tiles for Sage/SDPA; skipped-block V centroids and FP32 online accumulation |
-| `Configure SLA Sparse Attention` | one route shared by adjacent Q64 CTAs (logical Q128 x K64); selected tiles reuse stable Sage INT8 QK | fixed Top-K budget; Smooth-K-invariant ordering | inherited W8A8 PV or FP16 selected tiles; no skipped-block residual |
-| `Configure H3 Image Sol Attention` | native H3 Query/FFN rows; `dense_start_window` protects the opening `1+4` group (`0, 1`), `dense_end_window` protects the closing group (`T-2, T-1`) | H3 semantic prefix plus fixed `1x64` residuals outside Exact/local ranges | inherited W8A8 exact PV or FP16 exact V tiles for Sage/SDPA; reference sparsity and Dense step/layer schedules match Sol |
-| `Configure H3 Static Virtual KV` | physical Query remains two H3 latent-time slices; conservative materializes seven BF16 K/V slices, kernel 0.39 fast maps two physical slices into seven exact logical INT8 K/V slices, and kernel 0.41 residual keeps the first two slices exact while routing the five virtual slices as Sol residuals | all seven real temporal RoPE phases; residual uses 2x32 summaries with exact physical-context ranges | W8A8 maps INT8 V; inherited Sage/SDPA map physical FP16/BF16 V through the bundled Sol residual kernel; an upstream Sol/SLA strategy is replaced |
+| `Configure Attention Strategy: sol` | fused 64-token centroid routing; selected tiles reuse stable Sage INT8 QK | input-adaptive `mean + tau * std` threshold | inherited W8A8 exact PV, or FP16 exact V tiles for Sage/SDPA; skipped-block V centroids and FP32 online accumulation |
+| `Configure Attention Strategy: sla` | one route shared by adjacent Q64 CTAs (logical Q128 x K64); selected tiles reuse stable Sage INT8 QK | fixed Top-K budget; Smooth-K-invariant ordering | inherited W8A8 PV or FP16 selected tiles; no skipped-block residual |
+
+The H3 Image Sol and Static Virtual KV node policies are retired. Their shared
+mapped-K/V kernel contracts remain available to supported integrations.
 
 Integer Q/K MMA accumulates into INT32. The stable facade supports FP16 and
 BF16 Q/K/V, HND/NHD, GQA, causal mode, unequal Q/KV lengths, head dimensions

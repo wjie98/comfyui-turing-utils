@@ -48,8 +48,7 @@ try {
     await m.request("directory/create", { directory });
     await m.openProject(directory, true);
     if (app.graph._nodes.length !== 1) throw Error("Missing root");
-    await m.request("card/add", { directory, kind: "text" });
-    await m.openProject(directory);
+    await m.addCard({ kind: "text" });
     const card = app.graph._nodes.find((n) => n.type === "TuringCanvasCard");
     if (!card.widgets?.length)
       throw Error(
@@ -64,10 +63,17 @@ try {
       (w) => w.type === "customtext" || w.inputEl?.tagName === "TEXTAREA",
     );
     const material = card.properties.materials[0];
-    await m.request("text", {
+    card.trims = { [material.id]: { start: 0.2, end: 0.8 } };
+    const widgets = card.widgets;
+    const trims = card.trims;
+    await m.addCard({ kind: "text" }, [900, 230]);
+    if (app.graph.getNodeById(card.id) !== card || card.widgets !== widgets ||
+        card.trims !== trims || !card.widgets.includes(w))
+      throw Error("Adding a card rebuilt existing nodes or session state");
+    await m.request("select", {
       directory,
       node: material.id,
-      text: "persisted",
+      selection: { text: "persisted" },
       revision: material.selection.revision,
     });
     card.pos = [530, 230];
@@ -126,8 +132,8 @@ try {
       workflow: task.workflow,
       prompt: task.output,
     });
-    await m.request("card/add", { directory, name });
     await m.openProject(directory);
+    await m.addCard({ name });
     const generated = app.graph._nodes.find(
       (n) =>
         n.type === "TuringCanvasCard" &&
@@ -141,8 +147,8 @@ try {
       .callback();
     let success = false;
     for (let i = 0; i < 60; i++) {
-      const state = await m.request("project", { directory });
-      if (state.selections[output.id]?.text === "computed") {
+      const state = await m.request("selection", { directory, node: output.id });
+      if (state.text === "computed") {
         success = true;
         break;
       }
@@ -201,6 +207,28 @@ try {
     );
     const to = app.graph._nodes.find((n) => n.properties.instance === added.id);
     from.connect(0, to, 0);
+    const fromWidgets = from.widgets, toWidgets = to.widgets,
+      link = to.inputs[0].link;
+    const imageNode = app.graph._nodes.find((n) =>
+      n.properties.materials?.some((m) => m.kind === "image"));
+    const image = imageNode.properties.materials.find((m) => m.kind === "image");
+    await imageNode.widgets.find((w) => w.name === image.id).refreshMaterialList();
+    const { api } = await import("/scripts/api.js");
+    const fetchApi = api.fetchApi;
+    let historyReads = 0;
+    api.fetchApi = function (path, ...args) {
+      if (path === "/turing/workspace/history") historyReads++;
+      return fetchApi.call(this, path, ...args);
+    };
+    try {
+      await m.addCard({ kind: "image" }, [1300, 230]);
+      if (historyReads) throw Error("Adding a card reloaded an existing history list");
+    } finally {
+      api.fetchApi = fetchApi;
+    }
+    if (app.graph.getNodeById(from.id) !== from || app.graph.getNodeById(to.id) !== to ||
+        from.widgets !== fromWidgets || to.widgets !== toWidgets || to.inputs[0].link !== link)
+      throw Error("Incremental insertion changed existing widgets or links");
     await m.saveProject();
     await m.openProject(directory);
     const restored = app.graph._nodes.find(
@@ -216,8 +244,8 @@ try {
     ).id;
     let linkedSuccess = false;
     for (let i = 0; i < 60; i++) {
-      const state = await m.request("project", { directory });
-      if (state.selections[finalId]?.text === "persisted") {
+      const state = await m.request("selection", { directory, node: finalId });
+      if (state.text === "persisted") {
         linkedSuccess = true;
         break;
       }
@@ -231,6 +259,8 @@ try {
       dialog: typeof app.extensionManager.dialog.prompt,
       localExecution: success,
       crossCardExecution: linkedSuccess,
+      incrementalInsertion: true,
+      sharedHistoryList: true,
     };
   });
   console.log(JSON.stringify(result));
@@ -486,6 +516,7 @@ try {
     )
       throw Error("Missing material statistics");
     await Promise.all([m.saveProject(), m.saveProject(), m.saveProject()]);
+    const nodeCount = app.graph._nodes.length;
     const starter = await (
       await fetch("/turing/workspace/new-template")
     ).json();
@@ -499,12 +530,48 @@ try {
       data.workflow.nodes.find(
         (n) => n.properties.instance === media.properties.instance,
       ).pos[0] !== 710 ||
-      data.workflow.nodes.length !== 4
+      data.workflow.nodes.length !== nodeCount
     )
       throw Error("Background save used the wrong workflow");
+    await m.openProject(directory);
+    const { api } = await import("/scripts/api.js");
+    const fetchApi = api.fetchApi;
+    let release, arrived;
+    const gate = new Promise((r) => { release = r; });
+    const ready = new Promise((r) => { arrived = r; });
+    api.fetchApi = async function (path, ...args) {
+      const response = await fetchApi.call(this, path, ...args);
+      if (path === "/turing/workspace/card/add") {
+        arrived();
+        await gate;
+      }
+      return response;
+    };
+    let added;
+    try {
+      const pending = m.addCard({ kind: "text" }, [1400, 350]);
+      await ready;
+      await m.openTab(starter, `switch-during-add-${Date.now()}.json`);
+      const active = app.graph.serialize();
+      release();
+      added = await pending;
+      if (JSON.stringify(app.graph.serialize()) !== JSON.stringify(active))
+        throw Error("Background insertion changed the active workflow");
+    } finally {
+      release();
+      api.fetchApi = fetchApi;
+    }
+    data = await m.request("project/open", { directory });
+    if (data.workflow.nodes.length !== nodeCount + 1 ||
+        data.workflow.nodes.find((n) => n.properties.instance === added.id)?.pos[0] !== 1400)
+      throw Error("Background insertion lost the new card or position");
+    await m.openProject(directory);
+    if (!app.graph._nodes.find((n) => n.properties.instance === added.id)?.widgets.length)
+      throw Error("Background card did not restore native widgets");
     return {
       autosave: true,
       inactiveProjectSave: true,
+      inactiveProjectInsertion: true,
       concurrentSaves: true,
       globalSettings: true,
       statistics: true,

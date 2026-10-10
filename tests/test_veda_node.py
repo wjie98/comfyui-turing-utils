@@ -50,6 +50,34 @@ def test_veda_strategy_replaces_sol_and_keeps_dense_backend():
     assert updated.with_strategy("sol", "sol", sol).active_override is sol
 
 
+def test_veda_configuration_uses_shared_dense_runtime():
+    from comfyui_turing_utils.adapters.minimax.veda import integration
+    from comfyui_turing_utils.attention.runtime import install_attention_runtime
+
+    dense = mock.Mock()
+    runtime = AttentionRuntimeConfig("sdpa", "test", dense)
+    model = SimpleNamespace(
+        load_device=torch.device("cpu"), model_options={"transformer_options": {}},
+        model=SimpleNamespace(diffusion_model=SimpleNamespace(
+            blocks=[SimpleNamespace(attn=SimpleNamespace(heads=1, head_dim=64))])),
+        remove_wrappers_with_key=mock.Mock(), add_wrapper_with_key=mock.Mock(),
+    )
+    install_attention_runtime(model.model_options["transformer_options"], runtime)
+    bundle = SimpleNamespace(num_layers=1, num_heads=1, head_dim=64, keep_ratio=0.1)
+    installed = SimpleNamespace(layout=SimpleNamespace(installed=True), model=model)
+    with (
+        mock.patch.object(integration, "is_minimax_h3_model", return_value=True),
+        mock.patch.object(integration, "kernel_extension_has_symbol", return_value=True),
+        mock.patch.object(integration, "register_predictor_folder", return_value=mock.Mock()),
+        mock.patch.object(integration, "load_bundle", return_value=bundle),
+        mock.patch.object(integration, "install_attention_strategy", return_value=installed) as install,
+    ):
+        assert integration.configure(model, predictor_name="test.safetensors") is model
+    assert install.call_args.kwargs["runtime_config"] is runtime
+    assert model.model_options["transformer_options"]["turing_utils_veda"].bundle is bundle
+    model.add_wrapper_with_key.assert_called_once()
+
+
 def test_veda_node_delegates_without_lora_mutation():
     model, result = object(), object()
     configure = mock.Mock(return_value=result)

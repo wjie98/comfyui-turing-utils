@@ -16,8 +16,7 @@ from comfy_extras.nodes_video import CreateVideo
 from comfy_extras.nodes_audio import load as load_audio
 
 from .store import Project, inside
-from .media import read_material
-from .h3 import PrepareH3, FinishH3, SigmaRefiner
+from .media import read_image, read_audio
 from .endpoints import ENDPOINT_NODES, POSITION
 from ..nodes import INTERNAL_NODE_NOTE
 from .protocol import MATERIAL_TYPES
@@ -193,11 +192,11 @@ def create_video(value, fps=30., audio=None, bit_depth="auto", color_space="sRGB
     return CreateVideo.execute(value, fps, audio, bit_depth, color_space, codec).result[0]
 
 
-def read_selected(kind, directory, asset, start=0, end=0, include_audio=True):
+def read_selected(kind, directory, asset, start=0, end=0):
     project = Project(directory)
     if project.asset(asset)["kind"] != kind:
         raise ValueError("Material kind does not match this node")
-    if end and end <= start:
+    if not math.isfinite(start) or not math.isfinite(end) or start < 0 or end < 0 or (end and end <= start):
         raise ValueError("End time must be after start time")
     maximum = project.settings()["max_megapixels"]
     if kind == "video":
@@ -214,10 +213,8 @@ def read_selected(kind, directory, asset, start=0, end=0, include_audio=True):
                 components.alpha = nodes.ImageScale().upscale(components.alpha.unsqueeze(-1), "area", width, height, "disabled")[0].squeeze(-1)
             video = InputImpl.VideoFromComponents(components, bit_depth=video.get_bit_depth(), color_space=video.get_color_space())
         return (video,)
-    images, audio, _ = read_material(project, {"asset": asset, "start": start,
-        "duration": end - start if end else 0, "modality": "audio" if kind == "audio" else "av",
-        "include_audio": include_audio, "max_megapixels": maximum})
-    return (images, audio) if kind == "video" else (audio,) if kind == "audio" else (images,)
+    path = project.path(asset)
+    return (read_audio(path, start, end),) if kind == "audio" else (read_image(path, maximum),)
 
 
 class Read:
@@ -231,12 +228,12 @@ class Read:
         if cls.KIND == "text":
             return {"required": {"text": ("STRING",), "run_id": ("STRING",)}}
         return {"required": {"directory": ("STRING",), "asset": ("STRING",), "run_id": ("STRING",),
-                             "start": ("FLOAT",), "end": ("FLOAT",), "include_audio": ("BOOLEAN",)}}
+                             "start": ("FLOAT",), "end": ("FLOAT",)}}
 
-    def read(self, directory="", asset="", run_id="", start=0, end=0, include_audio=True, text=""):
+    def read(self, directory="", asset="", run_id="", start=0, end=0, text=""):
         if self.KIND == "text":
             return (text,)
-        return read_selected(self.KIND, directory, asset, start, end, include_audio)
+        return read_selected(self.KIND, directory, asset, start, end)
 
 
 class Write:
@@ -283,7 +280,4 @@ for _kind, _returns in MATERIAL_TYPES.items():
     PUBLIC_NODES["TuringMaterial" + _suffix] = type("Material" + _suffix, (Material,), {"KIND": _kind, "RETURN_TYPES": _returns})
     INTERNAL_NODES["_TuringMaterialRead" + _suffix] = type("Read" + _suffix, (Read,), {"KIND": _kind, "RETURN_TYPES": _returns})
     INTERNAL_NODES["_TuringMaterialWrite" + _suffix] = type("Write" + _suffix, (Write,), {"KIND": _kind, "VALUE_TYPE": "IMAGE" if _kind == "video" else _returns[0]})
-INTERNAL_NODES.update({"_TuringMaterialH3Prepare": PrepareH3,
-                       "_TuringMaterialH3Finish": FinishH3,
-                       "_TuringMaterialH3SigmaRefiner": SigmaRefiner})
 PUBLIC_NODES.update(ENDPOINT_NODES)
