@@ -5,6 +5,13 @@ import copy
 from .compiler import MATERIALS, is_link
 from .endpoints import INPUTS, OUTPUTS, parse_ports
 from .protocol import MATERIAL_TYPES
+from .parameters import (
+    DYNAMIC_COMBO,
+    DYNAMIC_BINDINGS,
+    expand_dynamic,
+    parameter_default,
+    validate_parameter,
+)
 
 
 def describe(prompt):
@@ -16,7 +23,29 @@ def describe(prompt):
         )
     input_id, output_id = inputs[0], outputs[0]
     incoming = parse_ports(prompt[input_id]["inputs"]["ports"])
-    outgoing = parse_ports(prompt[output_id]["inputs"]["ports"])
+    outgoing = parse_ports(prompt[output_id]["inputs"]["ports"], endpoint=OUTPUTS)
+    for node in prompt.values():
+        bindings = node.get("_meta", {}).get(DYNAMIC_BINDINGS, {})
+        if not isinstance(bindings, dict):
+            raise ValueError("Invalid dynamic parameter bindings")
+        for name, link in bindings.items():
+            port = next(
+                (p for p in incoming if is_link(link) and p["slot"] == link[1]), None
+            )
+            if (
+                not isinstance(name, str)
+                or not name
+                or not is_link(link)
+                or link[0] != input_id
+                or port is None
+                or port["kind"] != "parameter"
+                or port["type"] != DYNAMIC_COMBO
+            ):
+                raise ValueError("Invalid dynamic parameter binding")
+            if any(
+                other != name and other.startswith(name + ".") for other in bindings
+            ):
+                raise ValueError("Dynamic parameter groups cannot overlap")
     stubs, positioned, exported = {}, {}, set()
     for key, node in prompt.items():
         if node["class_type"] not in MATERIALS:
@@ -67,17 +96,42 @@ def describe(prompt):
 def flatten(prompt, interface, overrides=None):
     result = copy.deepcopy(prompt)
     inputs = result[interface["input_node"]]["inputs"]
+    ports = {p["slot"]: p for p in interface["inputs"]}
     replacements = {}
     for port in interface["inputs"]:
-        if port["kind"] != "value":
+        if port["kind"] == "position":
             continue
         value = (overrides or {}).get(
-            port["id"], inputs.get(f"port_{port['slot']}", port.get("default"))
+            port["id"], inputs.get(f"port_{port['slot']}", parameter_default(port))
         )
+        if port["kind"] == "parameter" and not is_link(value):
+            validate_parameter(port, value)
         replacements[port["slot"]] = value
     for node in result.values():
         if node["class_type"] in MATERIALS:
             node["inputs"].pop("position", None)
+        dynamic = dict(node.get("_meta", {}).pop(DYNAMIC_BINDINGS, {}))
+        dynamic.update(
+            {
+                name: value
+                for name, value in node["inputs"].items()
+                if is_link(value)
+                and value[0] == interface["input_node"]
+                and ports.get(value[1], {}).get("type") == DYNAMIC_COMBO
+            }
+        )
+        for name, link in dynamic.items():
+            port = ports[link[1]]
+            for key in list(node["inputs"]):
+                if key == name or key.startswith(name + "."):
+                    if key != name and is_link(node["inputs"][key]):
+                        raise ValueError(
+                            "Disconnect branch inputs before exposing the whole DynamicCombo"
+                        )
+                    del node["inputs"][key]
+            node["inputs"].update(
+                expand_dynamic(port, replacements[port["slot"]], name)
+            )
         for name, value in list(node["inputs"].items()):
             if is_link(value) and value[0] == interface["input_node"]:
                 if value[1] not in replacements:

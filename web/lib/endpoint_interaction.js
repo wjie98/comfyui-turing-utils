@@ -2,9 +2,12 @@ import {
   POSITION,
   INPUTS,
   MATERIAL_TYPES,
+  parameterDefinition,
   entries,
   syncPorts,
+  syncDynamicTargets,
 } from "./canvas_ports.js";
+import { DYNAMIC_COMBO, dynamicSpec } from "./dynamic_parameter.js";
 import { PortReorder } from "./port_reorder.js";
 
 // All mutation is local to endpoint nodes; the native graph still owns links and undo.
@@ -14,8 +17,16 @@ export function installEndpoint(node) {
     fn();
     node.graph?.afterChange();
   };
-  const grow = (type, name, widget) => {
-    if (!MATERIAL_TYPES.has(type) && !(type === POSITION && node.type === INPUTS))
+  const grow = (type, name, widget, target) => {
+    const parameter =
+      node.type === INPUTS && (widget || !MATERIAL_TYPES.has(type))
+        ? parameterDefinition(type, widget, target)
+        : null;
+    if (
+      !parameter &&
+      !MATERIAL_TYPES.has(type) &&
+      !(type === POSITION && node.type === INPUTS)
+    )
       return false;
     const ps = entries(node);
     const p = {
@@ -24,31 +35,50 @@ export function installEndpoint(node) {
       name: name || type,
       type,
       kind: type === POSITION ? "position" : "value",
+      ...parameter,
     };
-    if (widget && type === "STRING") {
-      p.default = widget.value;
-    }
     ps.push(p);
     syncPorts(node, ps);
     return true;
   };
   node.onConnectInput = function (slot, type, output, source) {
     if (this.inputs[slot]?._append) {
-      if (!MATERIAL_TYPES.has(type)) return false;
-      return grow(type, output.label || output.name);
+      return grow(
+        type,
+        output.label || output.name,
+        source.widgets?.find((w) => w.name === output.name),
+      );
     }
     return true;
   };
   node.onConnectOutput = function (slot, type, input, target) {
+    if (
+      type === DYNAMIC_COMBO &&
+      target.inputs.some((s) => s.link != null && s.name.startsWith(input.name + "."))
+    )
+      return false;
     if (this.outputs[slot]?._append) {
       const widget = target.widgets?.find((w) => w.name === input.name);
       return grow(
         type,
         input.name === "position" ? target.title : input.label || input.name,
         widget,
+        target,
       );
     }
+    const port = entries(this).find((p) => p.id === this.outputs[slot]?._portId);
+    if (port?.type === DYNAMIC_COMBO) {
+      const spec = dynamicSpec(target, input.name);
+      return !!spec && JSON.stringify(spec[1]) === JSON.stringify(port.options);
+    }
     return true;
+  };
+  const nativeConnectionsChange = node.onConnectionsChange;
+  node.onConnectionsChange = function (type, slot, connected, ...args) {
+    nativeConnectionsChange?.call(this, type, slot, connected, ...args);
+    if (type !== LiteGraph.OUTPUT || !connected || this._syncingPorts) return;
+    const port = entries(this).find((p) => p.id === this.outputs[slot]?._portId);
+    if (port) syncDynamicTargets(this, port);
   };
   const rename = (id) => {
     const port = entries(node).find((p) => p.id === id);

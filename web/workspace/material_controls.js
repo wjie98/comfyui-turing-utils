@@ -1,8 +1,7 @@
 /** Native widgets and explicitly activated media previews for material cards. */
-import { app } from "../../../scripts/app.js";
 import { api } from "../../../scripts/api.js";
-import { ComfyWidgets } from "../../../scripts/widgets.js";
 import { bindMaterialCombo } from "../lib/material_combo.js";
+import { parameterWidget } from "../lib/parameter_widget.js";
 import { action, report, request } from "./api.js";
 
 let playing = null;
@@ -12,25 +11,7 @@ export function button(node, name, fn) {
   return node.addWidget("button", name, null, action(fn), { serialize: false });
 }
 export function field(node, name, type, value, fn, options = {}) {
-  const w =
-    type === "STRING"
-      ? ComfyWidgets.STRING(
-          node,
-          name,
-          ["STRING", { default: value, multiline: options.multiline ?? true }],
-          app,
-        ).widget
-      : node.addWidget(
-          type === "BOOLEAN" ? "toggle" : type === "COMBO" ? "combo" : "number",
-          name,
-          value,
-          () => {},
-          options,
-        );
-  w.value = value;
-  w.callback = action(fn);
-  w.options = { ...w.options, serialize: false };
-  return w;
+  return parameterWidget(node, name, type, value, action(fn), options);
 }
 export function url(directory, asset, thumbnail = false) {
   return api.apiURL(

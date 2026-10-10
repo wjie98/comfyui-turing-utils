@@ -271,6 +271,7 @@ def install_routes():
                 data["workflow"],
                 data["prompt"],
                 data["revision"],
+                parameters=data.get("parameters"),
             )
         )
         return web.json_response({"revision": revision})

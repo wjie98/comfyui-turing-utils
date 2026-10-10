@@ -1,7 +1,110 @@
+import { parameterWidget } from "./parameter_widget.js";
+import {
+  DYNAMIC_COMBO,
+  dynamicDefinition,
+  dynamicSpec,
+  applyDynamicWidgets,
+} from "./dynamic_parameter.js";
+
 export const INPUTS = "TuringCanvasInputs";
 export const OUTPUTS = "TuringCanvasOutputs";
 export const POSITION = "TURING_CANVAS_POSITION";
 export const MATERIAL_TYPES = new Set(["STRING", "IMAGE", "VIDEO", "AUDIO"]);
+export const PARAMETER_TYPES = new Set([
+  "INT",
+  "FLOAT",
+  "BOOLEAN",
+  "STRING",
+  "COMBO",
+  DYNAMIC_COMBO,
+]);
+
+export function parameterDefinition(type, widget, target) {
+  if (type === DYNAMIC_COMBO)
+    return target && widget ? dynamicDefinition(target, widget) : null;
+  const values = Array.isArray(type) ? type : widget?.options?.values;
+  if (Array.isArray(type)) type = "COMBO";
+  if (!PARAMETER_TYPES.has(type)) return null;
+  if (
+    type === "COMBO" &&
+    (!Array.isArray(values) ||
+      !values.length ||
+      values.some(
+        (v) =>
+          !["string", "number", "boolean"].includes(typeof v) ||
+          (typeof v === "number" && !Number.isFinite(v)),
+      ))
+  )
+    return null;
+  const options = {};
+  for (const key of ["min", "max", "step", "step2", "precision", "round", "on", "off"])
+    if (widget?.options?.[key] !== undefined) options[key] = widget.options[key];
+  if (type === "STRING") options.multiline = widget?.inputEl?.tagName === "TEXTAREA";
+  if (type === "COMBO") options.values = values;
+  const value =
+    widget?.value ??
+    (type === "COMBO"
+      ? values[0]
+      : { INT: 0, FLOAT: 0, BOOLEAN: false, STRING: "" }[type]);
+  return { type, kind: "parameter", default: value, options };
+}
+
+function syncParameterWidgets(node, ports) {
+  const wanted = ports.filter((p) => p.kind === "parameter");
+  for (const widget of [...node.widgets]) {
+    if (!widget._portId || wanted.some((p) => p.id === widget._portId)) continue;
+    node.removeWidget(widget);
+  }
+  for (const port of wanted) {
+    let widget = node.widgets.find(
+      (w) =>
+        w._portId === port.id &&
+        (!w._dynamicParameterRoot || w._dynamicParameterRoot === w),
+    );
+    if (!widget) {
+      widget = parameterWidget(
+        node,
+        `parameter:${port.id}`,
+        port.type,
+        port.default,
+        (value) => {
+          const ports = entries(node);
+          ports.find((p) => p.id === port.id).default = value;
+          node.widgets.find((w) => w.name === "ports").value = JSON.stringify(ports);
+          syncDynamicTargets(
+            node,
+            ports.find((p) => p.id === port.id),
+          );
+          node.graph?.setDirtyCanvas(true, true);
+        },
+        port.options,
+      );
+      widget._portId = port.id;
+    }
+    widget.label = port.name;
+    if (widget.setParameterValue) widget.setParameterValue(port.default);
+    else widget.value = port.default;
+    for (const w of node.widgets)
+      if (w._dynamicParameterRoot === widget) w._portId = port.id;
+  }
+  const order = new Map(wanted.map((p, i) => [p.id, i]));
+  node.widgets.sort(
+    (a, b) => (order.get(a._portId) ?? -1) - (order.get(b._portId) ?? -1),
+  );
+}
+export function syncDynamicTargets(node, port) {
+  if (port.type !== DYNAMIC_COMBO) return;
+  const slot = node.outputs.findIndex((s) => s._portId === port.id);
+  for (const id of node.outputs[slot]?.links || []) {
+    const link = node.graph.links[id];
+    const target = node.graph.getNodeById(link.target_id);
+    const input = target.inputs[link.target_slot];
+    const spec = dynamicSpec(target, input.name);
+    if (!spec || JSON.stringify(spec[1]) !== JSON.stringify(port.options))
+      throw Error("DynamicCombo schemas do not match; reconnect the parameter group");
+    applyDynamicWidgets(target, input.name, port.options, port.default);
+  }
+}
 export function entries(node) {
   return JSON.parse(node.widgets.find((w) => w.name === "ports").value || "[]");
 }
@@ -23,14 +126,19 @@ export function syncPorts(node, ports) {
     if (
       s.name.startsWith("port_") &&
       (!wanted.has(s._portId) ||
-        ports.find((p) => p.id === s._portId)?.kind === "position")
+        ports.find((p) => p.id === s._portId)?.kind === "position" ||
+        ports.find((p) => p.id === s._portId)?.type === DYNAMIC_COMBO)
     )
       node.removeInput(i);
   }
   for (let i = (node.outputs?.length || 0) - 1; i >= 0; i--)
     if (!wanted.has(node.outputs[i]._portId)) node.removeOutput(i);
   for (const p of ports) {
-    if (p.kind === "value" && !node.inputs.some((s) => s._portId === p.id)) {
+    if (
+      p.kind !== "position" &&
+      p.type !== DYNAMIC_COMBO &&
+      !node.inputs.some((s) => s._portId === p.id)
+    ) {
       node.addInput("port_" + p.slot, p.type);
       node.inputs.at(-1)._portId = p.id;
     }
@@ -78,7 +186,9 @@ export function syncPorts(node, ports) {
     for (const link of outputLinks.get(s._portId) || []) link.origin_slot = i;
   }
   node.widgets.find((w) => w.name === "ports").value = JSON.stringify(ports);
+  syncParameterWidgets(node, ports);
   node._syncingPorts = false;
+  for (const port of ports) syncDynamicTargets(node, port);
   appendSocket(node);
   alignInputs(node);
   node.setSize(node.computeSize());
@@ -107,14 +217,22 @@ export function alignInputs(node) {
       input.pos = [0, node.getConnectionPos(false, index)[1] - node.pos[1]];
   }
 }
-export function addPort(node, name, type = "STRING", kind = "value") {
+export function addPort(node, name, type = "STRING", kind = "value", definition = {}) {
   if (
     (kind === "value" && !MATERIAL_TYPES.has(type)) ||
-    (kind === "position" && type !== POSITION)
+    (kind === "position" && type !== POSITION) ||
+    (kind === "parameter" && (node.type !== INPUTS || !PARAMETER_TYPES.has(type)))
   )
     throw Error("Canvas endpoints only support Image, Video, Audio and Text");
   const ports = entries(node),
-    port = { id: crypto.randomUUID(), slot: ports.length, name, type, kind };
+    port = {
+      ...definition,
+      id: crypto.randomUUID(),
+      slot: ports.length,
+      name,
+      type,
+      kind,
+    };
   ports.push(port);
   syncPorts(node, ports);
   return port;

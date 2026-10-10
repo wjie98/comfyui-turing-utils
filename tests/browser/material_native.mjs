@@ -24,7 +24,7 @@ try {
         errors.push(e.text());
     }
   });
-  await page.goto("http://127.0.0.1:18188");
+  await page.goto(process.env.CANVAS_URL || "http://127.0.0.1:18188");
   await page.waitForFunction(
     () =>
       window.app?.graph && window.LiteGraph?.registered_node_types.TuringCanvasProject,
@@ -155,13 +155,13 @@ try {
     if (
       endpoint.onConnectInput(
         endpoint.inputs.findIndex((s) => s._append),
-        "INT",
-        { name: "integer" },
+        "MODEL",
+        { name: "model" },
         constant,
       ) !== false ||
       endpoint.outputs.length !== beforePorts
     )
-      throw Error("Endpoint accepted a non-material type");
+      throw Error("Endpoint accepted a non-persistent type");
     const linkedTarget = app.graph._nodes.find((n) => n.type === "TuringMaterialText");
     const port = addPort(endpoint, "source", "STRING");
     endpoint.connect(

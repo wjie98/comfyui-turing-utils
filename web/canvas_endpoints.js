@@ -1,9 +1,18 @@
 import { app } from "../../scripts/app.js";
 import { INPUTS, OUTPUTS, entries, syncPorts } from "./lib/canvas_ports.js";
 import { installEndpoint } from "./lib/endpoint_interaction.js";
+import { expandDynamicParameters } from "./lib/dynamic_parameter.js";
 
 app.registerExtension({
   name: "TuringUtils.CanvasEndpoints",
+  setup() {
+    const graphToPrompt = app.graphToPrompt;
+    app.graphToPrompt = async function (...args) {
+      const result = await graphToPrompt.apply(this, args);
+      expandDynamicParameters(result.output);
+      return result;
+    };
+  },
   beforeRegisterNodeDef(nodeType, data) {
     if (data.name !== "TuringMaterialAudio") return;
     // Native audio upload expects audioUI to exist during node construction,

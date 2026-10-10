@@ -15,8 +15,8 @@ export class DirectoryPicker {
       "width:min(900px,92vw);max-height:80vh;padding:16px;background:var(--comfy-menu-bg,#222);color:var(--input-text,#eee);border:1px solid var(--border-color,#555);border-radius:8px";
     const heading = document.createElement("h3");
     heading.textContent = create
-      ? "新建素材画布 · 选择空文件夹"
-      : "打开素材画布 · 选择项目文件夹";
+      ? "新建画布 · 选择空文件夹"
+      : "打开画布 · 选择项目文件夹";
     const path = document.createElement("input");
     path.type = "text";
     path.placeholder = "output 内的相对目录";

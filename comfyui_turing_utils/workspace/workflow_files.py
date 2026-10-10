@@ -10,6 +10,7 @@ import threading
 import uuid
 
 from .cards import describe
+from .parameters import is_parameter, parameter_default, validate_parameter
 
 LOCK = threading.RLock()
 KEY = "turing_card"
@@ -78,13 +79,26 @@ def load_json(path):
 
 
 def add_instance(root, workflow, title):
-    unpack(workflow)
+    data, interface = unpack(workflow)
     with LOCK:
         path = Path(root) / "canvas.json"
         canvas = load_json(path)
         identity = uuid.uuid4().hex
         atomic_json(card_path(root, identity), workflow)
-        canvas["cards"].append({"id": identity, "title": title})
+        canvas["cards"].append(
+            {
+                "id": identity,
+                "title": title,
+                "parameters": {
+                    **{
+                        p["id"]: parameter_default(p)
+                        for p in interface["inputs"]
+                        if p["kind"] == "parameter"
+                    },
+                    **copy.deepcopy(data.get("overrides", {})),
+                },
+            }
+        )
         canvas["revision"] += 1
         atomic_json(path, canvas)
         return identity
@@ -93,23 +107,48 @@ def add_instance(root, workflow, title):
 def read_instance(root, identity):
     path = card_path(root, identity)
     workflow = load_json(path)
+    canvas = load_json(Path(root) / "canvas.json")
+    instance = next(c for c in canvas["cards"] if c["id"] == identity)
+    parameters = {
+        **workflow.get("extra", {}).get(KEY, {}).get("overrides", {}),
+        **instance.get("parameters", {}),
+    }
     # Opening an externally edited file is allowed; only execution rejects stale snapshots.
     return {
         "workflow": workflow,
-        "revision": hashlib.sha256(path.read_bytes()).hexdigest(),
+        "revision": hashlib.sha256(
+            path.read_bytes() + json.dumps(parameters, sort_keys=True).encode()
+        ).hexdigest(),
+        "parameters": parameters,
     }
 
 
-def save_instance(root, identity, workflow, prompt, revision):
+def save_instance(root, identity, workflow, prompt, revision, parameters=None):
     with LOCK:
         current = read_instance(root, identity)
         if current["revision"] != revision:
-            raise ValueError("Card file changed; reopen it before saving")
+            raise ValueError("Card file or parameters changed; reopen it before saving")
         result = pack(workflow, prompt)
         canvas = load_json(Path(root) / "canvas.json")
         _, interface = unpack(result)
         previous = current["workflow"]["extra"][KEY]
         old_interface = describe(previous["prompt"])
+        instance = next(c for c in canvas["cards"] if c["id"] == identity)
+        ports = {p["id"]: p for p in interface["inputs"] if is_parameter(p)}
+        instance["parameters"] = {
+            key: value
+            for key, value in current["parameters"].items()
+            if key in ports
+        }
+        for p in interface["inputs"]:
+            if p["kind"] == "parameter":
+                instance["parameters"].setdefault(p["id"], parameter_default(p))
+        for key, value in (parameters or {}).items():
+            if key not in ports:
+                raise ValueError("Unknown card input")
+            instance["parameters"][key] = value
+        for key, value in instance["parameters"].items():
+            validate_parameter(ports[key], value)
         for stub in old_interface["stubs"].keys() & interface["stubs"].keys():
             old = previous["prompt"][old_interface["stubs"][stub]]["class_type"]
             if old != prompt[interface["stubs"][stub]]["class_type"]:
@@ -156,33 +195,34 @@ def patch(root, revision, changes):
         canvas = load_json(path)
         if canvas["revision"] != revision:
             raise ValueError("Canvas changed; reload before saving")
-        pending = {}
+        interfaces = {}
         for change in changes:
             if change["type"] == "input":
                 identity, suffix = change["id"].split(":", 1)
                 if suffix != "parameters":
                     raise ValueError("Only endpoint parameters can be edited on a card")
-                file = card_path(root, identity)
-                workflow = pending.setdefault(file, load_json(file))
-                data, interface = unpack(workflow)
+                instance = next(
+                    (c for c in canvas["cards"] if c["id"] == identity), None
+                )
+                if instance is None:
+                    raise ValueError("Unknown card instance")
+                if identity not in interfaces:
+                    _, interfaces[identity] = unpack(load_json(card_path(root, identity)))
+                interface = interfaces[identity]
                 port = next(
                     (
                         p
                         for p in interface["inputs"]
-                        if p["id"] == change["name"] and p["kind"] == "value"
+                        if p["id"] == change["name"] and is_parameter(p)
                     ),
                     None,
                 )
                 if port is None:
                     raise ValueError("Unknown card input")
-                value = change["value"]
-                if port["type"] != "STRING" or not isinstance(value, str):
-                    raise ValueError("Value does not match the endpoint parameter type")
-                data["overrides"][change["name"]] = change["value"]
+                validate_parameter(port, change["value"])
+                instance.setdefault("parameters", {})[change["name"]] = change["value"]
             else:
                 raise ValueError("Unknown Canvas edit")
-        for file, workflow in pending.items():
-            atomic_json(file, workflow)
         canvas["revision"] += 1
         atomic_json(path, canvas)
         return canvas["revision"]

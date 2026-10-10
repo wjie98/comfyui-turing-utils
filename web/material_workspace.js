@@ -176,7 +176,7 @@ async function editCard(node) {
     revision: data.revision,
   };
   await openTab(data.workflow, `${id}.json`);
-  const overrides = data.workflow.extra.turing_card.overrides || {};
+  const overrides = data.parameters || data.workflow.extra.turing_card.overrides || {};
   const restore = (graph) => {
     for (const n of graph._nodes) {
       if (n.type === INPUTS) {
@@ -209,10 +209,20 @@ async function saveCard() {
   if (!editing) throw Error("请先打开卡片工作流");
   const { workflow, output } = await app.graphToPrompt();
   delete workflow.extra.turing_editor;
+  const parameters = Object.fromEntries(
+    Object.values(output)
+      .filter((n) => n.class_type === INPUTS)
+      .flatMap((n) =>
+        JSON.parse(n.inputs.ports)
+          .filter((p) => p.kind === "parameter")
+          .map((p) => [p.id, p.default]),
+      ),
+  );
   const result = await request(editing.id ? "card/save" : "template/save", {
     ...editing,
     workflow,
     prompt: output,
+    parameters,
   });
   editing.revision = result.revision;
 }
@@ -401,14 +411,13 @@ class CardNode extends LiteGraph.LGraphNode {
   onConfigure() {
     this.releasePlayer();
     clearPosters(this);
-    for (const w of this.widgets || []) w.onRemove?.();
-    this.widgets = [];
+    for (const w of [...(this.widgets || [])]) this.removeWidget(w);
     const card = this.properties.card;
     if (!card) return;
     for (const f of card.fields)
       field(
         this,
-        f.label,
+        f.input,
         f.type,
         this.properties.values[f.input],
         async (value) => {
@@ -422,12 +431,8 @@ class CardNode extends LiteGraph.LGraphNode {
           );
           this.properties.values[f.input] = value;
         },
-        {
-          values: f.options,
-          step: f.type === "INT" ? 10 : 1,
-          precision: f.type === "INT" ? 0 : 3,
-        },
-      );
+        f.options,
+      ).label = f.label;
     for (const m of this.properties.materials)
       controls(this, m, { select, importMedia, run });
     button(this, "编辑工作流", () => editCard(this));
@@ -451,7 +456,7 @@ app.registerExtension({
   commands: [
     {
       id: "Turing.MaterialWorkspace.Create",
-      label: "新建素材画布…",
+      label: "新建画布…",
       function: action(async () => {
         const d = await directoryPicker(true);
         if (d) await openProject(d, true);
@@ -459,7 +464,7 @@ app.registerExtension({
     },
     {
       id: "Turing.MaterialWorkspace.Open",
-      label: "打开素材画布…",
+      label: "打开画布…",
       function: action(async () => {
         const d = await directoryPicker(false);
         if (d) await openProject(d);
@@ -467,12 +472,12 @@ app.registerExtension({
     },
     {
       id: "Turing.MaterialWorkspace.SaveProject",
-      label: "保存素材画布",
+      label: "保存画布",
       function: action(saveProject),
     },
     {
       id: "Turing.MaterialWorkspace.New",
-      label: "新建 Canvas 卡片",
+      label: "新建卡片",
       function: action(async () => {
         const r = await api.fetchApi("/turing/workspace/new-template");
         await openTab(await r.json(), `新卡片-${crypto.randomUUID().slice(0, 6)}.json`);
@@ -480,17 +485,17 @@ app.registerExtension({
     },
     {
       id: "Turing.MaterialWorkspace.Edit",
-      label: "编辑 Canvas 卡片…",
+      label: "编辑卡片…",
       function: action(editTemplate),
     },
     {
       id: "Turing.MaterialWorkspace.SaveTemplate",
-      label: "保存为 Canvas 卡片",
+      label: "保存为卡片",
       function: action(saveTemplate),
     },
     {
       id: "Turing.MaterialWorkspace.SaveInstance",
-      label: "保存回 Canvas 卡片",
+      label: "保存回卡片",
       function: action(saveCard),
     },
   ],

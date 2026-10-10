@@ -5,6 +5,12 @@ from pathlib import Path
 
 from .cards import flatten
 from .compiler import is_link
+from .parameters import (
+    is_parameter,
+    parameter_default,
+    parameter_options,
+    validate_parameter,
+)
 from .protocol import MATERIAL_TYPES
 from .workflow_files import card_path, load_json, unpack
 
@@ -25,6 +31,18 @@ def document(root, canvas=None, card_ids=None, *, execution=False):
         try:
             workflow = load_json(card_path(root, instance["id"]))
             data, interface = unpack(workflow)
+            overrides = {
+                **{
+                    p["id"]: parameter_default(p)
+                    for p in interface["inputs"]
+                    if p["kind"] == "parameter"
+                },
+                **data.get("overrides", {}),
+                **instance.get("parameters", {}),
+            }
+            for port in interface["inputs"]:
+                if is_parameter(port) and port["id"] in overrides:
+                    validate_parameter(port, overrides[port["id"]])
         except (ValueError, OSError) as error:
             cards.append(
                 {
@@ -40,7 +58,7 @@ def document(root, canvas=None, card_ids=None, *, execution=False):
             )
             continue
         local = (
-            flatten(data["prompt"], interface, data.get("overrides"))
+            flatten(data["prompt"], interface, overrides)
             if execution
             else {
                 node: copy.deepcopy(data["prompt"][node])
@@ -104,21 +122,19 @@ def document(root, canvas=None, card_ids=None, *, execution=False):
                 ]
                 materials.append(material)
                 layout.append({"material": material})
-            elif port["type"] == "STRING":
-                value = data.get("overrides", {}).get(port["id"], port.get("default"))
-                if value is None:
-                    value = ""
+            elif is_parameter(port):
+                value = overrides.get(port["id"], parameter_default(port))
                 parameters[port["id"]] = value
                 field = {
                     "node": configuration_id,
                     "input": port["id"],
                     "label": port["name"],
                     "type": port["type"],
-                    "options": port.get("options"),
+                    "options": parameter_options(port),
                     "connected": port["id"] in bindings
                     or f"port_{port['slot']}"
                     in data["prompt"][interface["input_node"]]["inputs"]
-                    and port["id"] not in data.get("overrides", {}),
+                    and port["id"] not in overrides,
                 }
                 fields.append(field)
                 layout.append({"field": field})

@@ -58,7 +58,7 @@ export function enqueueSave(state, operation) {
 }
 export async function saveProject(directory = project()?.directory) {
   if (typeof directory !== "string") directory = project()?.directory;
-  if (!directory) throw Error("当前不是素材画布");
+  if (!directory) throw Error("当前不是画布");
   const state = projectState(directory);
   if (!state) return; // A closed project already saved before task submission.
   setProjectStatus(directory, "正在保存");

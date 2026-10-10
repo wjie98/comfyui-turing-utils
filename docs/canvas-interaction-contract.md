@@ -10,6 +10,12 @@
 - 卡片模板和实例分离，稳定 ID 不依赖显示名称和顺序；复制一个原生节点不能冒充新实例。
 - 素材文本内联保存；视频使用 VIDEO。中间结果不能直接成为跨卡片输出。
 - 输入输出端点数据口仅支持 IMAGE/VIDEO/AUDIO/STRING，位置标记不传递素材。
+- Inputs 的 parameter 端口支持 INT/FLOAT/BOOLEAN/STRING/COMBO；在卡片上显示原生表单，
+  不创建素材连线口。默认值和控件设置属于工作流，实例参数值属于 canvas.json，按稳定 ID 保存。
+  Outputs 不接受 parameter 端口；模型、latent 等运行时对象不能作为参数持久化。
+- DynamicCombo 复用原生分支控件，只导出可填写参数组，支持嵌套分支。
+  各分支值属于 canvas.json，切换不丢值、不自动执行；编译时仅展开选中分支。
+  整组与组内字段不能分别接线，避免覆盖。工作流执行和卡片执行使用相同的分支语义。
 - 文本桩只有 text 入口，连接后仍显示文本框。媒体选择复用标准 combo/上传控件。
 - canvas.json 是项目事实来源。前端原生图是编辑表示，保存时验证节点、插槽和连线。
 - 保存使用 revision，冲突报错；不覆盖其它标签页的新结果。删除节点不隐式删除素材文件。
@@ -35,6 +41,8 @@
 - web/material_workspace.js：原生节点、命令、标签页、局部执行交互的入口。
 - web/workspace/api.js、project_state.js、material_controls.js：请求反馈、保存队列和预览生命周期。
 - web/lib/canvas_ports.js、endpoint_interaction.js：普通工作流端点的动态插槽。
+- web/lib/parameter_widget.js：端点与卡片共享的原生表单控件。
+- web/lib/dynamic_parameter.js、workspace/parameters.py：原生分支表单、标量校验与执行输入展开。
 - web/lib/port_reorder.js：端口排序、取消和局部动画；不维护另一份图。
 - web/lib/material_combo.js、directory_picker.js：原生文件下拉适配和受限目录弹窗。
 - workspace/native.py：项目图表示及保存校验。
@@ -47,5 +55,7 @@
 ## 回归
 
 使用 ops/test-dev.sh -q -k material_workspace 检查数据与执行边界。
+tests/test_canvas_dynamic_parameters.py 和 tests/browser/canvas_dynamic_parameters.mjs
+检查嵌套分支、保存恢复、模板隔离、重复切换及实际分支执行。
 tests/browser/material_native.mjs 检查经典编辑器的原生控件、新标签页、项目布局与局部执行。
 修改项目或节点协议时同步增加回归；不保留依赖已删除页面的测试和兼容接口。

@@ -27,7 +27,11 @@ from comfyui_turing_utils.workspace.directories import (
 )
 from comfyui_turing_utils.workspace.store import Project, Conflict, inside
 from comfyui_turing_utils.workspace.cache import install_task_cleanup
-from comfyui_turing_utils.workspace.endpoints import CanvasInputs, parse_ports
+from comfyui_turing_utils.workspace.endpoints import (
+    CanvasInputs,
+    CanvasOutputs,
+    parse_ports,
+)
 from comfyui_turing_utils.workspace.cards import describe, flatten
 from comfyui_turing_utils.workspace import workflow_files, projection
 from comfyui_turing_utils.workspace.templates import material_template
@@ -360,6 +364,147 @@ class WorkspaceTest(unittest.TestCase):
                     ]
                 )
             )
+
+    def test_endpoint_parameter_types_and_defaults(self):
+        ports = [
+            dict(id="count", name="Count", type="INT", default=8),
+            dict(id="scale", name="Scale", type="FLOAT", default=0.75),
+            dict(id="enabled", name="Enabled", type="BOOLEAN", default=True),
+            dict(id="text", name="Text", type="STRING", default="hello"),
+            dict(
+                id="choice",
+                name="Choice",
+                type="COMBO",
+                default="euler",
+                options={"values": ["euler", "heun"]},
+            ),
+        ]
+        ports = [{**p, "kind": "parameter", "slot": i} for i, p in enumerate(ports)]
+        encoded = json.dumps(ports)
+        self.assertEqual(
+            CanvasInputs().forward(encoded), (8, 0.75, True, "hello", "euler")
+        )
+        self.assertTrue(CanvasInputs.VALIDATE_INPUTS(encoded, {"port_0": "INT"}))
+        self.assertNotEqual(CanvasOutputs.VALIDATE_INPUTS(encoded, {}), True)
+        invalid_values = [
+            (0, True), (0, 1.5), (1, float("nan")), (2, 1), (3, []), (4, "invalid")
+        ]
+        for index, invalid in invalid_values:
+            changed = copy.deepcopy(ports)
+            changed[index]["default"] = invalid
+            with self.subTest(index=index, invalid=invalid), self.assertRaisesRegex(
+                ValueError, "parameter type"
+            ):
+                parse_ports(json.dumps(changed))
+        for type_ in ("MODEL", "LATENT", "MASK", "IMAGE", "CUSTOM", "*"):
+            with self.subTest(type=type_), self.assertRaisesRegex(ValueError, "editable"):
+                parse_ports(json.dumps([{**ports[0], "type": type_}]))
+        changed = copy.deepcopy(ports)
+        changed[4]["options"] = {"values": [{"key": "euler"}]}
+        with self.assertRaisesRegex(ValueError, "serializable"):
+            parse_ports(json.dumps(changed))
+
+    def test_card_parameters_are_persisted_in_canvas_not_workflow(self):
+        workflow, graph = material_template(("text",))
+        ports = json.loads(graph["1"]["inputs"]["ports"])
+        parameters = [
+            dict(
+                id="steps", name="Steps", type="INT", default=8,
+                options={"min": 1, "step": 10},
+            ),
+            dict(id="denoise", name="Denoise", type="FLOAT", default=0.8),
+            dict(id="refine", name="Refine", type="BOOLEAN", default=True),
+            dict(id="label", name="Label", type="STRING", default="initial"),
+            dict(
+                id="sampler", name="Sampler", type="COMBO", default="euler",
+                options={"values": ["euler", "heun"]},
+            ),
+        ]
+        ports += [
+            {**p, "kind": "parameter", "slot": i + 1}
+            for i, p in enumerate(parameters)
+        ]
+        graph["1"]["inputs"]["ports"] = json.dumps(ports)
+        graph["compute"] = {
+            "class_type": "WorkspaceParameterTest",
+            "inputs": {p["id"]: ["1", i + 1] for i, p in enumerate(parameters)},
+        }
+        graph["3"]["inputs"]["text"] = ["compute", 0]
+        package = workflow_files.pack(workflow, graph)
+        a = workflow_files.add_instance(self.project.root, package, "A")
+        b = workflow_files.add_instance(self.project.root, package, "B")
+        before = workflow_files.card_path(self.project.root, a).read_bytes()
+        values = {
+            "steps": 12, "denoise": 0.35, "refine": False,
+            "label": "edited", "sampler": "heun",
+        }
+        self.project.patch(
+            self.project.document()["revision"],
+            [
+                dict(type="input", id=a + ":parameters", name=name, value=value)
+                for name, value in values.items()
+            ],
+        )
+        canvas = workflow_files.load_json(self.project.root / "canvas.json")
+        self.assertEqual(canvas["cards"][0]["parameters"], values)
+        self.assertEqual(workflow_files.card_path(self.project.root, a).read_bytes(), before)
+        self.assertEqual(
+            workflow_files.read_instance(self.project.root, a)["parameters"], values
+        )
+        document = self.project.document(execution=True)
+        self.assertEqual(document["prompt"][a + ":node:compute"]["inputs"], values)
+        self.assertEqual(
+            document["prompt"][b + ":node:compute"]["inputs"],
+            {p["id"]: p["default"] for p in parameters},
+        )
+        card = document["cards"][0]
+        self.assertEqual(card["ports"], [])
+        self.assertEqual(
+            [f["type"] for f in card["fields"]], [p["type"] for p in parameters]
+        )
+        native = project_workflow(self.project)["workflow"]
+        save_layout(self.project, native, document["revision"])
+        self.assertEqual(
+            workflow_files.load_json(self.project.root / "canvas.json")["cards"][0]["parameters"],
+            values,
+        )
+        reopened = workflow_files.read_instance(self.project.root, a)
+        workflow_files.save_instance(
+            self.project.root, a, workflow, graph, reopened["revision"]
+        )
+        self.assertEqual(
+            self.project.document(execution=True)["prompt"][a + ":node:compute"]["inputs"],
+            values,
+        )
+        reopened = workflow_files.read_instance(self.project.root, a)
+        workflow_files.save_instance(
+            self.project.root, a, workflow, graph, reopened["revision"],
+            parameters={"steps": 8},
+        )
+        values["steps"] = 8
+        self.assertEqual(
+            workflow_files.read_instance(self.project.root, a)["parameters"], values
+        )
+        with self.assertRaisesRegex(ValueError, "changed"):
+            workflow_files.save_instance(
+                self.project.root, a, workflow, graph, reopened["revision"]
+            )
+        revision = self.project.document()["revision"]
+        with self.assertRaisesRegex(ValueError, "parameter type"):
+            self.project.patch(
+                revision,
+                [
+                    dict(type="input", id=a + ":parameters", name="steps", value=20),
+                    dict(type="input", id=a + ":parameters", name="refine", value="invalid"),
+                ],
+            )
+        self.assertEqual(
+            workflow_files.load_json(self.project.root / "canvas.json")["revision"],
+            revision,
+        )
+        self.assertEqual(
+            workflow_files.read_instance(self.project.root, a)["parameters"], values
+        )
 
     def test_text_has_one_input_and_persists_inline(self):
         node = PUBLIC_NODES["TuringMaterialText"]
