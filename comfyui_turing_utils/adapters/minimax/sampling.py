@@ -14,7 +14,7 @@ import comfy.samplers
 import comfy.utils
 import comfy.model_management
 import latent_preview
-from comfy.latent_formats import MiniMaxH3AV
+from comfy.latent_formats import MiniMaxH3AV, MiniMaxH3Video
 from comfy.ldm.minimax.model import FRAME_PER_TOKEN, FRAME_RESCALE
 from comfy.nested_tensor import NestedTensor
 
@@ -531,6 +531,48 @@ class H3SamplingTask:
         )
 
 
+def _sample_h3_image(model, conditioning, latent, seed, sampler_name, sigmas):
+    """H3-Image branch: plain single-frame latent sampling on the checkpoint's PDD grid.
+
+    The distilled per-step heads live inside the model itself and the stock
+    scheduler at the distilled step count lands on their sigma grid, so this
+    mirrors the core KSampler path (cfg 1, no negative prompt) for image
+    latents. tail_steps and the AV sampling modes do not apply here.
+    """
+    settings = sigmas or {}
+    steps = int(settings.get("steps", 6))
+    scheduler = settings.get("scheduler", "simple")
+    denoise = float(settings.get("denoise", 1.0))
+    latent_image = comfy.sample.fix_empty_latent_channels(
+        model,
+        latent["samples"],
+        latent.get("downscale_ratio_spacial", None),
+        latent.get("downscale_ratio_temporal", None),
+    )
+    noise = comfy.sample.prepare_noise(
+        latent_image, seed, latent.get("batch_index", None)
+    )
+    samples = comfy.sample.sample(
+        model,
+        noise,
+        steps,
+        1.0,
+        sampler_name,
+        scheduler,
+        conditioning,
+        [],
+        latent_image,
+        denoise=denoise,
+        noise_mask=latent.get("noise_mask"),
+        seed=seed,
+    )
+    out = latent.copy()
+    out.pop("downscale_ratio_spacial", None)
+    out.pop("downscale_ratio_temporal", None)
+    out["samples"] = samples
+    return out
+
+
 def sample_h3(
     model,
     conditioning,
@@ -542,7 +584,17 @@ def sample_h3(
     upscale_model=None,
 ):
     """Sample one final-size canvas; modes never accept a second latent/condition."""
-    if not isinstance(model.get_model_object("latent_format"), MiniMaxH3AV):
+    latent_format = model.get_model_object("latent_format")
+    if not isinstance(latent_format, MiniMaxH3AV):
+        if isinstance(latent_format, MiniMaxH3Video):
+            return _sample_h3_image(
+                model=model,
+                conditioning=conditioning,
+                latent=latent,
+                seed=seed,
+                sampler_name=sampler_name,
+                sigmas=sigmas,
+            )
         raise ValueError("MiniMax H3 KSampler requires a MiniMax H3 MODEL.")
     mode = {} if mode is None else mode
     kind = mode.get("mode", "single")
