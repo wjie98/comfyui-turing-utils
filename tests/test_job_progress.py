@@ -11,6 +11,7 @@ from unittest import mock
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
+from comfyui_turing_utils.job_api.native_queue import NativeQueue
 from comfyui_turing_utils.job_api.progress import Node, Observer, Progress
 
 
@@ -159,8 +160,8 @@ class JobProgressObserverTest(unittest.IsolatedAsyncioTestCase):
         original = server.send_sync
         job = SimpleNamespace(status="queued", progress=Progress())
         jobs = {"job": job}
-        observer = Observer(server, jobs)
-        observer.install(asyncio.get_running_loop())
+        observer = Observer(jobs)
+        unsubscribe = NativeQueue(server).subscribe(observer.event, accepts=jobs.__contains__)
         try:
             data = {"prompt_id": "job", "timestamp": 100000}
             await asyncio.to_thread(
@@ -184,11 +185,11 @@ class JobProgressObserverTest(unittest.IsolatedAsyncioTestCase):
             await asyncio.sleep(0)
             self.assertEqual(job.status, "succeeded")
         finally:
-            observer.close()
+            unsubscribe()
         self.assertIs(server.send_sync, original)
 
     async def test_history_is_owner_scoped_bounded_and_excludes_failed_tasks(self):
-        observer = Observer(None, {})
+        observer = Observer({})
         for index in range(140):
             progress = Progress()
             progress.signature = ("owner", str(index))

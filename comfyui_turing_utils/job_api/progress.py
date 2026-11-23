@@ -204,53 +204,11 @@ class Progress:
 
 
 class Observer:
-    EVENTS = {
-        "execution_start",
-        "execution_cached",
-        "progress_state",
-        "execution_success",
-        "execution_error",
-        "execution_interrupted",
-    }
+    """Apply execution events and retain per-owner timing samples."""
 
-    def __init__(self, server, jobs):
-        self.server, self.jobs = server, jobs
+    def __init__(self, jobs):
+        self.jobs = jobs
         self.history = OrderedDict()
-        self.original = self.installed = None
-
-    def install(self, loop):
-        self.original = self.server.send_sync
-
-        def send(event, data, sid=None):
-            if event in self.EVENTS and sid in self.jobs:
-                graph = None
-                if event == "execution_start":
-                    running, _ = self.server.prompt_queue.get_current_queue_volatile()
-                    item = next(
-                        (item for item in running if item[1] == data["prompt_id"]), None
-                    )
-                    if (
-                        item is not None
-                        and item[1] == sid
-                        and item[3].get("turing_api_job") == sid
-                    ):
-                        graph = {
-                            identity: (
-                                node["class_type"],
-                                node.get("_meta", {}).get("title"),
-                            )
-                            for identity, node in item[2].items()
-                        }
-                loop.call_soon_threadsafe(
-                    self.event, sid, event, data, time.monotonic(), graph
-                )
-            return self.original(event, data, sid)
-
-        self.installed = self.server.send_sync = send
-
-    def close(self):
-        if self.installed is not None and self.server.send_sync is self.installed:
-            self.server.send_sync = self.original
 
     def event(self, identity, event, data, now, graph):
         job = self.jobs.get(identity)

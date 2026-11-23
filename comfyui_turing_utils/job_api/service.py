@@ -1,7 +1,6 @@
 """Process-scoped API jobs; disk ownership is independent of task status."""
 
 import asyncio
-import copy
 from dataclasses import dataclass, field
 import hashlib
 import json
@@ -18,12 +17,11 @@ if os.name == "nt":
 else:
     import fcntl
 
-from execution import SENSITIVE_EXTRA_DATA_KEYS, validate_prompt
-
 from ..log import get_logger
+from .native_queue import NativeQueue
 from .workflow import prepare, result_files
 from .progress import Observer, Progress
-from .errors import ValidationError, describe
+from .errors import describe
 
 OWNER = {"owner": "turing-job-api", "format": 1}
 TERMINAL = {"succeeded", "failed"}
@@ -65,13 +63,14 @@ class Jobs:
     def __init__(self, server, output_root, *, result_ttl=3600, sweep_interval=60):
         if not math.isfinite(result_ttl) or result_ttl <= 0 or sweep_interval <= 0:
             raise ValueError("Job retention and sweep interval must be positive")
-        self.server = server
+        self.queue = NativeQueue(server)
         self.output_root = Path(output_root).resolve()
         self.root = self.output_root / ".turing-api-jobs"
         self.result_ttl, self.sweep_interval = result_ttl, sweep_interval
         self.session_id = uuid.uuid4().hex
         self.jobs, self.requests = {}, {}
-        self.observer = Observer(server, self.jobs)
+        self.observer = Observer(self.jobs)
+        self.unsubscribe = None
         self.ready, self.error = False, None
         self.lock_file = None
         self.sweeper = None
@@ -127,7 +126,9 @@ class Jobs:
             LOG.error("Startup cleanup failed: %s", error)
             return
         self.ready = True
-        self.observer.install(asyncio.get_running_loop())
+        self.unsubscribe = self.queue.subscribe(
+            self.observer.event, accepts=self.jobs.__contains__
+        )
         self.sweeper = asyncio.create_task(self._sweep())
 
     async def close(self):
@@ -151,7 +152,9 @@ class Jobs:
         if self.lock_file:
             self.lock_file.close()
             self.lock_file = None
-        self.observer.close()
+        if self.unsubscribe is not None:
+            self.unsubscribe()
+            self.unsubscribe = None
 
     async def begin(self, owner, request):
         if not self.ready:
@@ -193,16 +196,6 @@ class Jobs:
         return job if job and job.owner == owner else None
 
     def state(self, job):
-        running, queued = self.server.prompt_queue.get_current_queue_volatile()
-        ordered = sorted(queued, key=lambda item: item[0])
-        position = next(
-            (
-                index + 1
-                for index, item in enumerate(ordered)
-                if item[1] == job.id and item[3].get("turing_api_job") == job.id
-            ),
-            None,
-        )
         status = (
             "running"
             if job.status in TERMINAL and job.progress.finished is None
@@ -220,10 +213,7 @@ class Jobs:
             "outputs": [
                 {k: v for k, v in item.items() if k != "path"} for item in job.outputs
             ],
-            "queue": {
-                "position": position,
-                "ahead": len(running) + position - 1 if position is not None else None,
-            },
+            "queue": self.queue.position(job.id),
             **job.progress.snapshot(self.observer.history),
         }
 
@@ -231,86 +221,25 @@ class Jobs:
         job.status = "preparing"
         job.progress.transition("preparing")
         prompt, signature = await disk(prepare, workflow, request, uploads, job.root)
-        data = self.server.trigger_on_prompt(
-            {"prompt": prompt, "client_id": job.id, "extra_data": {}}
-        )
-        prompt = data["prompt"]
-        self.server.node_replace_manager.apply_replacements(prompt)
         targets = list(
             dict.fromkeys(entry["node_id"] for entry in request["outputs"].values())
         )
-        valid = await validate_prompt(job.id, prompt, targets)
-        if not valid[0] or set(valid[2]) != set(targets):
-            raise ValidationError(
-                (valid[1] or {}).get(
-                    "message", "One or more declared outputs failed validation"
-                ),
-                node_errors=valid[3],
-            )
+        prepared = await self.queue.prepare(job.id, prompt, targets)
         job.progress.signature, job.progress.targets = (
             (job.owner, signature),
             set(targets),
         )
         if job.delete_requested:
             return
-        extra = {
-            **data.get("extra_data", {}),
-            "client_id": job.id,
-            "create_time": int(time.time() * 1000),
-            "turing_api_job": job.id,
-        }
-        sensitive = {
-            key: extra.pop(key) for key in SENSITIVE_EXTRA_DATA_KEYS if key in extra
-        }
-        if "number" in data:
-            number = float(data["number"])
-        else:
-            number = -self.server.number if data.get("front") else self.server.number
-            self.server.number += 1
+        self.queue.enqueue(job.id, prepared)
         job.status, job.receiver, job.native_active = "queued", None, True
         job.progress.transition("queued")
-        queue = self.server.prompt_queue
-        with queue.mutex:
-            running, queued = queue.get_current_queue_volatile()
-            if job.id in queue.history or any(
-                item[1] == job.id for item in (*running, *queued)
-            ):
-                job.native_active = False
-                raise ValueError(
-                    "request_id conflicts with an existing native prompt ID"
-                )
-            queue.put((number, job.id, prompt, extra, valid[2], sensitive))
         job.runner = asyncio.create_task(self._execute(job, request["outputs"]))
-
-    def interrupt(self, job):
-        queue = self.server.prompt_queue
-        with queue.mutex:
-            queue.delete_queue_item(
-                lambda item: item[1] == job.id
-                and item[3].get("turing_api_job") == job.id
-            )
-            running, _ = queue.get_current_queue_volatile()
-            if any(
-                item[1] == job.id and item[3].get("turing_api_job") == job.id
-                for item in running
-            ):
-                queue.interrupt_if_running(job.id)
 
     async def _execute(self, job, outputs):
         try:
             while True:
-                queue = self.server.prompt_queue
-                with queue.mutex:
-                    record = queue.history.get(job.id)
-                    if (
-                        record is not None
-                        and record["prompt"][3].get("turing_api_job") != job.id
-                    ):
-                        raise ValueError("Native task ownership mismatch")
-                    if record is not None:
-                        record = copy.deepcopy(record)
-                    running, queued = queue.get_current_queue_volatile()
-                    active = any(item[1] == job.id for item in (*running, *queued))
+                record, active = self.queue.completion(job.id)
                 if record is not None:
                     if record["status"]["status_str"] != "success":
                         event, details = next(
@@ -355,7 +284,7 @@ class Jobs:
                 job.progress.completed_targets.update(job.progress.targets)
         except asyncio.CancelledError:
             job.status, job.error = "failed", "Job worker stopped"
-            self.interrupt(job)
+            self.queue.interrupt(job.id)
             raise
         except Exception as error:
             job.native_active = False
@@ -370,7 +299,7 @@ class Jobs:
         job.progress.transition("cleanup")
         job.expires = time.time() + self.result_ttl
         try:
-            self._forget_history(job)
+            self.queue.forget(job.id)
             if job.delete_requested:
                 await self.discard(job)
             else:
@@ -447,13 +376,6 @@ class Jobs:
             )
         return result
 
-    def _forget_history(self, job):
-        queue = self.server.prompt_queue
-        with queue.mutex:
-            record = queue.history.get(job.id)
-            if record and record["prompt"][3].get("turing_api_job") == job.id:
-                queue.delete_history_item(job.id)
-
     @staticmethod
     def _clear_work(job):
         for name in ("uploads", "work"):
@@ -471,7 +393,7 @@ class Jobs:
                 job.receiver.cancel()
             return False
         if job.native_active or job.runner and not job.runner.done():
-            self.interrupt(job)
+            self.queue.interrupt(job.id)
             return False
         if job.readers:
             return False
