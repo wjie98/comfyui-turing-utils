@@ -164,14 +164,14 @@ class SharedLoaderTest(unittest.TestCase):
 
     def test_prompt_handler_preserves_workflow_and_installs_once(self):
         from types import SimpleNamespace
-        from comfyui_turing_utils.runtime.shared_loaders import (
-            install_shared_loader_compiler,
+        from comfyui_turing_utils.runtime.workflow_prompt import (
+            install_workflow_prompt_compiler,
         )
 
         handlers = []
         server = SimpleNamespace(add_on_prompt_handler=handlers.append)
-        install_shared_loader_compiler(server)
-        install_shared_loader_compiler(server)
+        install_workflow_prompt_compiler(server)
+        install_workflow_prompt_compiler(server)
         self.assertEqual(len(handlers), 1)
         data = {
             "prompt": self.prompt(next(iter(APPLICATIONS))),
@@ -185,12 +185,22 @@ class SharedLoaderTest(unittest.TestCase):
                 "reference_video_compression.compression_ratio": "1/5",
             },
         }
+        data["prompt"]["barrier"] = {
+            "class_type": "TuringUtilsStageBarrier",
+            "inputs": {"stage": 1, "value_0": ["source", 0]},
+        }
+        data["prompt"]["a"]["inputs"]["latent"] = ["barrier", 0]
         original = copy.deepcopy(data)
         result = handlers[0](data)
         self.assertEqual(data, original)
         self.assertEqual(result["extra_data"], original["extra_data"])
-        self.assertEqual(len(result["prompt"]), 4)
         self.assertEqual(
             result["prompt"]["attention"]["inputs"],
             {"model": ["source", 0], "vpack": "4/5"},
         )
+        graph = result["prompt"]
+        route, slot = graph["a"]["inputs"]["latent"]
+        self.assertEqual(slot, 0)
+        self.assertEqual(graph[route]["class_type"], "TuringUtilsStagePath")
+        self.assertEqual(graph["a"]["class_type"], "_TuringUtilsH3KSamplerApply")
+        self.assertEqual(handlers[0](result), result)

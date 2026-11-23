@@ -6,6 +6,8 @@ import time
 
 from execution import SENSITIVE_EXTRA_DATA_KEYS, validate_prompt
 
+from ..runtime.shared_loaders import PromptMigrationError
+from ..runtime.workflow_prompt import run_prompt_handlers
 from .errors import ValidationError
 
 
@@ -29,9 +31,22 @@ class NativeQueue:
         self.server = server
 
     async def prepare(self, identity, prompt, targets):
-        data = self.server.trigger_on_prompt(
-            {"prompt": prompt, "client_id": identity, "extra_data": {}}
-        )
+        try:
+            data = run_prompt_handlers(
+                self.server, {"prompt": prompt, "client_id": identity, "extra_data": {}}
+            )
+        except PromptMigrationError as error:
+            raise ValidationError(
+                str(error),
+                issues=[
+                    {
+                        "node_id": error.node_id,
+                        "class_type": error.class_type,
+                        "code": "workflow_migration_required",
+                        "message": str(error),
+                    }
+                ],
+            ) from error
         prompt = data["prompt"]
         self.server.node_replace_manager.apply_replacements(prompt)
         valid, error, outputs, node_errors = await validate_prompt(

@@ -56,9 +56,7 @@ def initialize_plugin() -> None:
         if server is None:
             return
         from .job_api.routes import install_routes
-        from .runtime.shared_loaders import install_shared_loader_compiler
-        from .runtime.stage_barrier_prompt import install_stage_barrier_prompt_compiler
+        from .runtime.workflow_prompt import install_workflow_prompt_compiler
 
-        install_stage_barrier_prompt_compiler(server)
-        install_shared_loader_compiler(server)
+        install_workflow_prompt_compiler(server)
         install_routes(server)

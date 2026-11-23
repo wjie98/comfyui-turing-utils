@@ -4,9 +4,6 @@ import hashlib
 import json
 from collections.abc import Mapping
 
-from ..adapters.minimax.reference_compression import migrate_reference_compression_inputs
-
-
 # Application -> (loader, worker, model socket, loader defaults).
 APPLICATIONS = {
     "TuringUtilsMiniMaxH3KSampler": (
@@ -30,17 +27,21 @@ APPLICATIONS = {
 }
 
 
+class PromptMigrationError(ValueError):
+    def __init__(self, node_id, class_type, message):
+        super().__init__(message)
+        self.node_id = node_id
+        self.class_type = class_type
+
+
 def compile_shared_loaders(prompt):
     """Keep application IDs/outputs, sharing loaders independently of runtime inputs."""
     result = dict(prompt)
     shared = {}
     for node_id, node in prompt.items():
+        if not isinstance(node, Mapping):
+            continue
         node_type = node.get("class_type")
-        if node_type == "TuringUtilsAttentionStrategy":
-            current_inputs = node.get("inputs", {})
-            migrated = migrate_reference_compression_inputs(current_inputs)
-            if migrated is not current_inputs:
-                result[node_id] = {**node, "inputs": migrated}
         spec = APPLICATIONS.get(node_type)
         if spec is None:
             continue
@@ -52,9 +53,11 @@ def compile_shared_loaders(prompt):
             & inputs.keys()
             or inputs.get("sigmas") == "preset"
         ):
-            raise ValueError(
+            raise PromptMigrationError(
+                node_id,
+                node_type,
                 "H3 sampler workflow needs migration: connect the final-size original LATENT, "
-                "select single/progressive/two_pass, and replace first presets with scheduler + tail_steps."
+                "select single/progressive/two_pass, and replace first presets with scheduler + tail_steps.",
             )
         model_key = "mode.model_name" if h3_sampler else "model_name"
         if model_key not in inputs:
@@ -80,16 +83,3 @@ def compile_shared_loaders(prompt):
         inputs[socket] = [shared[signature], 0]
         result[node_id] = {**node, "class_type": worker, "inputs": inputs}
     return result
-
-
-def compile_shared_loaders_on_prompt(data):
-    if not isinstance(data, Mapping) or not isinstance(data.get("prompt"), Mapping):
-        return data
-    return {**data, "prompt": compile_shared_loaders(data["prompt"])}
-
-
-def install_shared_loader_compiler(server) -> None:
-    marker = "_turing_utils_shared_loader_compiler"
-    if not getattr(server, marker, False):
-        server.add_on_prompt_handler(compile_shared_loaders_on_prompt)
-        setattr(server, marker, True)

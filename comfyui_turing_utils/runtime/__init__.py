@@ -17,10 +17,7 @@ from .stage_barrier import (
     install_stage_barrier_scheduler,
     stage_barrier_candidates,
 )
-from .stage_barrier_prompt import (
-    compile_stage_barrier_prompt,
-    install_stage_barrier_prompt_compiler,
-)
+from .stage_barrier_prompt import compile_stage_barrier_prompt
 
 __all__ = [
     "CapabilityResult",
@@ -36,7 +33,6 @@ __all__ = [
     "STAGE_BARRIER_NODE_ID",
     "STAGE_PATH_NODE_ID",
     "compile_stage_barrier_prompt",
-    "install_stage_barrier_prompt_compiler",
     "install_stage_barrier_scheduler",
     "stage_barrier_candidates",
 ]

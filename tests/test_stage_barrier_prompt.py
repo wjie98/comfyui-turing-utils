@@ -14,10 +14,8 @@ from comfyui_turing_utils.runtime.stage_barrier import (  # noqa: E402
     STAGE_BARRIER_NODE_ID,
     STAGE_PATH_NODE_ID,
 )
-from comfyui_turing_utils.runtime.stage_barrier_prompt import (  # noqa: E402
-    compile_stage_barrier_prompt,
-    compile_stage_barriers_on_prompt,
-)
+from comfyui_turing_utils.runtime.stage_barrier_prompt import compile_stage_barrier_prompt  # noqa: E402
+from comfyui_turing_utils.runtime.workflow_prompt import compile_workflow_prompt  # noqa: E402
 
 
 def _source(name):
@@ -184,7 +182,7 @@ class StageBarrierPromptCompilerTest(unittest.TestCase):
             },
         }
 
-        result = compile_stage_barriers_on_prompt(request)
+        result = compile_workflow_prompt(request)
 
         self.assertEqual(result["number"], 4)
         self.assertEqual(result["extra_data"], {"client_id": "client"})

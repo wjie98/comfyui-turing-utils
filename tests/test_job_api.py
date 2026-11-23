@@ -30,10 +30,13 @@ from comfy import model_management
 from comfy_execution.progress import get_progress_state
 from comfy_extras.nodes_audio import LoadAudio, SaveAudio
 from comfy_extras.nodes_video import LoadVideo, SaveVideo
+from server import PromptServer
 from comfyui_turing_utils.job_api import routes
 from comfyui_turing_utils.job_api.client import ApiError, Client, ServerRestarted
 from comfyui_turing_utils.job_api.service import Jobs
 from comfyui_turing_utils.job_api import project
+from comfyui_turing_utils.nodes.minimax_sampler import MiniMaxH3KSampler
+from comfyui_turing_utils.runtime.workflow_prompt import install_workflow_prompt_compiler
 
 
 class Text:
@@ -117,6 +120,7 @@ class Server:
         self.app = web.Application()
         self.routes = web.RouteTableDef()
         self.prompt_queue = execution.PromptQueue(self)
+        self.on_prompt_handlers = []
         self.node_replace_manager = SimpleNamespace(
             apply_replacements=lambda prompt: None
         )
@@ -131,8 +135,8 @@ class Server:
     def queue_updated(self):
         pass
 
-    def trigger_on_prompt(self, data):
-        return data
+    add_on_prompt_handler = PromptServer.add_on_prompt_handler
+    trigger_on_prompt = PromptServer.trigger_on_prompt
 
 
 def text_graph(class_type="ApiText", text="source"):
@@ -171,6 +175,7 @@ class JobApiTest(unittest.IsolatedAsyncioTestCase):
         patch.start()
         self.addCleanup(patch.stop)
         self.server = Server(self.root)
+        install_workflow_prompt_compiler(self.server)
         ProgressText.steps, ProgressText.release = asyncio.Queue(), asyncio.Queue()
         routes.install_routes(self.server)
         self.jobs = self.server._turing_job_api
@@ -432,6 +437,33 @@ class JobApiTest(unittest.IsolatedAsyncioTestCase):
         self.jobs.sweeper = asyncio.create_task(self.jobs._sweep())
         await asyncio.sleep(0.05)
         self.assertNotIn(state["id"], self.jobs.jobs)
+
+    async def test_migration_error_is_reported_and_leaves_no_native_job(self):
+        graph = {
+            **text_graph(),
+            "legacy": {
+                "class_type": "TuringUtilsMiniMaxH3KSampler",
+                "inputs": {"sigmas": "preset"},
+            },
+        }
+        # An unrelated native hook can rewrite the request envelope after compilation.
+        self.server.add_on_prompt_handler(lambda data: dict(data))
+        with mock.patch.dict(
+            nodes.NODE_CLASS_MAPPINGS,
+            {"TuringUtilsMiniMaxH3KSampler": MiniMaxH3KSampler},
+        ):
+            status, result = await self.submit(graph=graph)
+        self.assertEqual(status, 400, result)
+        issue = result["error_details"]["issues"][0]
+        self.assertEqual(issue["node_id"], "legacy")
+        self.assertEqual(issue["code"], "workflow_migration_required")
+        self.assertIn("final-size original LATENT", issue["message"])
+        self.assertFalse(self.jobs.jobs)
+        self.assertEqual(self.server.prompt_queue.get_current_queue_volatile(), ([], []))
+        self.assertEqual(list((self.jobs.root / self.jobs.session_id).iterdir()), [])
+        status, submitted = await self.submit()
+        self.assertEqual(status, 202, submitted)
+        self.assertEqual((await self.finished(submitted["id"]))["status"], "succeeded")
 
     async def test_request_id_deduplicates_and_rejects_deleted_or_different_requests(
         self,

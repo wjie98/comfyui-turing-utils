@@ -13,12 +13,9 @@ import re
 from collections.abc import Mapping
 from typing import Any
 
-from ..log import get_logger
 from .stage_barrier import STAGE_BARRIER_NODE_ID, STAGE_PATH_NODE_ID
 
 
-LOG = get_logger("stage")
-_PROMPT_HANDLER_MARKER = "_turing_utils_stage_barrier_prompt_compiler"
 _VALUE_INPUT = re.compile(r"^value_([0-7])$")
 
 
@@ -192,44 +189,3 @@ def compile_stage_barrier_prompt(
             }
 
     return compiled, len(route_ids)
-
-
-def compile_stage_barriers_on_prompt(json_data: Any) -> Any:
-    """ComfyUI ``on_prompt`` handler for route compilation."""
-
-    if not isinstance(json_data, Mapping):
-        return json_data
-    prompt = json_data.get("prompt")
-    if not isinstance(prompt, Mapping):
-        return json_data
-
-    compiled, route_count = compile_stage_barrier_prompt(prompt)
-    if route_count == 0:
-        return json_data
-
-    result = dict(json_data)
-    result["prompt"] = compiled
-    LOG.debug(
-        "Compiled Stage Barrier hubs into %d independent lazy-compatible paths",
-        route_count,
-    )
-    return result
-
-
-def install_stage_barrier_prompt_compiler(prompt_server) -> bool:
-    """Install the server-side prompt compiler exactly once."""
-
-    if getattr(prompt_server, _PROMPT_HANDLER_MARKER, False):
-        return True
-
-    prompt_server.add_on_prompt_handler(compile_stage_barriers_on_prompt)
-    setattr(prompt_server, _PROMPT_HANDLER_MARKER, True)
-    LOG.debug("Enabled lazy-compatible Stage Barrier route compilation")
-    return True
-
-
-__all__ = [
-    "compile_stage_barrier_prompt",
-    "compile_stage_barriers_on_prompt",
-    "install_stage_barrier_prompt_compiler",
-]
