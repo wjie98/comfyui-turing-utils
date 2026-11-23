@@ -21,6 +21,7 @@ SAMPLED = {
         "tests/test_job_api.py::JobApiTest::" + name
         for name in (
             "test_native_execution_download_delete_and_owner_isolation",
+            "test_jobs_release_new_node_outputs_and_reuse_model_cache",
             "test_download_is_pinned_while_delete_is_pending",
             "test_restart_removes_previous_session_and_keeps_unrelated_files",
             "test_native_progress_is_live_without_polling_and_isolated_from_queued_job",

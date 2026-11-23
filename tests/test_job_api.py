@@ -18,6 +18,7 @@ from aiohttp import FormData, web
 from aiohttp.test_utils import TestClient, TestServer
 import av
 import numpy as np
+import torch
 from PIL import Image
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -32,6 +33,7 @@ from comfy_extras.nodes_audio import LoadAudio, SaveAudio
 from comfy_extras.nodes_video import LoadVideo, SaveVideo
 from server import PromptServer
 from comfyui_turing_utils.job_api import routes
+from comfyui_turing_utils.job_api.cache_cleanup import install_job_cache_cleanup
 from comfyui_turing_utils.job_api.client import ApiError, Client, ServerRestarted
 from comfyui_turing_utils.job_api.service import Jobs
 from comfyui_turing_utils.job_api import project
@@ -176,6 +178,14 @@ class JobApiTest(unittest.IsolatedAsyncioTestCase):
         self.addCleanup(patch.stop)
         self.server = Server(self.root)
         install_workflow_prompt_compiler(self.server)
+        self.enterContext(
+            mock.patch.object(
+                execution.PromptExecutor,
+                "execute_async",
+                execution.PromptExecutor.execute_async,
+            )
+        )
+        install_job_cache_cleanup()
         ProgressText.steps, ProgressText.release = asyncio.Queue(), asyncio.Queue()
         routes.install_routes(self.server)
         self.jobs = self.server._turing_job_api
@@ -245,6 +255,7 @@ class JobApiTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(status, 202, submitted)
         state = await self.finished(submitted["id"])
         self.assertEqual(state["status"], "succeeded", state)
+        self.assertIsNone(self.executor.caches.outputs.get_local("compute"))
         job = self.jobs.jobs[state["id"]]
         self.assertFalse((job.root / "project").exists())
         self.assertEqual(list(job.root.iterdir()), [job.root / "outputs"])
@@ -374,6 +385,85 @@ class JobApiTest(unittest.IsolatedAsyncioTestCase):
         for output in state["outputs"]:
             response = await self.client.get(output["url"])
             self.assertEqual(len(await response.read()), output["bytes"])
+        for node_id in ("lv", "li", "la"):
+            self.assertIsNone(self.executor.caches.outputs.get_local(node_id))
+
+    async def test_jobs_release_new_node_outputs_and_reuse_model_cache(self):
+        class Model(Text):
+            RETURN_TYPES = ("MODEL",)
+            load = mock.Mock(return_value=object())
+
+            def execute(self, text):
+                return (self.load(text),)
+
+        class Frames:
+            FUNCTION = "execute"
+            RETURN_TYPES = ("IMAGE",)
+
+            @classmethod
+            def INPUT_TYPES(cls):
+                return {
+                    "required": {"value": ("FLOAT",)},
+                    "optional": {"model": ("MODEL",)},
+                }
+
+            def execute(self, value, model=None):
+                return (torch.full((3, 4, 4, 3), value),)
+
+        def graph(value):
+            return {
+                "model": {"class_type": "ApiModel", "inputs": {"text": "same weights"}},
+                "frames": {
+                    "class_type": "ApiFrames",
+                    "inputs": {"value": value, "model": ["model", 0]},
+                },
+                "out": {
+                    "class_type": "SaveImage",
+                    "inputs": {"images": ["frames", 0], "filename_prefix": "test"},
+                },
+            }
+
+        self.executor = execution.PromptExecutor(
+            self.server,
+            cache_type=execution.CacheType.RAM_PRESSURE,
+            cache_args={"ram": 0, "ram_inactive": 0},
+        )
+        self.enterContext(
+            mock.patch.dict(
+                nodes.NODE_CLASS_MAPPINGS, {"ApiModel": Model, "ApiFrames": Frames}
+            )
+        )
+        cache = self.executor.caches.outputs
+        # Run a plain prompt with the same public job marker. Only the Job API
+        # queue should mark its prompt for local output eviction.
+        ordinary = graph(0.25)
+        del ordinary["model"]
+        del ordinary["frames"]["inputs"]["model"]
+        await self.executor.execute_async(
+            ordinary, "ordinary", {"turing_api_job": "ordinary"}, ["out"]
+        )
+        self.assertTrue(self.executor.success)
+        shared_key = cache.cache_key_set.get_data_key("frames")
+        shared_frames = cache.get_local("frames")
+        self.assertIsNotNone(shared_frames)
+        status, submitted = await self.submit(graph=ordinary)
+        self.assertEqual(status, 202, submitted)
+        self.assertEqual((await self.finished(submitted["id"]))["status"], "succeeded")
+        self.assertIs(cache.get_local("frames"), shared_frames)
+
+        for value in (0.5, 0.75):
+            status, submitted = await self.submit(graph=graph(value))
+            self.assertEqual(status, 202, submitted)
+            state = await self.finished(submitted["id"])
+            self.assertEqual(state["status"], "succeeded", state)
+            self.assertEqual(len(state["outputs"]), 3)
+            self.assertIsNone(cache.get_local("frames"))
+            evicted_key = cache.cache_key_set.get_data_key("frames")
+            self.assertNotIn(evicted_key, cache.timestamps)
+            self.assertNotIn(evicted_key, cache.used_generation)
+            self.assertIs(cache.cache[shared_key], shared_frames)
+            self.assertIsNotNone(cache.get_local("model"))
+        Model.load.assert_called_once_with("same weights")
 
     async def test_invalid_bindings_formats_and_native_validation_leave_no_files(self):
         cases = [

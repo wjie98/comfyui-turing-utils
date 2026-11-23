@@ -8,6 +8,7 @@ from execution import SENSITIVE_EXTRA_DATA_KEYS, validate_prompt
 
 from ..runtime.shared_loaders import PromptMigrationError
 from ..runtime.workflow_prompt import run_prompt_handlers
+from .cache_cleanup import JobPrompt
 from .errors import ValidationError
 
 
@@ -88,7 +89,8 @@ class NativeQueue:
                     -self.server.number if data.get("front") else self.server.number
                 )
                 self.server.number += 1
-            queue.put((number, identity, data["prompt"], extra, outputs, sensitive))
+            prompt = JobPrompt(data["prompt"])
+            queue.put((number, identity, prompt, extra, outputs, sensitive))
 
     def position(self, identity):
         running, queued = self.server.prompt_queue.get_current_queue_volatile()

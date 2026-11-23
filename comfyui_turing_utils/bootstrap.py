@@ -51,8 +51,10 @@ def initialize_plugin() -> None:
         server = getattr(PromptServer, "instance", None)
         if server is None:
             return
+        from .job_api.cache_cleanup import install_job_cache_cleanup
         from .job_api.routes import install_routes
         from .runtime.workflow_prompt import install_workflow_prompt_compiler
 
         install_workflow_prompt_compiler(server)
+        install_job_cache_cleanup()
         install_routes(server)
