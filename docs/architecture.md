@@ -88,12 +88,14 @@ effects.
 | `quantization/workspace.py` | pure, model-independent workspace formulas |
 | `quantization/dispatch.py` | W8A8/W6A8/W4A8/W4A4 activation quantization and GEMM execution |
 | `quantization/backend.py` | scoped Kitchen registration and operator constraints |
+| `quantization/kitchen_api.py` | Kitchen CUDA capability probes, private calls and argument translation |
 | `quantization/preflight.py` | bounded, device-specific numerical capability checks |
 | `quantization/fusions.py` | model-independent fused activation and normalization operations |
 | `loading/convrot.py` | filesystem discovery, Comfy model construction, runtime preparation, and adapter installation |
 | `runtime/capabilities.py` | immutable device facts plus independently versioned kernel feature probes |
 | `runtime/stage_barrier.py` | prompt-local dependency rounds, phase-label rendezvous and incremental lazy/dynamic barrier planning |
 | `runtime/stage_barrier_prompt.py` | pre-validation expansion of visual multi-port barriers into independent unary cache/execution paths |
+| `runtime/workflow_prompt.py` | native prompt hook for Stage Barrier, parameter migrations and shared loaders |
 | `runtime/sampling.py` | execution-local task step progress and native solver-loop bridge; no MODEL/global mutation or duplicated solver math |
 | `adapters/minimax/sampling.py` | H3 task preflight, complete first sampling, clean upscale/inpaint handoff and second restart; one attention/preview timeline |
 | `adapters/minimax/sampling_sigmas.py`, `sampling_masks.py` | curve policy and conservative spatial edit coverage, separate from task execution |
@@ -103,6 +105,7 @@ effects.
 | `adapters/minimax/memory_planning.py` | ComfyUI packed-shape and staged-workspace memory hooks |
 | `adapters/minimax/activation_policy.py` | tier/chunk/head/channel decisions using the memory-state service |
 | `adapters/minimax/acceleration.py` | adapter installation and block-level orchestration |
+| `adapters/minimax/model_contract.py` | current ComfyUI MiniMax DiT types and block signature checks |
 | `adapters/minimax/execution.py` | shared casting, scaled-linear quantization, runtime-plan ownership and audit |
 | `adapters/minimax/attention_ops.py`, `mlp.py` | H3 attention and MLP execution respectively |
 | `adapters/minimax/references.py` | reference records, shape validation and presentation helpers |
@@ -183,7 +186,10 @@ from the node module that happens to consume them.
 ## Maintaining the structure
 
 `job_api/workflow.py` binds native API prompts to job-owned uploads and saver paths.
-The service submits directly to the native queue and observes its history and progress events.
+`job_api/native_queue.py` owns ComfyUI validation, queue entries, history and
+progress event delivery. `job_api/service.py` owns job state, files, retention
+and cleanup. The normal prompt endpoint and Job API run the same plugin prompt
+compiler in ComfyUI's hook chain.
 `skills/turing-workflow/scripts/turing_client/` owns the portable HTTP client,
 local typed capability rendering, schema checks and resumable run snapshots, without
 importing ComfyUI. The server's `job_api` package resolves its existing lightweight

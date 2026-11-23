@@ -235,6 +235,9 @@ HTTP 错误保留原 `error` 字符串，增加 `error_details` 对象：code、
 二次序列化为字符串。CLI 成功 JSON 写 stdout，进度与错误 JSON 写 stderr；成功退出 0，
 请求／执行错误退出 1，参数语法错误退出 2。API 协议仍为 v2。
 
+旧工作流需要手动迁移时，API 返回 HTTP 400。`error_details.issues` 提供节点 ID、
+节点类型和迁移说明，API 会清理本次上传并结束请求。
+
 下载先写 .partial，核对 bytes/SHA256 后改名，全部成功后 DELETE。
 下载失败保留服务器结果并清理本地未完成文件。重试会核对并跳过已有完整文件，
 不覆盖不同内容的本地同名文件。download_all(delete=False) 可保留远端结果。

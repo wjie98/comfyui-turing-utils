@@ -25,6 +25,7 @@ SAMPLED = {
             "test_restart_removes_previous_session_and_keeps_unrelated_files",
             "test_native_progress_is_live_without_polling_and_isolated_from_queued_job",
             "test_invalid_bindings_formats_and_native_validation_leave_no_files",
+            "test_migration_error_is_reported_and_leaves_no_native_job",
         )
     ),
     "tests/test_nvfp4_routes.py": ("tests/gpu/test_nvfp4_bounds.py",),
@@ -106,7 +107,11 @@ def changed_paths(root=ROOT):
 def areas_for(path):
     if path in SHARED:
         return set(AREAS)
-    if path == "comfyui_turing_utils/runtime/shared_loaders.py":
+    if path in {
+        "comfyui_turing_utils/runtime/shared_loaders.py",
+        "comfyui_turing_utils/runtime/stage_barrier_prompt.py",
+        "comfyui_turing_utils/runtime/workflow_prompt.py",
+    }:
         return {"api", "sampling"}
     if (
         path.startswith((
