@@ -29,14 +29,23 @@ def require_convrot_cuda_api() -> None:
         )
 
 
-def has_w6_gemv() -> bool:
+def has_cuda_operator(name: str) -> bool:
     try:
         from comfy_kitchen.backends import cuda
     except ImportError:
         return False
 
-    return bool(getattr(cuda, "_W4A8_CHUNKED", False)) and callable(
-        getattr(getattr(cuda, "_C", None), "w4a8_codebook_gemv", None)
+    return callable(getattr(getattr(cuda, "_C", None), name, None))
+
+
+def has_grouped_int8_gemv() -> bool:
+    try:
+        from comfy_kitchen.backends import cuda
+    except ImportError:
+        return False
+
+    return bool(getattr(cuda, "_W4A8_CHUNKED", False)) and has_cuda_operator(
+        "w4a8_codebook_gemv"
     )
 
 

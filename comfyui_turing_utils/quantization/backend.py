@@ -5,6 +5,7 @@ from __future__ import annotations
 from types import SimpleNamespace
 import torch
 from ..hardware import is_supported_tensor_core_device
+from . import kitchen_api
 from .formats import grouped_weight_geometry
 from .capabilities import (
     BACKEND_NAME,
@@ -18,7 +19,6 @@ from .dispatch import (
     convrot_w4a4_linear,
     int8_linear,
 )
-from .kitchen_api import has_w6_gemv
 
 
 def register_backend() -> bool:
@@ -54,7 +54,27 @@ def register_backend() -> bool:
     has_w4a8_kernel = _kernel_available()
     has_w4a4_quantizer = _kernel_available("turing_bf16_int4_convrot_quantize")
     has_codebook_w4a8_kernel = _kernel_available("turing_codebook_w4a8_linear")
-    has_kitchen_w6_gemv = has_w6_gemv()
+    has_kitchen_int8_gemv = kitchen_api.has_cuda_operator("int8_gemv_dequant")
+    has_kitchen_packed_int4_gemv = kitchen_api.has_cuda_operator(
+        "int4_weight_int8_act_gemv_dequant"
+    )
+    has_kitchen_grouped_gemv = kitchen_api.has_grouped_int8_gemv()
+
+    def prefer_kitchen_gemv(x, kwargs, *, max_rows, max_width):
+        width = x.shape[-1]
+        if not (
+            0 < width <= max_width
+            and width % 256 == 0
+            and 1 <= x.numel() // width <= max_rows
+            and kwargs.get("input_act") in (None, "none")
+        ):
+            return False
+        bias = kwargs.get("bias")
+        return (
+            (bias is None or bias.dtype == x.dtype)
+            and torch.cuda.get_device_capability(x.device) >= (8, 0)
+            and registry.is_available("cuda")
+        )
 
     def require_convrot_256(kwargs):
         if kwargs.get("convrot") is not True:
@@ -77,6 +97,14 @@ def register_backend() -> bool:
             return ValidationResult.fail(
                 "weight", "Turing W8A8 requires matching K%16=0 and N%8=0"
             )
+        if (
+            has_kitchen_int8_gemv
+            and x.dtype == torch.bfloat16
+            and kwargs.get("residual") is None
+            and weight.device == x.device
+            and prefer_kitchen_gemv(x, kwargs, max_rows=2, max_width=16384)
+        ):
+            return ValidationResult.fail("x", "small-row W8A8 uses Kitchen GEMV")
         rowbuffer = _convrot_int8_bf16_rowbuffer_fits(hidden, x.device)
         if x.dtype == torch.float16:
             if (
@@ -128,13 +156,30 @@ def register_backend() -> bool:
             return ValidationResult.fail(
                 "quant_group_size", "W4 requires quantization group size 64"
             )
-        if kwargs.get("linear_dtype") not in {"int4", "int8"}:
+        linear_dtype = kwargs.get("linear_dtype")
+        if linear_dtype not in {"int4", "int8"}:
             return ValidationResult.fail(
                 "linear_dtype", "W4 requires int4 or int8 activation"
             )
-        if kwargs.get("linear_dtype") == "int8" and not has_w4a8_kernel:
+        if linear_dtype == "int8" and not has_w4a8_kernel:
             return ValidationResult.fail("linear_dtype", "W4A8 kernel is unavailable")
         x = kwargs.get("x")
+        qweight = kwargs.get("qweight")
+        wscales = kwargs.get("wscales")
+        # The packed GEMV and bundled kernels round bias differently.
+        if (
+            has_kitchen_packed_int4_gemv
+            and linear_dtype == "int8"
+            and kwargs.get("bias") is None
+            and isinstance(x, torch.Tensor)
+            and isinstance(qweight, torch.Tensor)
+            and isinstance(wscales, torch.Tensor)
+            and qweight.device == x.device
+            and qweight.shape[-1] * 2 == x.shape[-1]
+            and wscales.numel() == qweight.shape[0]
+            and prefer_kitchen_gemv(x, kwargs, max_rows=2, max_width=16384)
+        ):
+            return ValidationResult.fail("x", "small-row packed W4A8 uses Kitchen GEMV")
         if not isinstance(x, torch.Tensor) or not (
             has_w4a4_quantizer
             and _convrot_int8_bf16_rowbuffer_fits(x.shape[-1], x.device)
@@ -166,11 +211,15 @@ def register_backend() -> bool:
         qdata = kwargs.get("qdata")
         codebook = kwargs.get("codebook")
         s_rel = kwargs.get("s_rel")
-        if not all(isinstance(value, torch.Tensor) for value in (x, qdata, s_rel)):
+        s_channel = kwargs.get("s_channel")
+        if not all(
+            isinstance(value, torch.Tensor) for value in (x, qdata, s_rel, s_channel)
+        ):
             return ValidationResult.fail("x", "codebook W4A8 requires tensor inputs")
+        group_size = kwargs.get("group_size", 16)
         try:
             _, logical_k, bits = grouped_weight_geometry(
-                qdata.shape, s_rel.shape, kwargs.get("group_size", 16)
+                qdata.shape, s_rel.shape, group_size
             )
         except ValueError as exc:
             return ValidationResult.fail("qdata", str(exc))
@@ -185,15 +234,19 @@ def register_backend() -> bool:
             return ValidationResult.fail(
                 "qdata", "codebook W4A8 requires matching packed K and N%8=0"
             )
+        # The Kitchen GEMV quantizer uses its small-row kernel up to K=24576.
         if (
-            has_kitchen_w6_gemv
-            and bits == 6
-            and x.numel() == x.shape[-1]
+            has_kitchen_grouped_gemv
+            and group_size % 16 == 0
             and s_rel.dtype == torch.float8_e4m3fn
-            and torch.cuda.get_device_capability(x.device) >= (8, 0)
-            and registry.is_available("cuda")
+            and prefer_kitchen_gemv(x, kwargs, max_rows=8, max_width=24576)
+            and (codebook is None or codebook.shape == (16,))
+            and all(
+                value is None or (value.device == x.device and value.is_contiguous())
+                for value in (qdata, s_rel, s_channel, codebook)
+            )
         ):
-            return ValidationResult.fail("x", "single-row W6 uses Kitchen GEMV")
+            return ValidationResult.fail("x", "small-row grouped INT8 uses Kitchen GEMV")
         return ValidationResult.ok()
 
     operations = {}

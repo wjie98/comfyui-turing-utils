@@ -116,11 +116,11 @@ another GPU's launch policy.
 
 | Format | Weight storage | Activation | Contraction owner | Local Turing additions |
 |---|---|---|---|---|
-| W8A8 | INT8 | INT8 | local sm75+ kernel for its exact contract; otherwise Kitchen/cuBLAS | sm75+ ConvRot quantization, fused SwiGLU/GELU, BF16 epilogue, workspace policy |
+| W8A8 | INT8 | INT8 | local sm75+ kernel or Kitchen | sm75+ ConvRot quantization, fused SwiGLU/GELU, BF16 epilogue, workspace policy |
 | W4A4 | packed INT4 | INT4 | Kitchen | sm75+ BF16 input/output compatibility and fused activation quantization |
-| Legacy W4A8 | signed packed INT4 | INT8 | local sm75+ kernel | packed-weight shared-tile expansion, INT8 Tensor Core MMA, BF16 output |
-| Grouped-codebook W4A8 | 4-bit codebook indices + E4M3 g16 scales + FP32 channel scales | INT8 | local sm75+ kernel | register decode directly into the shared W8A8 tile for long sequences, bounded staged fallback, BF16 output; covers the symmetric `asym_w4a8_int8` MiniMax-H3 files |
-| Uniform W6A8 | 6-bit two-plane packing + E4M3 group scales + FP32 channel scales | INT8 | same local sm75+ kernel family | uniform signed levels, no codebook; spill-free g16 inline tile for long SM75 sequences, bounded staged decode on newer GPUs/other shapes |
+| Legacy W4A8 | signed packed INT4 | INT8 | local sm75+ kernel or Kitchen GEMV | packed-weight shared-tile expansion, INT8 Tensor Core MMA, BF16 output |
+| Grouped-codebook W4A8 | 4-bit codebook indices + E4M3 g16 scales + FP32 channel scales | INT8 | local sm75+ kernel or Kitchen GEMV | register decode into the shared W8A8 tile, bounded staged fallback, BF16 output for symmetric `asym_w4a8_int8` MiniMax H3 weights |
+| Uniform W6A8 | 6-bit two-plane packing + E4M3 group scales + FP32 channel scales | INT8 | local sm75+ kernel or Kitchen GEMV | uniform signed levels, spill-free g16 inline tile for long SM75 sequences, bounded staged decode on newer GPUs and other shapes |
 
 ConvRot group size 256 is the optimized H3 path. Unsupported layouts, group
 sizes, devices, or dtypes are rejected or delegated to Kitchen according to the
@@ -137,8 +137,18 @@ checkpoints labeled `asym_w4a8_int8`. LoRA merging uses
 the native Kitchen requantization contract, which preserves the original packed
 bit width, group size, scale dtype and codebook choice. Requantization is still
 lossy; preservation of the storage format does not imply lossless LoRA merging.
-On Ampere or newer, a single activation row with E4M3 group scales uses Kitchen
-GEMV when the native kernel is available. Bulk calls can use the bundled kernel.
+On Ampere or newer, compatible plain BF16 ConvRot linear calls use Kitchen GEMV
+for 1–2 activation rows at K up to 16,384 in W8A8 and legacy packed W4A8, and
+1–8 rows at K up to 24,576 in grouped W4A8/W6A8. The grouped path requires
+contiguous packed weights and scales, E4M3 group scales, and a quantization
+group size divisible by 16.
+All three paths require an available Kitchen CUDA kernel, ConvRot-256 alignment,
+and BF16 bias when present. Legacy packed W4A8 requires no bias for GEMV.
+Fused activations and bulk calls use the bundled kernel when its normal
+contract is met.
+The NVFP4 emulation path uses Kitchen INT8 GEMV for single-row BF16 calls
+without bias when padded K is at most 16,384 on Ampere or newer outside CUDA
+Graph capture. It keeps the same packed NVFP4 storage and ConvRot/S8 staging.
 Do not upgrade Torch/CUDA as part of this dependency change.
 
 ## MiniMax H3 activation scheduling

@@ -255,7 +255,8 @@ def test_w6_scoped_dispatch_and_swiglu_use_local_kernel(group_size, scale_dtype)
     weight = grouped_weight(
         6, device="cuda", group_size=group_size, scale_dtype=scale_dtype
     )
-    x = torch.randn(3, 256, device="cuda", dtype=torch.bfloat16)
+    rows = 9 if scale_dtype is torch.float8_e4m3fn else 3
+    x = torch.randn(rows, 256, device="cuda", dtype=torch.bfloat16)
     activation, row_scale = dispatch._quantize_turing_int8_activation(x, 256)
     decoded_s8 = (torch.arange(8 * 256, device="cuda") % 64 - 32).reshape(8, 256)
     reference = (
@@ -265,7 +266,7 @@ def test_w6_scoped_dispatch_and_swiglu_use_local_kernel(group_size, scale_dtype)
     with patch.object(dispatch, "_kernel_op", wraps=dispatch._kernel_op) as resolve:
         with use_turing_operator_backend():
             output = torch.nn.functional.linear(x, weight)
-        assert output.shape == (3, 8)
+        assert output.shape == (rows, 8)
         torch.testing.assert_close(
             output, reference.to(torch.bfloat16), rtol=0.008, atol=0.001
         )
@@ -273,7 +274,7 @@ def test_w6_scoped_dispatch_and_swiglu_use_local_kernel(group_size, scale_dtype)
             call.args == ("turing_codebook_w4a8_linear",)
             for call in resolve.call_args_list
         )
-    swiglu = torch.cat((x, x), dim=-1)
+    swiglu = torch.cat((x[:3], x[:3]), dim=-1)
     with patch.object(dispatch, "_kernel_op", wraps=dispatch._kernel_op) as resolve:
         output = convrot_linear_input_act_from_weight(weight, None, swiglu, "swiglu")
         assert output.shape == (3, 8)
@@ -290,7 +291,9 @@ def test_w6_scoped_dispatch_and_swiglu_use_local_kernel(group_size, scale_dtype)
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required")
-def test_single_row_w6_uses_kitchen_gemv_on_ampere():
+@pytest.mark.parametrize("leading_shape", [(1,), (2,), (2, 4)])
+@pytest.mark.parametrize("bits", [4, 6])
+def test_small_row_grouped_linear_uses_kitchen_gemv_on_ampere(bits, leading_shape):
     from comfy_kitchen.backends import cuda
     from unittest.mock import patch
     from comfyui_turing_utils.quantization import dispatch
@@ -302,16 +305,98 @@ def test_single_row_w6_uses_kitchen_gemv_on_ampere():
         or not getattr(cuda, "_W4A8_CHUNKED", False)
         or not hasattr(getattr(cuda, "_C", None), "w4a8_codebook_gemv")
     ):
-        pytest.skip("requires Ampere or later and Kitchen W6 GEMV")
+        pytest.skip("requires Ampere or later and Kitchen grouped GEMV")
     assert register_backend()
-    weight = grouped_weight(6, device="cuda")
-    x = torch.randn(1, 256, device="cuda", dtype=torch.bfloat16)
-    expected = torch.nn.functional.linear(x, weight)
+    weight = grouped_weight(bits, device="cuda")
+    x = torch.randn(
+        *leading_shape,
+        256,
+        device="cuda",
+        dtype=torch.bfloat16,
+        generator=torch.Generator(device="cuda").manual_seed(91),
+    )
+    bias = torch.rand(8, dtype=torch.bfloat16, device="cuda")
+    expected = dispatch.codebook_w4a8_linear(
+        x,
+        weight._qdata,
+        weight._params.scale,
+        weight._params.s_channel,
+        codebook=weight._params.codebook,
+        bias=bias,
+    )
+    native_gemv = cuda._C.w4a8_codebook_gemv
+    launches = []
+
+    def gemv(*args):
+        used = native_gemv(*args)
+        launches.append(used)
+        return used
+
     with (
+        patch.object(cuda._C, "w4a8_codebook_gemv", side_effect=gemv),
         patch.object(dispatch, "_kernel_op", side_effect=AssertionError("use Kitchen GEMV")),
         use_turing_operator_backend(),
     ):
-        actual = torch.nn.functional.linear(x, weight)
+        actual = torch.nn.functional.linear(x, weight, bias)
+    assert launches == [True]
+    assert actual.shape == (*leading_shape, 8)
+    torch.testing.assert_close(actual, expected, rtol=0, atol=0)
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required")
+@pytest.mark.parametrize(
+    "weight_bits,rows,with_bias,uses_gemv",
+    [
+        (4, 2, False, True),
+        (4, 3, False, False),
+        (4, 2, True, False),
+        (8, 2, True, True),
+        (8, 3, True, False),
+    ],
+)
+def test_plain_convrot_gemv_dispatch(weight_bits, rows, with_bias, uses_gemv):
+    from unittest.mock import patch
+
+    from comfy_kitchen import int8_linear
+    from comfy_kitchen.backends import cuda
+    from comfy_kitchen.tensor.convrot_w4a4 import convrot_w4a4_linear
+
+    from comfyui_turing_utils.quantization import dispatch
+    from comfyui_turing_utils.quantization.backend import register_backend
+    from comfyui_turing_utils.quantization.operator_scope import use_turing_operator_backend
+
+    if torch.cuda.get_device_capability() < (8, 0):
+        pytest.skip("requires Ampere or later")
+    generator = torch.Generator(device="cuda").manual_seed(91)
+    x = torch.randn(rows, 256, generator=generator, device="cuda", dtype=torch.bfloat16)
+    weight = torch.randint(
+        -127, 128, (64, 256 * weight_bits // 8), generator=generator,
+        device="cuda", dtype=torch.int8,
+    )
+    scales = torch.rand(64, generator=generator, device="cuda").mul_(0.01)
+    bias = torch.rand(
+        64, generator=generator, device="cuda", dtype=torch.bfloat16
+    ) if with_bias else None
+    if weight_bits == 8:
+        local, scoped = dispatch.int8_linear, int8_linear
+        symbol = "int8_gemv_dequant"
+        kwargs = {"convrot": True, "out_dtype": torch.bfloat16}
+    else:
+        local, scoped = dispatch.convrot_w4a4_linear, convrot_w4a4_linear
+        symbol = "int4_weight_int8_act_gemv_dequant"
+        kwargs = {"linear_dtype": "int8"}
+    native_gemv = getattr(cuda._C, symbol, None)
+    if native_gemv is None:
+        pytest.skip("requires the Kitchen CUDA GEMV kernel")
+
+    assert register_backend()
+    expected = local(x, weight, scales, bias=bias, **kwargs)
+    with (
+        patch.object(cuda._C, symbol, wraps=native_gemv) as gemv,
+        use_turing_operator_backend(),
+    ):
+        actual = scoped(x, weight, scales, bias=bias, **kwargs)
+    assert gemv.call_count == int(uses_gemv)
     torch.testing.assert_close(actual, expected, rtol=0, atol=0)
 
 

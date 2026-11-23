@@ -7,6 +7,7 @@ No decoded weight or graph cache survives a call.
 import torch
 import torch.nn.functional as F
 from comfy_kitchen.backends import cuda as ck
+from comfy_kitchen.registry import registry
 from .ops import (
     turing_nvfp4_convrot_quantize, turing_int8_linear_out,
     turing_bf16_int8_convrot_quantize,
@@ -123,11 +124,29 @@ def linear(x, weight, blocks, scale, bias=None, *, output_columns=None,
             and not torch.cuda.is_current_stream_capturing()):
         _linear_pipeline(qx, sx, weight, blocks, scale, output, bias, rows, k, padded_n)
         return output[:, :n]
+    # Kitchen's prequantized GEMV wrapper allocates exactly one output row.
+    use_kitchen_gemv = (
+        x.shape[0] == 1
+        and x.dtype == torch.bfloat16
+        and bias is None
+        and qx.shape[1] <= 16384
+        and torch.cuda.get_device_capability(x.device) >= (8, 0)
+        and registry.is_available("cuda")
+        and callable(getattr(getattr(ck, "_C", None), "int8_gemv_dequant", None))
+        and callable(getattr(ck, "int8_gemv_dequant", None))
+        and not torch.cuda.is_current_stream_capturing()
+    )
     for start in range(0, padded_n, rows):
         end = min(start + rows, padded_n)
         qw, sw = turing_nvfp4_convrot_quantize(weight, blocks, scale, start, end-start, k)
-        turing_int8_linear_out(qx, qw, sx, sw, output[:, start:end],
-                              None if bias is None else bias[start:end])
+        tile = output[:, start:end]
+        if use_kitchen_gemv:
+            with torch.cuda.device(x.device):
+                tile.copy_(ck.int8_gemv_dequant(qx, qw, sx.reshape(-1, 1), sw, None, x.dtype))
+        else:
+            turing_int8_linear_out(
+                qx, qw, sx, sw, tile, None if bias is None else bias[start:end]
+            )
         del qw, sw
     return output[:, :n]
 

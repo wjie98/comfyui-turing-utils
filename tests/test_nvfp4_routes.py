@@ -18,6 +18,25 @@ from comfyui_turing_utils_kernel.nvfp4 import (
 @unittest.skipUnless(torch.cuda.is_available(), "CUDA required")
 class NVFP4RoutesTest(unittest.TestCase):
 
+    def test_single_bf16_row_uses_kitchen_gemv_with_padded_dimensions(self):
+        if torch.cuda.get_device_capability() < (8, 0) or not hasattr(
+            getattr(ck, "_C", None), "int8_gemv_dequant"
+        ):
+            self.skipTest("requires Ampere or later and Kitchen INT8 GEMV")
+        k, n = 513, 265
+        generator = torch.Generator(device="cuda").manual_seed(957)
+        w = torch.randn(n, k, generator=generator, device="cuda", dtype=torch.bfloat16)
+        s = w.float().abs().max() / (448 * 6)
+        packed, blocks = ck.quantize_nvfp4(w, s, pad_16x=True)
+        x = torch.randn(1, k, generator=generator, device="cuda", dtype=w.dtype)
+        with mock.patch.object(ck, "int8_gemv_dequant", None):
+            expected = linear(x, packed, blocks, s, output_columns=n)
+        with mock.patch.object(ck, "int8_gemv_dequant", wraps=ck.int8_gemv_dequant) as gemv:
+            actual = linear(x, packed, blocks, s, output_columns=n)
+        gemv.assert_called_once()
+        self.assertEqual(actual.shape, (1, n))
+        torch.testing.assert_close(actual, expected, rtol=0, atol=0)
+
     def test_automatic_pipeline_and_capture_serial_fallback(self):
         if torch.cuda.get_device_capability() != (8, 6):
             self.skipTest("automatic pipeline is validated for SM86")
