@@ -103,10 +103,12 @@ class PackageArchitectureTest(unittest.TestCase):
         # Other tests import and patch ComfyUI in this process.
         script = textwrap.dedent(
             """
+            import os
             import sys
             from types import SimpleNamespace
 
             from aiohttp import web
+            from comfy import memory_management, model_management
             from comfy_execution.graph import ExecutionList
             from server import PromptServer
 
@@ -132,12 +134,23 @@ class PackageArchitectureTest(unittest.TestCase):
 
             assert "TuringUtilsStageBarrier" in NODE_CLASS_MAPPINGS
             assert not handlers and not list(server.routes)
+
+            pin_setting = "COMFYUI_TURING_UTILS_PINNED_MEMORY_GIB"
+            os.environ[pin_setting] = "6"
+            memory_management.aimdo_enabled = True
+            model_management.WINDOWS = True
+            model_management.DISABLE_PINNED_MEMORY = True
+            model_management.MAX_PINNED_MEMORY = -1
             initialize_plugin()
+            assert model_management.MAX_PINNED_MEMORY == -1
+
             jobs = server._turing_job_api
             installed_handlers = tuple(handlers)
             assert installed_handlers
             route_count = len(server.routes)
+            model_management.DISABLE_PINNED_MEMORY = False
             initialize_plugin()
+            assert model_management.MAX_PINNED_MEMORY == 6 * 1024**3
             assert ExecutionList.stage_node_execution is installed_staging
             assert server._turing_job_api is jobs
             assert tuple(handlers) == installed_handlers

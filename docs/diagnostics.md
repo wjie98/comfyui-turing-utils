@@ -10,7 +10,12 @@ or independent log-level control. Python messages use the
 | --- | --- | --- |
 | `COMFYUI_TURING_UTILS_PROFILE` | `0` | `0`: off; `1`: concise timing summaries; `2`: detailed timings, native attention resources and SeC diagnostics |
 | `COMFYUI_TURING_UTILS_H3_ACTIVATION_MODE` | `auto` | Automatic H3 scheduling, or explicit `throughput` / `balanced` policy |
+| `COMFYUI_TURING_UTILS_PINNED_MEMORY_GIB` | ComfyUI default | Pinned memory registration limit in GiB for Windows with active DynamicVRAM |
 | Chat API-key environment reference | None | A user-selected `$NAME` or `${NAME}`; credentials must not be logged |
+
+Set the pinned memory limit before starting ComfyUI. The native
+`--disable-pinned-memory` flag takes precedence. An invalid limit logs a
+warning and uses ComfyUI's default.
 
 Set the profile level before starting ComfyUI; restart after changing it.
 Invalid levels warn once and disable profiling. Level 0 creates no diagnostic

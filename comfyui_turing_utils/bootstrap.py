@@ -2,11 +2,45 @@
 
 from __future__ import annotations
 
+import os
 import threading
+
+from .log import get_logger
 
 
 _BOOTSTRAP_LOCK = threading.Lock()
 _ADAPTERS_REGISTERED = False
+_PINNED_MEMORY_LIMIT = "COMFYUI_TURING_UTILS_PINNED_MEMORY_GIB"
+_GIB = 1024**3
+LOG = get_logger("memory")
+
+
+def _configure_pinned_memory_limit() -> None:
+    value = os.environ.get(_PINNED_MEMORY_LIMIT)
+    if not value:
+        return
+
+    from comfy import memory_management, model_management
+
+    if (
+        model_management.DISABLE_PINNED_MEMORY
+        or not model_management.WINDOWS
+        or not memory_management.aimdo_enabled
+    ):
+        return
+
+    try:
+        limit = int(float(value) * _GIB)
+    except (ValueError, OverflowError):
+        limit = 0
+    if limit <= 0:
+        LOG.warning(
+            "Ignoring %s=%r. Expected a positive limit in GiB.", _PINNED_MEMORY_LIMIT, value
+        )
+        return
+
+    model_management.MAX_PINNED_MEMORY = limit
+    LOG.info("Pinned memory registration limit set to %.3g GiB", limit / _GIB)
 
 
 def bootstrap_builtin_integrations() -> None:
@@ -55,6 +89,7 @@ def initialize_plugin() -> None:
         from .job_api.routes import install_routes
         from .runtime.workflow_prompt import install_workflow_prompt_compiler
 
+        _configure_pinned_memory_limit()
         install_workflow_prompt_compiler(server)
         install_job_cache_cleanup()
         install_routes(server)
