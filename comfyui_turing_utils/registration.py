@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from .adapters.minimax.conditioning import install_combined_minimax_conditioning_support
 from .nodes.attention import AttentionStrategy
 from .nodes.bernini import BerniniContextWindowsCore, BerniniInpaintCondition
 from .nodes.krea2 import Krea2IdentityEditConditioning
@@ -52,9 +51,6 @@ from .nodes.video_roi import (
 )
 from .nodes.visual_prompt import MaskToVisualPrompts
 from .nodes.video_padding import VideoFramesPadding
-
-
-install_combined_minimax_conditioning_support()
 
 
 NODE_CLASS_MAPPINGS = {
@@ -160,7 +156,3 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "TuringUtilsSeCTrackVisualConcept": "SeC Track Visual Concept",
     "_TuringUtilsSeCApply": "SeC Track Visual Concept Apply (Internal)",
 }
-
-from .job_api.routes import install_routes as install_job_routes
-
-install_job_routes()

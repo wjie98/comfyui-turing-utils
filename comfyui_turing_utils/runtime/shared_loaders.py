@@ -88,14 +88,8 @@ def compile_shared_loaders_on_prompt(data):
     return {**data, "prompt": compile_shared_loaders(data["prompt"])}
 
 
-def install_shared_loader_compiler():
-    from server import PromptServer
-
-    server = getattr(PromptServer, "instance", None)
-    if server is None:
-        return False
+def install_shared_loader_compiler(server) -> None:
     marker = "_turing_utils_shared_loader_compiler"
     if not getattr(server, marker, False):
         server.add_on_prompt_handler(compile_shared_loaders_on_prompt)
         setattr(server, marker, True)
-    return True

@@ -13,7 +13,6 @@ import folder_paths
 from aiohttp import BodyPartReader, web
 from aiohttp.helpers import content_disposition_header
 from comfy.cli_args import args
-from server import PromptServer
 
 from . import REQUEST_JSON_BYTES, UPLOAD_IDLE_SECONDS
 from .service import Jobs, disk
@@ -22,9 +21,8 @@ from .errors import ValidationError, describe
 from .discovery import node_catalog, server_information
 
 
-def install_routes():
-    server = getattr(PromptServer, "instance", None)
-    if server is None or getattr(server, "_turing_job_api", None) is not None:
+def install_routes(server):
+    if getattr(server, "_turing_job_api", None) is not None:
         return
     jobs = Jobs(
         server,

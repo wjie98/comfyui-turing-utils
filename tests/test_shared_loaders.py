@@ -164,19 +164,15 @@ class SharedLoaderTest(unittest.TestCase):
 
     def test_prompt_handler_preserves_workflow_and_installs_once(self):
         from types import SimpleNamespace
-        from server import PromptServer
         from comfyui_turing_utils.runtime.shared_loaders import (
-            compile_shared_loaders_on_prompt,
             install_shared_loader_compiler,
         )
 
-        server = SimpleNamespace(add_on_prompt_handler=mock.Mock())
-        with mock.patch.object(PromptServer, "instance", server, create=True):
-            self.assertTrue(install_shared_loader_compiler())
-            self.assertTrue(install_shared_loader_compiler())
-        server.add_on_prompt_handler.assert_called_once_with(
-            compile_shared_loaders_on_prompt
-        )
+        handlers = []
+        server = SimpleNamespace(add_on_prompt_handler=handlers.append)
+        install_shared_loader_compiler(server)
+        install_shared_loader_compiler(server)
+        self.assertEqual(len(handlers), 1)
         data = {
             "prompt": self.prompt(next(iter(APPLICATIONS))),
             "extra_data": {"extra_pnginfo": {"workflow": {"nodes": []}}},
@@ -190,7 +186,7 @@ class SharedLoaderTest(unittest.TestCase):
             },
         }
         original = copy.deepcopy(data)
-        result = compile_shared_loaders_on_prompt(data)
+        result = handlers[0](data)
         self.assertEqual(data, original)
         self.assertEqual(result["extra_data"], original["extra_data"])
         self.assertEqual(len(result["prompt"]), 4)

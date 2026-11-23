@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from ..kernel_api import load_kernel_extension, load_kernel_package
+from .kitchen_api import backend_status
 
 
 BACKEND_NAME = "turing_utils_sm75"
@@ -31,10 +32,9 @@ def kernel_op(name: str):
 def kitchen_backend_available() -> bool:
     """Return whether comfy-kitchen selected the shared sm75+ backend."""
     try:
-        import comfy_kitchen
+        status = backend_status(BACKEND_NAME)
     except ImportError:
         return False
-    status = comfy_kitchen.list_backends().get(BACKEND_NAME, {})
     return bool(status.get("available") and not status.get("disabled"))
 
 

@@ -38,6 +38,7 @@ from ..quantization.convrot import (
     _summarize_convrot_modules,
     configure_convrot_activation,
 )
+from ..quantization.kitchen_api import backend_status
 from ..quantization.operator_scope import (
     install_clip_operator_scope,
     install_model_operator_scope,
@@ -125,11 +126,10 @@ def validate_runtime_support(
         return
 
     try:
-        import comfy_kitchen
+        cuda_backend = backend_status("cuda")
     except ImportError as exc:
         raise RuntimeError("ConvRot W4A8 requires comfy-kitchen") from exc
 
-    cuda_backend = comfy_kitchen.list_backends().get("cuda", {})
     if not cuda_backend.get("available", False):
         reason = cuda_backend.get("unavailable_reason")
         detail = f": {reason}" if reason else ""

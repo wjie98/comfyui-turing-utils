@@ -18,6 +18,7 @@ from .dispatch import (
     convrot_w4a4_linear,
     int8_linear,
 )
+from .kitchen_api import has_w6_gemv
 
 
 def register_backend() -> bool:
@@ -31,14 +32,14 @@ def register_backend() -> bool:
             ShapeRule,
             ValidationResult,
         )
-        from comfy_kitchen.backends import cuda as kitchen_cuda
         from comfy_kitchen.registry import registry
     except ImportError:
         return False
 
-    cuda_status = comfy_kitchen.list_backends().get("cuda", {})
+    backends = comfy_kitchen.list_backends()
+    cuda_status = backends.get("cuda", {})
     cuda_capabilities = set(cuda_status.get("capabilities", ()))
-    if BACKEND_NAME in comfy_kitchen.list_backends():
+    if BACKEND_NAME in backends:
         return backend_available()
 
     class SupportedTensorCoreTensor(ShapeRule):
@@ -53,9 +54,7 @@ def register_backend() -> bool:
     has_w4a8_kernel = _kernel_available()
     has_w4a4_quantizer = _kernel_available("turing_bf16_int4_convrot_quantize")
     has_codebook_w4a8_kernel = _kernel_available("turing_codebook_w4a8_linear")
-    has_kitchen_w6_gemv = getattr(kitchen_cuda, "_W4A8_CHUNKED", False) and callable(
-        getattr(getattr(kitchen_cuda, "_C", None), "w4a8_codebook_gemv", None)
-    )
+    has_kitchen_w6_gemv = has_w6_gemv()
 
     def require_convrot_256(kwargs):
         if kwargs.get("convrot") is not True:

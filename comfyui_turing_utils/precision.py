@@ -20,6 +20,7 @@ from .log import get_logger
 from .quantization.backend import register_backend
 from .quantization.capabilities import kitchen_backend_available as backend_available
 from .quantization.formats import describe_weight_storage
+from .quantization.kitchen_api import backend_status, require_convrot_cuda_api
 from .quantization.preflight import (
     preflight_kitchen,
     preflight_codebook_w4a8,
@@ -71,21 +72,7 @@ def _check_kitchen_contract(minimum_version=MIN_KITCHEN_VERSION) -> None:
             f"Turing Utils requires comfy-kitchen>={required}, got {kitchen_version}. Update ComfyUI."
         )
 
-    from comfy_kitchen.backends import cuda as kitchen_cuda
-
-    required_cuda_api = (
-        "convrot_w4a4_linear",
-        "int8_linear",
-        "quantize_int4_rowwise",
-        "quantize_int4_rowwise_convrot64",
-        "quantize_int8_rowwise_convrot64",
-    )
-    missing = [name for name in required_cuda_api if not hasattr(kitchen_cuda, name)]
-    if missing:
-        raise RuntimeError(
-            "The installed comfy-kitchen does not provide the Turing ConvRot API required by Turing Utils: "
-            + ", ".join(missing)
-        )
+    require_convrot_cuda_api()
 
 
 def _check_kernel_contract(minimum_version=MIN_KERNEL_VERSION) -> None:
@@ -134,9 +121,7 @@ def prepare_turing_runtime(
 
     if summary.w4a4 or summary.w4a8 or codebook_w4a8 or w6a8 or summary.w8a8:
         _check_kitchen_contract()
-        import comfy_kitchen
-
-        cuda_status = comfy_kitchen.list_backends().get("cuda", {})
+        cuda_status = backend_status("cuda")
         if not cuda_status.get("available"):
             reason = cuda_status.get("unavailable_reason") or "not installed"
             raise RuntimeError(f"Kitchen CUDA backend is unavailable: {reason}")

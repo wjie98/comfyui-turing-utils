@@ -3,7 +3,9 @@ from __future__ import annotations
 import ast
 from functools import cache
 import importlib.util
+import subprocess
 import sys
+import textwrap
 import unittest
 from pathlib import Path
 
@@ -11,6 +13,9 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
+COMFY_ROOT = ROOT.parents[1]
+if str(COMFY_ROOT) not in sys.path:
+    sys.path.insert(0, str(COMFY_ROOT))
 
 
 class PackageArchitectureTest(unittest.TestCase):
@@ -94,14 +99,61 @@ class PackageArchitectureTest(unittest.TestCase):
         bootstrap_builtin_integrations()
         self.assertEqual(registered_model_adapters(), ("minimax_h3", "wan", "qwen_image21"))
 
-    def test_package_root_uses_explicit_bootstrap(self):
-        source = (ROOT / "comfyui_turing_utils" / "__init__.py").read_text(
-            encoding="utf-8"
-        )
-        entrypoint = (ROOT / "__init__.py").read_text(encoding="utf-8")
-        self.assertNotIn("apply_minimax_adapter", source)
-        self.assertIn("bootstrap_builtin_integrations()", entrypoint)
+    def test_server_integrations_install_once_after_standalone_bootstrap(self):
+        # Other tests import and patch ComfyUI in this process.
+        script = textwrap.dedent(
+            """
+            import sys
+            from types import SimpleNamespace
 
+            from aiohttp import web
+            from comfy_execution.graph import ExecutionList
+            from server import PromptServer
+
+            sys.path.insert(0, sys.argv[1])
+            from comfyui_turing_utils import bootstrap_builtin_integrations
+            from comfyui_turing_utils.bootstrap import initialize_plugin
+
+            original_staging = ExecutionList.stage_node_execution
+            bootstrap_builtin_integrations()
+            assert ExecutionList.stage_node_execution is original_staging
+            initialize_plugin()
+            assert ExecutionList.stage_node_execution is not original_staging
+            installed_staging = ExecutionList.stage_node_execution
+
+            handlers = []
+            server = SimpleNamespace(
+                add_on_prompt_handler=handlers.append,
+                app=web.Application(),
+                routes=web.RouteTableDef(),
+            )
+            PromptServer.instance = server
+            from comfyui_turing_utils.registration import NODE_CLASS_MAPPINGS
+
+            assert "TuringUtilsStageBarrier" in NODE_CLASS_MAPPINGS
+            assert not handlers and not list(server.routes)
+            initialize_plugin()
+            jobs = server._turing_job_api
+            installed_handlers = tuple(handlers)
+            assert installed_handlers
+            route_count = len(server.routes)
+            initialize_plugin()
+            assert ExecutionList.stage_node_execution is installed_staging
+            assert server._turing_job_api is jobs
+            assert tuple(handlers) == installed_handlers
+            assert len(server.app.cleanup_ctx) == 1
+            assert len(server.routes) == route_count
+            assert any(route.path == "/turing/jobs" for route in server.routes)
+            """
+        )
+        result = subprocess.run(
+            [sys.executable, "-c", script, str(ROOT)],
+            cwd=COMFY_ROOT,
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
     def test_registered_node_ids_match_the_maintained_surface(self):
         from comfyui_turing_utils.registration import NODE_CLASS_MAPPINGS

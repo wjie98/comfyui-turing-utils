@@ -216,25 +216,9 @@ def compile_stage_barriers_on_prompt(json_data: Any) -> Any:
     return result
 
 
-def install_stage_barrier_prompt_compiler() -> bool:
+def install_stage_barrier_prompt_compiler(prompt_server) -> bool:
     """Install the server-side prompt compiler exactly once."""
 
-    try:
-        from server import PromptServer
-    except (ImportError, AttributeError):
-        LOG.warning(
-            "Stage Barrier route compilation is unavailable: ComfyUI's prompt "
-            "server was not found"
-        )
-        return False
-
-    prompt_server = getattr(PromptServer, "instance", None)
-    if prompt_server is None or not hasattr(prompt_server, "add_on_prompt_handler"):
-        LOG.warning(
-            "Stage Barrier route compilation is unavailable: ComfyUI's prompt "
-            "server has not been initialized"
-        )
-        return False
     if getattr(prompt_server, _PROMPT_HANDLER_MARKER, False):
         return True
 

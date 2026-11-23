@@ -109,9 +109,6 @@ class DiscoveryTest(unittest.IsolatedAsyncioTestCase):
             _turing_material_tasks=mock.Mock(),
         )
         for patch in (
-            mock.patch.object(
-                routes.PromptServer, "instance", self.server, create=True
-            ),
             mock.patch.object(routes, "Jobs", return_value=self.jobs),
             mock.patch.object(routes.args, "max_upload_size", 0.125),
             mock.patch.object(
@@ -135,7 +132,7 @@ class DiscoveryTest(unittest.IsolatedAsyncioTestCase):
         ):
             patch.start()
             self.addCleanup(patch.stop)
-        routes.install_routes()
+        routes.install_routes(self.server)
 
         async def native_info(request):
             name = request.match_info["class_type"]

@@ -172,10 +172,7 @@ class JobApiTest(unittest.IsolatedAsyncioTestCase):
         self.addCleanup(patch.stop)
         self.server = Server(self.root)
         ProgressText.steps, ProgressText.release = asyncio.Queue(), asyncio.Queue()
-        with mock.patch.object(
-            routes.PromptServer, "instance", self.server, create=True
-        ):
-            routes.install_routes()
+        routes.install_routes(self.server)
         self.jobs = self.server._turing_job_api
         self.server.app.add_routes(self.server.routes)
         self.client = TestClient(TestServer(self.server.app))

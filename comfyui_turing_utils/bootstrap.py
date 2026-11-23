@@ -1,9 +1,4 @@
-"""Composition root for built-in model integrations.
-
-Importing a package submodule must not eagerly import every model adapter.
-ComfyUI's plugin entry point calls :func:`bootstrap_builtin_integrations`
-before node registration, while standalone tools can opt in explicitly.
-"""
+"""Startup for standalone model adapters and the ComfyUI custom node plugin."""
 
 from __future__ import annotations
 
@@ -11,16 +6,16 @@ import threading
 
 
 _BOOTSTRAP_LOCK = threading.Lock()
-_BOOTSTRAPPED = False
+_ADAPTERS_REGISTERED = False
 
 
 def bootstrap_builtin_integrations() -> None:
     """Register the built-in adapters exactly once for this interpreter."""
-    global _BOOTSTRAPPED
-    if _BOOTSTRAPPED:
+    global _ADAPTERS_REGISTERED
+    if _ADAPTERS_REGISTERED:
         return
     with _BOOTSTRAP_LOCK:
-        if _BOOTSTRAPPED:
+        if _ADAPTERS_REGISTERED:
             return
 
         from .adapters.minimax.acceleration import apply_minimax_adapter
@@ -32,11 +27,6 @@ def bootstrap_builtin_integrations() -> None:
         from .adapters.wan_layout import ensure_wan_attention_layout_provider
         from .attention.integration import register_attention_site_installer
         from .attention.layout import register_attention_layout_provider
-        from .runtime.stage_barrier import install_stage_barrier_scheduler
-        from .runtime.shared_loaders import install_shared_loader_compiler
-        from .runtime.stage_barrier_prompt import (
-            install_stage_barrier_prompt_compiler,
-        )
 
         register_attention_layout_provider(ensure_minimax_attention_layout_provider)
         register_attention_layout_provider(ensure_wan_attention_layout_provider)
@@ -45,10 +35,30 @@ def bootstrap_builtin_integrations() -> None:
         register_model_adapter(ModelAdapter("minimax_h3", apply_minimax_adapter))
         register_model_adapter(ModelAdapter("wan", apply_wan_adapter))
         register_model_adapter(ModelAdapter("qwen_image21", apply_qwen_image21_adapter))
+        _ADAPTERS_REGISTERED = True
+
+
+def initialize_plugin() -> None:
+    """Install ComfyUI integrations for this process and its current server."""
+    from server import PromptServer
+
+    from .adapters.minimax.conditioning import (
+        install_combined_minimax_conditioning_support,
+    )
+    from .runtime.stage_barrier import install_stage_barrier_scheduler
+
+    bootstrap_builtin_integrations()
+    with _BOOTSTRAP_LOCK:
         install_stage_barrier_scheduler()
-        install_stage_barrier_prompt_compiler()
-        install_shared_loader_compiler()
-        _BOOTSTRAPPED = True
+        install_combined_minimax_conditioning_support()
 
+        server = getattr(PromptServer, "instance", None)
+        if server is None:
+            return
+        from .job_api.routes import install_routes
+        from .runtime.shared_loaders import install_shared_loader_compiler
+        from .runtime.stage_barrier_prompt import install_stage_barrier_prompt_compiler
 
-__all__ = ["bootstrap_builtin_integrations"]
+        install_stage_barrier_prompt_compiler(server)
+        install_shared_loader_compiler(server)
+        install_routes(server)
