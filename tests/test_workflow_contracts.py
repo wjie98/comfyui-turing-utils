@@ -23,10 +23,6 @@ def test_registered_node_interfaces_match_pre_refactor_workflows():
     expected = json.loads(
         (Path(__file__).parent / "fixtures/node_contracts.json").read_text()
     )
-    removed = {"_TuringCanvasChat", *(f"_TuringMaterial{role}{kind}"
-        for role in ("Read", "Write") for kind in ("Text", "Image", "Video", "Audio"))}
-    assert not (removed & NODE_CLASS_MAPPINGS.keys())
-    expected = {name: contract for name, contract in expected.items() if name not in removed}
     actual = {}
     with patch("folder_paths.get_filename_list", return_value=["contract.safetensors"]):
         # The pre-refactor snapshot freezes existing workflows, not additions.
@@ -46,20 +42,12 @@ def test_registered_node_interfaces_match_pre_refactor_workflows():
                     "output_node": getattr(node, "OUTPUT_NODE", False),
                 }
             )
-    # Approved Canvas changes keep every old serialized input valid. Preserve
-    # the original snapshot: rebuilding it would hide unrelated regressions.
-    codec = actual["TuringMaterialVideo"]["inputs"]["required"]["codec"]
-    old_codec = expected["TuringMaterialVideo"]["inputs"]["required"]["codec"]
-    assert codec[0][0] == "h264" and codec[1] == {"default": "h264"}
-    assert set(codec[0]) == set(old_codec[0])
-    actual["TuringMaterialVideo"]["inputs"]["required"]["codec"] = old_codec
-    for kind in ("Image", "Video", "Audio", "Text"):
-        material = actual[f"TuringMaterial{kind}"]
-        assert material["input_order"]["optional"].pop() == "run_on_dependency"
-        assert material["inputs"]["optional"].pop("run_on_dependency") == [
-            "BOOLEAN",
-            {"default": False},
-        ]
+    # CLIP types are inherited from ComfyUI. Retain coverage for every type
+    # existing workflows can name while allowing upstream to add more.
+    actual_types = actual["TuringUtilsConvRotCLIPLoader"]["inputs"]["required"]["type"][0]
+    expected_types = expected["TuringUtilsConvRotCLIPLoader"]["inputs"]["required"]["type"][0]
+    assert set(expected_types) <= set(actual_types)
+    actual_types[:] = expected_types
     # Adding a strategy does not change the serialized inputs of any existing
     # mode. Check Spark separately and keep the old-mode snapshot frozen.
     attention = actual["TuringUtilsAttentionStrategy"]

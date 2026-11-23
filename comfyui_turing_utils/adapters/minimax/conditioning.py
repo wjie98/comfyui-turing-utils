@@ -34,6 +34,8 @@ def install_combined_minimax_conditioning_support() -> bool:
     import comfy.model_base
 
     model_class = comfy.model_base.MiniMaxH3
+    if callable(getattr(model_class, "_cond_latents", None)):
+        return False
     current = model_class.extra_conds
     if getattr(current, "_turing_utils_combined_h3_references", False):
         return False

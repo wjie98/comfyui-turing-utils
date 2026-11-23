@@ -22,6 +22,32 @@ _TIME_MODE = "compact_ref2va_rope_time_mode"
 _LAYOUT_MARKER = "_compact_ref2va_physical_time_applied"
 
 
+def migrate_reference_compression_inputs(inputs):
+    """Translate the pre-keep-ratio VPack fields in a native prompt."""
+    field = "reference_video_compression"
+    if field not in inputs:
+        return inputs
+    mode = inputs[field]
+    ratio_field = f"{field}.compression_ratio"
+    drop = inputs.get(ratio_field, "2/5")
+    if isinstance(mode, dict):
+        drop = mode.get("compression_ratio", drop)
+        mode = mode.get(field)
+    if mode == "off":
+        keep = "5/5"
+    elif mode == "vpack" and isinstance(drop, str):
+        keep = {"1/5": "4/5", "2/5": "3/5", "3/5": "2/5"}.get(drop)
+    else:
+        return inputs
+    if keep is None:
+        return inputs
+    migrated = dict(inputs)
+    del migrated[field]
+    migrated.pop(ratio_field, None)
+    migrated.setdefault("vpack", keep)
+    return migrated
+
+
 def retained_frames(frames: int, ratio: str) -> list[int]:
     phases = COMPRESSION_PHASES[ratio]
     indices = [index for index in range(frames) if index % 5 in phases]

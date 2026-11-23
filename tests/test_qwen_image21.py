@@ -1,5 +1,6 @@
 """Reference-cache correctness and model-local Qwen 2.1 installation."""
 
+import inspect
 from pathlib import Path
 import sys
 from types import SimpleNamespace
@@ -120,7 +121,11 @@ class QwenImage21Test(unittest.TestCase):
         patcher = Patcher(model)
         self.assertEqual(adapter.apply_qwen_image21_adapter(patcher, torch.device("cpu")), 2)
         self.assertEqual(adapter.apply_qwen_image21_adapter(patcher, torch.device("cpu")), 0)
-        self.assertEqual(len(patcher.object_patches), 3)
+        legacy = "prefix_cache" not in inspect.signature(model._forward).parameters
+        expected = {f"diffusion_model.transformer_blocks.{i}.attn.forward" for i in range(2)}
+        if legacy:
+            expected.add("diffusion_model._forward")
+        self.assertEqual(set(patcher.object_patches), expected)
 
     def test_encoder_scope_is_qwen21_only_and_is_installed_once(self):
         from comfy.text_encoders.qwen_image21 import QwenImage21TEModel

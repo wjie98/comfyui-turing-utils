@@ -131,10 +131,13 @@ grouped loader discard unsupported checkpoint state.
 
 W6A8 requires comfy-kitchen >=0.2.37 and kernel >=0.45.0. The existing ConvRot
 DiT/CLIP loaders detect packed geometry automatically, including mixed W4/W6/W8
-checkpoints. No new node or workflow parameter is introduced. LoRA merging uses
+checkpoints. The loader accepts both the native `w6a8_int8` format and legacy
+checkpoints labeled `asym_w4a8_int8`. LoRA merging uses
 the native Kitchen requantization contract, which preserves the original packed
 bit width, group size, scale dtype and codebook choice. Requantization is still
 lossy; preservation of the storage format does not imply lossless LoRA merging.
+On Ampere or newer, a single activation row with E4M3 group scales uses Kitchen
+GEMV when the native kernel is available. Bulk calls can use the bundled kernel.
 Do not upgrade Torch/CUDA as part of this dependency change.
 
 ## MiniMax H3 activation scheduling

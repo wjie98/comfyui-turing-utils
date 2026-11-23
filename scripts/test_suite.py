@@ -17,14 +17,6 @@ BASE = (
     "tests/test_workflow_contracts.py",
 )
 SAMPLED = {
-    "tests/test_workspace_tasks.py": tuple(
-        "tests/test_workspace_tasks.py::WorkspaceTasksTest::" + name
-        for name in (
-            "test_dependency_switch_reads_current_or_refreshes_existing_result",
-            "test_read_only_missing_dependency_never_runs_its_computation",
-            "test_run_all_refreshes_each_shared_boundary_once_even_when_enabled",
-        )
-    ),
     "tests/test_job_api.py": tuple(
         "tests/test_job_api.py::JobApiTest::" + name
         for name in (
@@ -38,16 +30,6 @@ SAMPLED = {
     "tests/test_nvfp4_routes.py": ("tests/gpu/test_nvfp4_bounds.py",),
 }
 AREAS = {
-    "workspace": (
-        "tests/workspace/test_controls.py",
-        "tests/workspace/test_workflows.py",
-        "tests/workspace/test_storage.py",
-        "tests/workspace/test_materials.py",
-        "tests/workspace/test_execution.py",
-        "tests/test_workspace_routes.py",
-        "tests/test_canvas_dynamic_parameters.py",
-        *SAMPLED["tests/test_workspace_tasks.py"],
-    ),
     "api": (
         "tests/test_job_discovery.py",
         "tests/test_job_progress.py",
@@ -68,10 +50,12 @@ AREAS = {
         "tests/test_attention_scheduling.py",
         "tests/test_attention_nodes.py",
         "tests/test_minimax_layout.py",
+        "tests/test_minimax_video_vae.py",
     ),
     "sampling": (
         "tests/sampling/test_h3_sigmas.py",
         "tests/sampling/test_h3_sampling.py",
+        "tests/sampling/test_h3_image.py",
         "tests/test_sigmas.py",
     ),
     "quantization": (
@@ -86,13 +70,6 @@ AREAS = {
         "tests/gpu/test_nvfp4_bounds.py",
     ),
 }
-JS_UNIT = (
-    "document_session.mjs",
-    "text_history.mjs",
-    "queue_and_slots.mjs",
-    "card_layout.mjs",
-    "image_hover.mjs",
-)
 SHARED = {
     "__init__.py",
     "requirements.txt",
@@ -110,9 +87,7 @@ class Selection:
     targets: tuple[str, ...]
     areas: tuple[str, ...]
     reasons: tuple[str, ...]
-    frontend: bool = False
     full_required: bool = False
-    browser: tuple[str, ...] = ()
 
 
 def changed_paths(root=ROOT):
@@ -131,10 +106,13 @@ def changed_paths(root=ROOT):
 def areas_for(path):
     if path in SHARED:
         return set(AREAS)
-    if path == "comfyui_turing_utils/workspace/template_files.py":
-        return {"workspace", "api"}
+    if path == "comfyui_turing_utils/runtime/shared_loaders.py":
+        return {"api", "sampling"}
     if (
-        path.startswith("comfyui_turing_utils/adapters/minimax/sampling")
+        path.startswith((
+            "comfyui_turing_utils/adapters/minimax/sampling",
+            "comfyui_turing_utils/adapters/minimax/image_sampling",
+        ))
         or path == "tests/turing_test_support/h3.py"
     ):
         return {"sampling"}
@@ -142,11 +120,7 @@ def areas_for(path):
         return {"api"}
     if path.startswith(("scripts/", "tests/unit/")):
         return set()
-    if path.startswith(("web/", "tests/browser/")):
-        return {"workspace"}
     for prefix, area in (
-        ("comfyui_turing_utils/workspace/", "workspace"),
-        ("tests/workspace/", "workspace"),
         ("tests/sampling/", "sampling"),
         ("comfyui_turing_utils/job_api/", "api"),
         ("comfyui_turing_utils/media/", "media"),
@@ -161,10 +135,9 @@ def areas_for(path):
             return {area}
     name = Path(path).stem
     for words, area in (
-        (("workspace", "canvas", "material"), "workspace"),
         (("job_",), "api"),
         (("sampler", "sigmas", "upscale", "latent_noise"), "sampling"),
-        (("attention", "sparse", "veda", "spark", "layout"), "attention"),
+        (("attention", "sparse", "veda", "spark", "layout", "video_vae", "minimax_vae"), "attention"),
         (
             (
                 "nvfp4",
@@ -186,7 +159,7 @@ def areas_for(path):
         if any(word in name for word in words):
             return {area}
     # New runtime code without a mapping must not silently get baseline-only tests.
-    if path.endswith((".py", ".js", ".mjs", ".cu", ".cpp", ".cuh", ".h")):
+    if path.endswith((".py", ".cu", ".cpp", ".cuh", ".h")):
         return set(AREAS)
     return set()
 
@@ -195,30 +168,12 @@ def select(paths, areas=()):
     selected = set(areas)
     reasons = [f"requested area: {area}" for area in sorted(selected)]
     full_required = False
-    frontend = False
-    browser = set()
     for path in paths:
         affected = areas_for(path)
         selected.update(affected)
         if affected:
             reasons.append(f"{path} -> {', '.join(sorted(affected))}")
-        frontend |= path.startswith(("web/", "tests/browser/"))
         full_required |= path in SHARED or path.startswith(("kernel/csrc/", "patches/"))
-        if path in {
-            "web/workspace/documents.js",
-            "web/workspace/project_state.js",
-            "web/workspace/execution.js",
-            "web/lib/serial_writes.js",
-        }:
-            browser.add("template_autosave.mjs")
-        if path in {"web/workspace/parameters.js", "web/lib/parameter_form.js"}:
-            browser.add("hidden_parameter_autosave.mjs")
-        if path in {
-            "web/lib/native_graph.js",
-            "web/lib/input_slots.js",
-            "web/dynamic_inputs.js",
-        }:
-            browser.add("dynamic_input_links.mjs")
     targets = dict.fromkeys(BASE)
     for area in sorted(selected):
         targets.update(dict.fromkeys(AREAS[area]))
@@ -235,9 +190,7 @@ def select(paths, areas=()):
         tuple(targets),
         tuple(sorted(selected)),
         tuple(reasons),
-        frontend,
         full_required,
-        tuple(sorted(browser)),
     )
 
 
@@ -292,7 +245,7 @@ def main(argv=None):
         "--list", action="store_true", help="show selection without importing tests"
     )
     parser.add_argument(
-        "--python-only", action="store_true", help="explicitly omit frontend validation"
+        "--python-only", action="store_true", help=argparse.SUPPRESS
     )
     options, pytest_args = parser.parse_known_args(argv)
     explicit = explicit_targets(pytest_args)
@@ -302,7 +255,7 @@ def main(argv=None):
         )
     elif options.full:
         selection = Selection(
-            ("tests",), tuple(AREAS), ("complete Python suite",), True
+            ("tests",), tuple(AREAS), ("complete Python and CUDA suite",)
         )
     else:
         selection = select([] if options.area else changed_paths(), options.area)
@@ -324,7 +277,7 @@ def main(argv=None):
     if options.full:
         environment["VEDA_TEST_CUDA"] = "1"
     targets = [] if explicit else list(selection.targets)
-    code = run(
+    return run(
         [
             sys.executable,
             "-m",
@@ -338,29 +291,6 @@ def main(argv=None):
         ],
         environment=environment,
     )
-    if code or explicit or options.python_only:
-        return code
-    if options.full or selection.frontend or "workspace" in selection.areas:
-        for filename in JS_UNIT:
-            code = run(["node", str(ROOT / "tests/browser" / filename)])
-            if code:
-                return code
-    if options.full:
-        environment.pop("NODES_MODE", None)
-        return run(["node", "tests/browser/run.mjs"], environment=environment)
-    if selection.browser:
-        environment["NODES_MODE"] = "classic"
-        code = run(
-            ["node", "tests/browser/run.mjs", *selection.browser],
-            environment=environment,
-        )
-        if code:
-            return code
-    print(
-        "Quick validation complete. Full browser/architecture matrices were not requested.",
-        flush=True,
-    )
-    return 0
 
 
 if __name__ == "__main__":

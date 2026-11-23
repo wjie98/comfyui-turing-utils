@@ -181,8 +181,20 @@ class SharedLoaderTest(unittest.TestCase):
             "prompt": self.prompt(next(iter(APPLICATIONS))),
             "extra_data": {"extra_pnginfo": {"workflow": {"nodes": []}}},
         }
+        data["prompt"]["attention"] = {
+            "class_type": "TuringUtilsAttentionStrategy",
+            "inputs": {
+                "model": ["source", 0],
+                "reference_video_compression": "vpack",
+                "reference_video_compression.compression_ratio": "1/5",
+            },
+        }
         original = copy.deepcopy(data)
         result = compile_shared_loaders_on_prompt(data)
         self.assertEqual(data, original)
         self.assertEqual(result["extra_data"], original["extra_data"])
-        self.assertEqual(len(result["prompt"]), 3)
+        self.assertEqual(len(result["prompt"]), 4)
+        self.assertEqual(
+            result["prompt"]["attention"]["inputs"],
+            {"model": ["source", 0], "vpack": "4/5"},
+        )

@@ -97,21 +97,24 @@ def test_nvfp4_storage_is_not_mistaken_for_already_rotated_weight():
     assert convrot_storage_kind(weight) is None
 
 
-def test_official_w6_load_and_metadata_roundtrip():
+@pytest.mark.parametrize("format_name", ["asym_w4a8_int8", "w6a8_int8"])
+def test_official_w6_load_and_metadata_roundtrip(format_name):
     import comfy.ops
 
     weight = grouped_weight(6)
-    config = {"format": "asym_w4a8_int8", "group_size": 16, "convrot_groupsize": 256}
+    config = {"format": format_name, "group_size": 16, "convrot_groupsize": 256}
     state = weight.state_dict("layer.weight")
     state["layer.comfy_quant"] = torch.tensor(
         list(json.dumps(config).encode()), dtype=torch.uint8
     )
     metadata = {"_quantization_metadata": json.dumps({"layers": {"layer": config}})}
-    _, summary = configure_convrot_activation(state, metadata, True)
+    adjusted, summary = configure_convrot_activation(state, metadata, True)
     assert summary == ConvRotSummary(w6a8=1)
-    assert "linear_dtype" not in json.loads(
-        state["layer.comfy_quant"].numpy().tobytes()
-    )
+    normalized = json.loads(state["layer.comfy_quant"].numpy().tobytes())
+    target = "w6a8_int8" if "w6a8_int8" in comfy.ops.QUANT_ALGOS else "asym_w4a8_int8"
+    assert normalized["format"] == target
+    assert "linear_dtype" not in normalized
+    assert json.loads(adjusted["_quantization_metadata"])["layers"]["layer"] == normalized
 
     root = torch.nn.Module()
     root.layer = comfy.ops.mixed_precision_ops(compute_dtype=torch.bfloat16).Linear(
@@ -239,6 +242,7 @@ def test_w6_cuda_inline_and_staged_match_integer_oracle(m, k, scale_dtype):
 @pytest.mark.parametrize("scale_dtype", [torch.float8_e4m3fn, torch.float32])
 def test_w6_scoped_dispatch_and_swiglu_use_local_kernel(group_size, scale_dtype):
     from unittest.mock import patch
+    from comfy_kitchen import w4a8_int8_linear
     from comfyui_turing_utils.quantization import dispatch
     from comfyui_turing_utils.quantization.backend import register_backend
     from comfyui_turing_utils.quantization.fusions import (
@@ -269,15 +273,46 @@ def test_w6_scoped_dispatch_and_swiglu_use_local_kernel(group_size, scale_dtype)
             call.args == ("turing_codebook_w4a8_linear",)
             for call in resolve.call_args_list
         )
+    swiglu = torch.cat((x, x), dim=-1)
     with patch.object(dispatch, "_kernel_op", wraps=dispatch._kernel_op) as resolve:
-        output = convrot_linear_input_act_from_weight(
-            weight, None, torch.cat((x, x), dim=-1), "swiglu"
-        )
+        output = convrot_linear_input_act_from_weight(weight, None, swiglu, "swiglu")
         assert output.shape == (3, 8)
-        assert any(
+        with use_turing_operator_backend():
+            dispatched = w4a8_int8_linear(
+                swiglu, weight._qdata, weight._params.scale, weight._params.s_channel,
+                group_size=group_size, input_act="swiglu",
+            )
+        torch.testing.assert_close(dispatched, output, rtol=0, atol=0)
+        assert sum(
             call.args == ("turing_codebook_w4a8_linear",)
             for call in resolve.call_args_list
-        )
+        ) == 2
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required")
+def test_single_row_w6_uses_kitchen_gemv_on_ampere():
+    from comfy_kitchen.backends import cuda
+    from unittest.mock import patch
+    from comfyui_turing_utils.quantization import dispatch
+    from comfyui_turing_utils.quantization.backend import register_backend
+    from comfyui_turing_utils.quantization.operator_scope import use_turing_operator_backend
+
+    if (
+        torch.cuda.get_device_capability() < (8, 0)
+        or not getattr(cuda, "_W4A8_CHUNKED", False)
+        or not hasattr(getattr(cuda, "_C", None), "w4a8_codebook_gemv")
+    ):
+        pytest.skip("requires Ampere or later and Kitchen W6 GEMV")
+    assert register_backend()
+    weight = grouped_weight(6, device="cuda")
+    x = torch.randn(1, 256, device="cuda", dtype=torch.bfloat16)
+    expected = torch.nn.functional.linear(x, weight)
+    with (
+        patch.object(dispatch, "_kernel_op", side_effect=AssertionError("use Kitchen GEMV")),
+        use_turing_operator_backend(),
+    ):
+        actual = torch.nn.functional.linear(x, weight)
+    torch.testing.assert_close(actual, expected, rtol=0, atol=0)
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required")

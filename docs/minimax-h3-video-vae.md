@@ -72,8 +72,11 @@ DynamicVRAM/aimdo paging, official batching, input/output transfers, dtype and
 OOM recovery. The plugin does not retry allocator or kernel errors on its own.
 Keeping other models resident is not promised; ComfyUI may offload them as needed.
 
-Only attention forwards are temporarily adapted on the selected decoder instance
-(none in `native` mode); linear fusion is selected through operator dispatch.
+The selected tiled decoder receives a temporary attention method override.
+Current ComfyUI calls `attend`, and older versions call `forward`.
+The `native` option keeps those methods as provided by ComfyUI. Sol-H3 uses its
+native window attention and streamed decoding. Linear fusion is selected
+through operator dispatch.
 The official decoder block loop, spatial blending and temporal
 reconstruction are not replaced. These instance overrides and progress hooks are
 restored on success, errors and cancellation. No process-global attention method

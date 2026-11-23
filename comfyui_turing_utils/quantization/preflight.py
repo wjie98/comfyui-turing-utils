@@ -6,10 +6,7 @@ import torch
 from ..hardware import is_supported_tensor_core_device
 from .capabilities import kernel_available as _kernel_available, kernel_op as _kernel_op
 from .operator_scope import use_turing_operator_backend
-from .dispatch import (
-    codebook_w4a8_linear,
-    convrot_w4a4_linear,
-)
+from .dispatch import convrot_w4a4_linear
 
 
 _PREFLIGHTED_DEVICES: set[int] = set()
@@ -97,6 +94,8 @@ def preflight_w4a8(device: torch.device) -> None:
 
 def preflight_codebook_w4a8(device: torch.device, *, bits: int = 4) -> None:
     """Validate grouped W4/W6 once per device and packed bit width."""
+    from comfy_kitchen import w4a8_int8_linear
+
     if bits not in (4, 6):
         raise ValueError("Grouped preflight supports only W4 and W6")
     if not is_supported_tensor_core_device(device):
@@ -170,21 +169,22 @@ def preflight_codebook_w4a8(device: torch.device, *, bits: int = 4) -> None:
     swiglu_input = ((torch.arange(m * 2 * h3_k, device=device) % 29) - 14).reshape(
         m, 2 * h3_k
     ).to(torch.bfloat16) / 16
-    swiglu_output = codebook_w4a8_linear(
-        swiglu_input,
-        torch.zeros((n, h3_k * bits // 8), dtype=torch.int8, device=device),
-        torch.ones(
-            (n, h3_k // group_size),
-            dtype=torch.float8_e4m3fn,
-            device=device,
-        ),
-        torch.ones(n, dtype=torch.float32, device=device),
-        codebook=codebook,
-        group_size=group_size,
-        convrot_groupsize=256,
-        out_dtype=torch.bfloat16,
-        input_act="swiglu",
-    )
+    with use_turing_operator_backend():
+        swiglu_output = w4a8_int8_linear(
+            swiglu_input,
+            torch.zeros((n, h3_k * bits // 8), dtype=torch.int8, device=device),
+            torch.ones(
+                (n, h3_k // group_size),
+                dtype=torch.float8_e4m3fn,
+                device=device,
+            ),
+            torch.ones(n, dtype=torch.float32, device=device),
+            codebook=codebook,
+            group_size=group_size,
+            convrot_groupsize=256,
+            out_dtype=torch.bfloat16,
+            input_act="swiglu",
+        )
     if (
         swiglu_output.dtype is not torch.bfloat16
         or not torch.isfinite(swiglu_output).all()

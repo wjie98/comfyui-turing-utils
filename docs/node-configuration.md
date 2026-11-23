@@ -52,8 +52,7 @@ Both retain each algorithm's dense-only modalities. Dense steps follow Sol's
 whole-task H3 timeline, without ratios or a restart at upscale. The old Spark
 backend, warmup and debug fields remain removed. Recreate affected Spark/Veda
 nodes saved before the protection controls were added; no migration shim is
-installed. `tests/browser/spark_attention.mjs` covers both strategies, all three
-policies, both renderers and saved-value persistence.
+installed.
 
 SeC positive_coords and negative_coords are optional socket-only STRING inputs,
 in that order immediately before bounding_box. Use native force_input rather
@@ -75,32 +74,6 @@ not discover lazy flags nested inside DynamicCombo inputs; this internal socket
 is not part of the public UI. H3 has no advanced, negative, CFG, second latent,
 second condition or high-resolution MODEL inputs. Old workflows need the explicit
 final-canvas migration described in README; no global widget hooks are added.
-web/chat_advanced.js opts only Multimodal Prompt Chat into the small
-enableAdvancedLayout helper in web/lib/advanced_layout.js. On classic frontend
-1.53.6, construction sets options.advanced but drawing reads widget.advanced;
-native layout also includes advanced widgets even while drawing omits them.
-The helper synchronizes flags and excludes folded advanced widgets from layout.
-It never mutates widget.hidden, input slots, values, order or node size. The
-native toggle, sizing, serialization and rendering remain in charge. Installation
-is idempotent and per-node, not a global prototype patch. Remove this bridge when
-the supported native frontend handles both flags and folded layout consistently.
-
-Maintenance requirement: on each frontend upgrade, or whenever an upstream fix
-is encountered, explicitly recheck this workaround with the helper disabled.
-If native flag propagation and classic folded layout pass resize, native toggle,
-DynamicCombo and reload tests, proactively delete web/lib/advanced_layout.js and
-web/chat_advanced.js in that change. Do not preserve them for speculative legacy
-compatibility. Adapt chat_advanced_layout.mjs to test native behavior without its
-helper import/idempotence assertion; update package-architecture assertions and
-retain the geometry regressions. If only one defect is fixed, remove only the
-now-redundant portion. A version bump alone is not evidence of a fix.
-Last checked 2026-10-09: runtime verified on 1.53.6; v1.57.0 and main still reserve
-folded advanced layout space in source review (not runtime verification).
-
-There is no old-workflow migration or detached-socket repair layer. Workflows
-saved with previous custom layouts may need affected nodes recreated. Do not
-reintroduce broad compatibility hooks to preserve those broken layouts.
-
 H3 Keyframe Reference has three fixed optional image inputs and three matching
 outputs. Empty positions remain empty. Stage Barrier has eight fixed optional
 value inputs and eight matching outputs. Its execution scheduling/compiler is
@@ -113,21 +86,6 @@ Every implementation-only node must use native is_dev_only (V3) or DEV_ONLY
 in its description. Developer mode may intentionally expose these nodes.
 No custom search interception, palette filtering, or strict hiding is needed.
 Public fused nodes must not inherit the internal description marker.
-
-## Material Workspace
-
-The independent workspace retains its material persistence and execution UI,
-explicit endpoint sorting, previews and workflow editing commands. These are
-user-facing capabilities, not ordinary-node layout replacements.
-
-Material types are declared once in workspace/protocol.py. API graph interfaces
-are derived rather than separately persisted. The minimal starter in
-workspace/templates.py contains only endpoints and four typed materials and is
-loaded with app.loadGraphData. No model-specific card builder is needed. Hidden endpoint metadata
-uses native hidden/socketless input declarations.
-
-Use small shared functions for real repeated behavior. A one-off fix does not
-justify a widget framework or overrides on every node prototype.
 
 ## Reusable ordinary workflows
 
@@ -143,19 +101,6 @@ inside its native DynamicCombo branch; old flat arguments are not migrated.
 
 ## Verification
 
-tests/browser/native_parameter_layout.mjs compares each ordinary public node
-against native registration of the same schema: order, widget/socket geometry,
-DynamicCombo modes, connections, resizing and serialized reloads. Crop and SeC
-also have dedicated link and disabled-editor tests. Chat checks the native
-advanced toggle. The new H3 sampler has dedicated classic/Nodes 2.0 coverage in
-tests/browser/h3_sampler.mjs. Run layout checks on the classic canvas, not only Nodes 2.0.
-
-tests/browser/chat_advanced_layout.mjs additionally compares actual widget
-positions, allocated heights and free resize space with native hidden-widget
-layout across sizes, native toggles, JPEG/PNG branches and serialized reloads.
-Testing draw visibility alone does not catch invisible widgets reserving space.
-
-Material browser tests cover workflow templates, endpoint edits, nested
-subgraphs, persistence and bounded playback. Tests must check actual links and
-geometry, not just whether controls remain visible. Passing the tested frontend
-is not a claim that every historical frontend or third-party extension works.
+The serialized schema baseline covers ordered input names, DynamicCombo branches,
+defaults and output types. Native queue tests exercise workflow execution and
+shared loaders. The legacy VPack drop ratio is translated at prompt submission.

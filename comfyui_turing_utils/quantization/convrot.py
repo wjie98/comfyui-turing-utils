@@ -12,6 +12,7 @@ import torch
 from .formats import (
     W4_FORMAT,
     GROUPED_INT8_FORMAT,
+    W6_FORMAT,
     W8_FORMAT,
     LEGACY_W8_FORMAT,
     NVFP4_FORMAT,
@@ -80,7 +81,7 @@ def _classify_config(
             )
         return "w4", "int8" if force_int8_gemm else activation_dtype
 
-    if quant_format == GROUPED_INT8_FORMAT:
+    if quant_format in {GROUPED_INT8_FORMAT, W6_FORMAT}:
         convrot = _config_value(config, params, "convrot", True)
         if convrot is not True:
             raise ValueError(
@@ -100,7 +101,7 @@ def _classify_config(
             raise ValueError(
                 f"Grouped INT8 layer {layer_name} requires convrot_groupsize=256"
             )
-        return "w4_codebook", "int8"
+        return ("w6" if quant_format == W6_FORMAT else "w4_codebook"), "int8"
 
     convrot = _config_value(config, params, "convrot", False)
     if not isinstance(convrot, bool):
@@ -142,7 +143,7 @@ def _decode_quant_tensor(value: torch.Tensor, key: str) -> dict:
 
 def _classify_layer(config, layer_name, force_int8_gemm, tensor_shapes):
     classification = _classify_config(config, layer_name, force_int8_gemm)
-    if classification != ("w4_codebook", "int8"):
+    if classification not in {("w4_codebook", "int8"), ("w6", "int8")}:
         return classification
     if layer_name + ".weight_correction" in tensor_shapes:
         raise ValueError(
@@ -158,6 +159,8 @@ def _classify_layer(config, layer_name, force_int8_gemm, tensor_shapes):
         )
     group_size = _config_value(config, _params(config, layer_name), "group_size", 16)
     _, _, bits = grouped_weight_geometry(packed, scales, group_size)
+    if config.get("format") == W6_FORMAT and bits != 6:
+        raise ValueError(f"W6A8 layer {layer_name} must contain 6-bit packed weights")
     if bits == 6:
         if layer_name + ".weight_codebook" in tensor_shapes:
             raise ValueError(f"W6A8 layer {layer_name} must not contain a codebook")
@@ -362,6 +365,13 @@ def configure_convrot_activation(
             "The selected model does not contain supported ConvRot quantization metadata"
         )
 
+    if any(kind == "w6" for kind, _ in layer_types.values()):
+        from comfy.quant_ops import QUANT_ALGOS
+
+        w6_format = W6_FORMAT if W6_FORMAT in QUANT_ALGOS else GROUPED_INT8_FORMAT
+        for _, config, weight_dtype, _ in classified_records:
+            if weight_dtype == "w6":
+                config["format"] = w6_format
     if force_int8_gemm:
         for _, config, weight_dtype, _ in classified_records:
             if weight_dtype not in {"w4_codebook", "w6", "nvfp4"}:
@@ -423,9 +433,9 @@ def _summarize_convrot_modules(root: torch.nn.Module) -> ConvRotSummary:
                     f"Loaded ConvRot W4 layer has unsupported linear_dtype={activation_dtype!r}; "
                     "update ComfyUI and comfy-kitchen"
                 )
-        elif quant_format == GROUPED_INT8_FORMAT:
+        elif quant_format in {GROUPED_INT8_FORMAT, W6_FORMAT}:
             storage = describe_weight_storage(weight)
-            if storage.kind not in {"codebook_w4a8", "w6a8"}:
+            if storage is None or storage.kind not in {"codebook_w4a8", "w6a8"}:
                 raise RuntimeError(
                     "Loaded grouped W4A8 layer is missing its 16-entry codebook"
                 )

@@ -25,6 +25,9 @@ from comfyui_turing_utils.attention.protocol import (
 from comfyui_turing_utils.nodes import minimax_vae as nodes
 
 
+ATTENTION_METHOD = "attend" if hasattr(video_vae.h3_vae.Attention, "attend") else "forward"
+
+
 def make_decoder(patch_size_t=4):
     torch.manual_seed(26)
     decoder = ViT3DDecoder(
@@ -68,6 +71,8 @@ def make_vae():
     model.token_overlap = 2
     model.frame_overlap = 5
     model.tiling = True
+    model.noncausal = False
+    model.still_frame = None
     model.tile_size = 4
     model.tile_overlap_min = 2
     model.encoder = _TinyEncoder()
@@ -302,7 +307,8 @@ class MiniMaxVideoVAETest(unittest.TestCase):
                     factory.return_value.__enter__ = mock.Mock(return_value=terminal)
                     factory.return_value.__exit__ = mock.Mock(return_value=False)
                     existing = lambda value, rotary_pos_emb=None: value
-                    model.decoder.transformer_blocks[0].attn.forward = existing
+                    first = model.decoder.transformer_blocks[0].attn
+                    setattr(first, ATTENTION_METHOD, existing)
                     with (
                         mock.patch.object(
                             video_vae, "register_backend", return_value=False
@@ -318,44 +324,42 @@ class MiniMaxVideoVAETest(unittest.TestCase):
                         with self.assertRaises(type(error)):
                             run(vae, torch.zeros(1))
                     native.assert_called_once()
-                    self.assertIs(
-                        model.decoder.transformer_blocks[0].attn.forward, existing
-                    )
+                    self.assertIs(getattr(first, ATTENTION_METHOD), existing)
                     self.assertNotIn(
-                        "forward", model.decoder.transformer_blocks[1].attn.__dict__
+                        ATTENTION_METHOD, model.decoder.transformer_blocks[1].attn.__dict__
                     )
                     for block in model.decoder.transformer_blocks:
                         self.assertNotIn("forward", block.ff.__dict__)
                     self.assertFalse(model.decoder._forward_hooks)
                     self.assertFalse(model.quant_conv._forward_hooks)
                     factory.return_value.__exit__.assert_called_once()
-                    del model.decoder.transformer_blocks[0].attn.forward
+                    delattr(first, ATTENTION_METHOD)
 
     def test_partial_override_installation_rolls_back(self):
         decoder = make_decoder()
-        original = video_vae._temporary_forward
+        original = video_vae._temporary_attention_method
         count = 0
 
         @contextmanager
-        def fail_second(module, forward):
+        def fail_second(module, name, method):
             nonlocal count
             count += 1
             if count == 2:
                 raise RuntimeError("installation failed")
-            with original(module, forward):
+            with original(module, name, method):
                 yield
 
-        with mock.patch.object(video_vae, "_temporary_forward", fail_second):
+        with mock.patch.object(video_vae, "_temporary_attention_method", fail_second):
             with self.assertRaisesRegex(RuntimeError, "installation failed"):
                 with video_vae._decoder_overrides(decoder, "sdpa", torch.device("cpu")):
                     self.fail("must not execute")
         for block in decoder.transformer_blocks:
-            self.assertNotIn("forward", block.attn.__dict__)
+            self.assertNotIn(ATTENTION_METHOD, block.attn.__dict__)
             self.assertNotIn("forward", block.ff.__dict__)
 
     def test_backend_selection_is_scoped_to_one_decoder(self):
         decoder, other = make_decoder(), make_decoder()
-        original = other.transformer_blocks[0].attn.forward
+        original = getattr(other.transformer_blocks[0].attn, ATTENTION_METHOD)
         for backend in ("sdpa", "w8a8", "sage", "sdpa"):
             with mock.patch.object(
                 video_vae, "_attention_options", return_value={}
@@ -364,23 +368,40 @@ class MiniMaxVideoVAETest(unittest.TestCase):
                     decoder, backend, torch.device("cpu")
                 ):
                     self.assertIn(
-                        "forward", decoder.transformer_blocks[0].attn.__dict__
+                        ATTENTION_METHOD, decoder.transformer_blocks[0].attn.__dict__
                     )
-                    self.assertEqual(other.transformer_blocks[0].attn.forward, original)
+                    self.assertEqual(getattr(other.transformer_blocks[0].attn, ATTENTION_METHOD), original)
                 options.assert_called_once_with(backend, torch.device("cpu"))
             for block in decoder.transformer_blocks:
-                self.assertNotIn("forward", block.attn.__dict__)
+                self.assertNotIn(ATTENTION_METHOD, block.attn.__dict__)
 
-    def test_native_attention_never_replaces_upstream_forward(self):
+    def test_native_attention_keeps_the_upstream_method(self):
         decoder = make_decoder()
-        original = [block.attn.forward for block in decoder.transformer_blocks]
+        original = [getattr(block.attn, ATTENTION_METHOD) for block in decoder.transformer_blocks]
         with mock.patch.object(
             video_vae, "_attention_options", side_effect=AssertionError("no override")
         ):
             with video_vae._decoder_overrides(decoder, "native", torch.device("cpu")):
-                for block, forward in zip(decoder.transformer_blocks, original):
-                    self.assertEqual(block.attn.forward, forward)
-                    self.assertNotIn("forward", block.attn.__dict__)
+                for block, method in zip(decoder.transformer_blocks, original):
+                    self.assertEqual(getattr(block.attn, ATTENTION_METHOD), method)
+                    self.assertNotIn(ATTENTION_METHOD, block.attn.__dict__)
+
+    @unittest.skipUnless(hasattr(video_vae.h3_vae, "NonCausalViT3DDecoder"), "Sol-H3 required")
+    def test_noncausal_decoder_retains_native_window_execution(self):
+        vae = make_vae()
+        model = vae.first_stage_model
+        model.noncausal = True
+        model.decoder = video_vae.h3_vae.NonCausalViT3DDecoder(
+            in_channels=4, num_layers=1, heads=2, dim_head=32, operations=torch.nn
+        )
+        value = torch.zeros(1, 4, 1, 3, 4)
+        with (
+            mock.patch.object(vae, "decode", return_value=value) as decode,
+            mock.patch.object(video_vae, "_attention_options") as options,
+        ):
+            self.assertIs(video_vae.decode_video(vae, value, "w8a8"), value)
+        decode.assert_called_once_with(value)
+        options.assert_not_called()
 
     def test_pre_norm_cast_lives_through_fused_linear_and_releases_on_error(self):
         x = torch.rand(1, 3, 4)
@@ -579,8 +600,12 @@ class MiniMaxVideoVAETest(unittest.TestCase):
             value = torch.randn(1, 4, 2, 3, 4, device="cuda", dtype=torch.float16)
             original = value.clone()
             expected = decoder(value)
-            with video_vae._decoder_overrides(decoder, "sdpa", value.device):
+            with (
+                mock.patch.object(video_vae, "_attend", wraps=video_vae._attend) as attend,
+                video_vae._decoder_overrides(decoder, "sdpa", value.device),
+            ):
                 actual = decoder(value)
+            self.assertEqual(attend.call_count, len(decoder.transformer_blocks))
             torch.testing.assert_close(actual, expected, rtol=0, atol=0)
             torch.testing.assert_close(value, original, rtol=0, atol=0)
         stream.synchronize()

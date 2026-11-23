@@ -14,12 +14,14 @@ import comfy.samplers
 import comfy.utils
 import comfy.model_management
 import latent_preview
-from comfy.latent_formats import MiniMaxH3AV, MiniMaxH3Video
+from comfy.latent_formats import MiniMaxH3AV
 from comfy.ldm.minimax.model import FRAME_PER_TOKEN, FRAME_RESCALE
 from comfy.nested_tensor import NestedTensor
 
 from ...media.latent_masks import binary_video_latent_mask, _validate_mask_values
 from ...runtime.sampling import NativeStepSampler, SamplingProgress
+from .compat import is_h3_image_dit
+from .image_sampling import sample_legacy_h3_image
 from .sampling_sigmas import sampling_sigmas
 from .sampling_masks import close_patch_mask, low_resolution_mask
 from .latent_upscaler import (
@@ -64,10 +66,12 @@ def low_resolution_size(video, mode):
     )
 
 
-def needs_upscaler(latent, mode=None):
+def needs_upscaler(latent, mode=None, *, model=None):
     """Cheap lazy-loader decision; also used when executing a node outside a prompt."""
     mode = mode or {}
     if mode.get("mode", "single") == "single":
+        return False
+    if model is not None and is_h3_image_dit(model.get_model_object("diffusion_model")):
         return False
     video, _ = _latent_streams(latent)
     if tuple(video.shape[-2:]) == low_resolution_size(video, mode):
@@ -531,48 +535,6 @@ class H3SamplingTask:
         )
 
 
-def _sample_h3_image(model, conditioning, latent, seed, sampler_name, sigmas):
-    """H3-Image branch: plain single-frame latent sampling on the checkpoint's PDD grid.
-
-    The distilled per-step heads live inside the model itself and the stock
-    scheduler at the distilled step count lands on their sigma grid, so this
-    mirrors the core KSampler path (cfg 1, no negative prompt) for image
-    latents. tail_steps and the AV sampling modes do not apply here.
-    """
-    settings = sigmas or {}
-    steps = int(settings.get("steps", 6))
-    scheduler = settings.get("scheduler", "simple")
-    denoise = float(settings.get("denoise", 1.0))
-    latent_image = comfy.sample.fix_empty_latent_channels(
-        model,
-        latent["samples"],
-        latent.get("downscale_ratio_spacial", None),
-        latent.get("downscale_ratio_temporal", None),
-    )
-    noise = comfy.sample.prepare_noise(
-        latent_image, seed, latent.get("batch_index", None)
-    )
-    samples = comfy.sample.sample(
-        model,
-        noise,
-        steps,
-        1.0,
-        sampler_name,
-        scheduler,
-        conditioning,
-        [],
-        latent_image,
-        denoise=denoise,
-        noise_mask=latent.get("noise_mask"),
-        seed=seed,
-    )
-    out = latent.copy()
-    out.pop("downscale_ratio_spacial", None)
-    out.pop("downscale_ratio_temporal", None)
-    out["samples"] = samples
-    return out
-
-
 def sample_h3(
     model,
     conditioning,
@@ -584,17 +546,12 @@ def sample_h3(
     upscale_model=None,
 ):
     """Sample one final-size canvas; modes never accept a second latent/condition."""
-    latent_format = model.get_model_object("latent_format")
-    if not isinstance(latent_format, MiniMaxH3AV):
-        if isinstance(latent_format, MiniMaxH3Video):
-            return _sample_h3_image(
-                model=model,
-                conditioning=conditioning,
-                latent=latent,
-                seed=seed,
-                sampler_name=sampler_name,
-                sigmas=sigmas,
-            )
+    diffusion_model = model.get_model_object("diffusion_model")
+    if is_h3_image_dit(diffusion_model):
+        return sample_legacy_h3_image(
+            model, conditioning, latent, seed, sampler_name, sigmas, mode
+        )
+    if not isinstance(model.get_model_object("latent_format"), MiniMaxH3AV):
         raise ValueError("MiniMax H3 KSampler requires a MiniMax H3 MODEL.")
     mode = {} if mode is None else mode
     kind = mode.get("mode", "single")
@@ -651,7 +608,7 @@ def sample_h3(
         second_curve,
         mode,
         upscale_model,
-        tuple(model.get_model_object("diffusion_model").patch_size[1:]),
+        tuple(diffusion_model.patch_size[1:]),
         mask,
         audio_mask,
     )

@@ -28,19 +28,20 @@ or sampler. It exposes:
 
 | Input | Default | Meaning |
 | --- | --- | --- |
-| `enabled` | `true` | Enable model-local preparation and QKV input sharing. Disable for a matched DiT baseline. |
+| `enabled` | `true` | Enable the model adapter and QKV input sharing. Disable for a matched DiT baseline. |
 
 Keep the native `Qwen Image 2.1 Cache` node for cache device and storage dtype
-selection. The adapter preserves those settings. Setting the native device to
-`off` disables prefix reuse.
+selection. It is an upstream experimental node. The plugin's two Qwen Image
+2.1 nodes are regular nodes. Setting the native cache device to `off` disables
+prefix reuse.
 
-The conservative path skips unused reference/text projections and position-table
-construction after the native prefix cache hits. Compatible BF16 ConvRot W8
-Q/K/V projections share one activation quantization. Projection hooks, bypass
-LoRA forwards, input smoothing scales, or full-precision matmul requests use
-the native projection path. Attention/block patches that disable native prefix
-caching retain their original execution path. All cache slots live for one
-sampling run and are freed by ComfyUI's existing cleanup.
+Compatible BF16 ConvRot W8 Q/K/V projections share one activation quantization.
+Projection hooks, bypass LoRA forwards, input smoothing scales, or full-precision
+matmul requests use the native projection path. ComfyUI versions with writable
+DynamicVRAM KV slots retain their native model forward and cache lifecycle.
+The older ComfyUI path also skips unused reference and text projections and
+position-table construction after a prefix cache hit. ComfyUI owns cleanup on
+both paths.
 
 ## Local verification
 
@@ -49,6 +50,12 @@ cache invalidation, slot reuse, non-square targets, hooks, bypass-LoRA fallback
 and encoder scope. Positive-only conditioning is compared
 with the native node for multiple references, RGBA, non-square resizing, VAE
 references and vision-only inputs.
+
+On ComfyUI 0.46.0, a real two-reference 512-square generation on an A40 at
+CFG 1 and four steps verified that both modes hit the native DynamicVRAM KV
+cache. The optimized path shared QKV input quantization and produced the same
+latent and PNG as the native path, with allocator graph compilation disabled
+in both modes.
 
 After removing the computation-cache prototype: 1396 passed, 143 skipped,
 1457 subtests passed.

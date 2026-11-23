@@ -60,9 +60,9 @@ GET /models/diffusion_models
 
 ## 定义工作流与本地能力
 
-API v2 执行普通 ComfyUI API prompt 图，不依赖卡片、Canvas Inputs/Outputs、素材桩或
-服务端模板库。`template_id` 和 `/turing/templates` 已移除；旧版请求返回明确的协议错误。
-卡片编辑器和无限画布自己的模板、工作流和执行接口保持原样。
+API v2 执行普通 ComfyUI API prompt 图。旧 Canvas 项目若要继续使用，可在支持该格式的
+历史版本中导出需要的计算图，将素材桩替换成原生加载和保存节点，再在本地注册能力。
+原来的项目目录和素材由用户保管。
 
 项目能力由本地 `turing/capabilities/<name>/` 下的 `workflow.api.json`、
 `capability.json` 和 `USAGE.md` 定义。配置、素材、结果、运行记录和项目脚本都放在
@@ -256,7 +256,7 @@ HTTP 错误保留原 `error` 字符串，增加 `error_details` 对象：code、
 文件删除失败会显示 `cleanup_error` 并重试，不会伪装为已完成。
 
 启动时在开放任务请求之前清除全部上一轮会话目录。清理失败会使 API 保持不就绪，
-`GET /turing/server` 返回 503 和原因；普通画布、模型目录、模板库不属于清理目标。
+`GET /turing/server` 返回 503 和原因；清理范围是 API 任务目录。
 任务不跨重启恢复，旧 ID 在新进程中返回 404。
 
 `await client.restart()` 复用 Manager 的 `/manager/reboot`，只发送一次重启请求，

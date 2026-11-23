@@ -4,6 +4,8 @@ import hashlib
 import json
 from collections.abc import Mapping
 
+from ..adapters.minimax.reference_compression import migrate_reference_compression_inputs
+
 
 # Application -> (loader, worker, model socket, loader defaults).
 APPLICATIONS = {
@@ -33,12 +35,18 @@ def compile_shared_loaders(prompt):
     result = dict(prompt)
     shared = {}
     for node_id, node in prompt.items():
-        spec = APPLICATIONS.get(node.get("class_type"))
+        node_type = node.get("class_type")
+        if node_type == "TuringUtilsAttentionStrategy":
+            current_inputs = node.get("inputs", {})
+            migrated = migrate_reference_compression_inputs(current_inputs)
+            if migrated is not current_inputs:
+                result[node_id] = {**node, "inputs": migrated}
+        spec = APPLICATIONS.get(node_type)
         if spec is None:
             continue
         loader, worker, socket, defaults = spec
         inputs = dict(node.get("inputs", {}))
-        h3_sampler = node.get("class_type") == "TuringUtilsMiniMaxH3KSampler"
+        h3_sampler = node_type == "TuringUtilsMiniMaxH3KSampler"
         if h3_sampler and (
             {"latent_second", "conditioning_second", "second_sigmas", "model_name"}
             & inputs.keys()

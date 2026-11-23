@@ -8,6 +8,7 @@ from comfy_api.latest import io
 
 from . import INTERNAL_NODE_NOTE
 from .minimax import H3LatentUpscaleModel
+from ..adapters.minimax.image_sampling import sample_h3_image
 from ..adapters.minimax.latent_upscaler import load_h3_latent_upscaler
 from ..adapters.minimax.sampling_sigmas import (
     DEFAULT_SIGMAS,
@@ -152,6 +153,12 @@ def _mode_input(internal=False):
     )
 
 
+def _seed_input():
+    return io.Int.Input(
+        "seed", default=0, min=0, max=0xFFFFFFFFFFFFFFFF, control_after_generate=True
+    )
+
+
 def _schema(internal):
     return io.Schema(
         node_id=(
@@ -181,13 +188,7 @@ def _schema(internal):
                 "latent",
                 tooltip="Original final-size canvas with the timeline, audio and canonical mask. Low-resolution stages are derived internally.",
             ),
-            io.Int.Input(
-                "seed",
-                default=0,
-                min=0,
-                max=0xFFFFFFFFFFFFFFFF,
-                control_after_generate=True,
-            ),
+            _seed_input(),
             io.Combo.Input(
                 "sampler_name",
                 options=comfy.samplers.KSampler.SAMPLERS,
@@ -220,7 +221,9 @@ class _H3KSamplerApply(io.ComfyNode):
             for name, value in mode.items()
             if name in {"mode", "lowres_scale"}
         }
-        if upscale_model is None and needs_upscaler(latent, settings):
+        if upscale_model is None and needs_upscaler(
+            latent, settings, model=kwargs.get("model")
+        ):
             return ["upscale_model"]
         return []
 
@@ -241,8 +244,33 @@ class MiniMaxH3KSampler(io.ComfyNode):
         mode = dict(mode or {})
         name = mode.pop("model_name", "none")
         upscale_model = None
-        if name != "none" and needs_upscaler(kwargs["latent"], mode):
+        if name != "none" and needs_upscaler(
+            kwargs["latent"], mode, model=kwargs["model"]
+        ):
             upscale_model = load_h3_latent_upscaler(name, "auto")
         return io.NodeOutput(
             sample_h3(mode=mode, upscale_model=upscale_model, **kwargs)
         )
+
+
+class MiniMaxH3ImageKSampler(io.ComfyNode):
+    @classmethod
+    def define_schema(cls):
+        return io.Schema(
+            node_id="TuringUtilsMiniMaxH3ImageKSampler",
+            display_name="MiniMax H3 Image KSampler",
+            category="Turing Utils/MiniMax H3",
+            description="Sample one H3 Image latent with the checkpoint's PDD step count, Euler and CFG 1.",
+            inputs=[
+                io.Model.Input("model"),
+                io.Conditioning.Input("conditioning"),
+                io.Latent.Input("latent"),
+                _seed_input(),
+                io.Float.Input("denoise", default=1.0, min=0, max=1, step=0.01),
+            ],
+            outputs=[io.Latent.Output(display_name="latent")],
+        )
+
+    @classmethod
+    def execute(cls, model, conditioning, latent, seed, denoise=1.0):
+        return io.NodeOutput(sample_h3_image(model, conditioning, latent, seed, denoise))

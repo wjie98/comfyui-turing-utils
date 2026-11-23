@@ -31,6 +31,7 @@ def register_backend() -> bool:
             ShapeRule,
             ValidationResult,
         )
+        from comfy_kitchen.backends import cuda as kitchen_cuda
         from comfy_kitchen.registry import registry
     except ImportError:
         return False
@@ -52,6 +53,9 @@ def register_backend() -> bool:
     has_w4a8_kernel = _kernel_available()
     has_w4a4_quantizer = _kernel_available("turing_bf16_int4_convrot_quantize")
     has_codebook_w4a8_kernel = _kernel_available("turing_codebook_w4a8_linear")
+    has_kitchen_w6_gemv = getattr(kitchen_cuda, "_W4A8_CHUNKED", False) and callable(
+        getattr(getattr(kitchen_cuda, "_C", None), "w4a8_codebook_gemv", None)
+    )
 
     def require_convrot_256(kwargs):
         if kwargs.get("convrot") is not True:
@@ -156,6 +160,9 @@ def register_backend() -> bool:
             return ValidationResult.fail(
                 "out_dtype", "codebook W4A8 local output must be BF16"
             )
+        input_act = kwargs.get("input_act")
+        if input_act not in (None, "none", "swiglu", "gelu_tanh"):
+            return ValidationResult.fail("input_act", "activation is owned by Kitchen")
         x = kwargs.get("x")
         qdata = kwargs.get("qdata")
         codebook = kwargs.get("codebook")
@@ -174,10 +181,20 @@ def register_backend() -> bool:
             return ValidationResult.fail(
                 "codebook", "W4 requires 16 levels; W6 requires no codebook"
             )
-        if qdata.shape[0] % 8 or logical_k != x.shape[-1]:
+        input_width = 2 if input_act == "swiglu" else 1
+        if qdata.shape[0] % 8 or logical_k * input_width != x.shape[-1]:
             return ValidationResult.fail(
                 "qdata", "codebook W4A8 requires matching packed K and N%8=0"
             )
+        if (
+            has_kitchen_w6_gemv
+            and bits == 6
+            and x.numel() == x.shape[-1]
+            and s_rel.dtype == torch.float8_e4m3fn
+            and torch.cuda.get_device_capability(x.device) >= (8, 0)
+            and registry.is_available("cuda")
+        ):
+            return ValidationResult.fail("x", "single-row W6 uses Kitchen GEMV")
         return ValidationResult.ok()
 
     operations = {}

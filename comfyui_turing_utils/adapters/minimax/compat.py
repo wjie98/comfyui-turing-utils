@@ -4,6 +4,13 @@ from __future__ import annotations
 
 import inspect
 
+from comfy.ldm.minimax import model as minimax_model
+
+
+def is_h3_image_dit(diffusion_model) -> bool:
+    """H3 Image has its own DiT; the single-frame latent format is also used elsewhere."""
+    return isinstance(diffusion_model, getattr(minimax_model, "MiniMaxH3ImageModel", ()))
+
 
 def accepts_parameter(callable_object, name: str) -> bool:
     """Return whether ``callable_object`` exposes a named parameter."""
@@ -67,6 +74,7 @@ def keyframe_condition_rows(packed_layout_type, keyframes, frame_rows: int):
 
 __all__ = [
     "accepts_parameter",
+    "is_h3_image_dit",
     "keyframe_condition_rows",
     "make_packed_layout",
     "packed_layout_is_legacy",

@@ -187,13 +187,16 @@ def _projected_attention(module, query, key, value, rotary_pos_emb, options):
         if outcome.supported:
             return outcome.output.nan_to_num_(0.0)
 
-    query = comfy.rmsnorm.rms_norm(query, module.norm_q.weight, module.norm_q.eps)
-    key = comfy.rmsnorm.rms_norm(key, module.norm_k.weight, module.norm_k.eps)
-    if rotary_pos_emb is not None:
-        rot = rotary_pos_emb.shape[-3] * 2
-        query[..., :rot], key[..., :rot] = comfy.quant_ops.ck.apply_rope_split_half(
-            query[..., :rot], key[..., :rot], rotary_pos_emb
-        )
+    if rotary_pos_emb is not None and callable(getattr(module, "rms_rope", None)):
+        query, key = module.rms_rope(query, key, rotary_pos_emb)
+    else:
+        query = comfy.rmsnorm.rms_norm(query, module.norm_q.weight, module.norm_q.eps)
+        key = comfy.rmsnorm.rms_norm(key, module.norm_k.weight, module.norm_k.eps)
+        if rotary_pos_emb is not None:
+            rot = rotary_pos_emb.shape[-3] * 2
+            query[..., :rot], key[..., :rot] = comfy.quant_ops.ck.apply_rope_split_half(
+                query[..., :rot], key[..., :rot], rotary_pos_emb
+            )
 
     out = h3_vae.optimized_attention(
         AttentionTensorContainer(query.transpose(1, 2)),
@@ -206,13 +209,11 @@ def _projected_attention(module, query, key, value, rotary_pos_emb, options):
     return out.nan_to_num_(0.0)
 
 
-def _attention_forward(
+def _attend(
     module,
     x,
     rotary_pos_emb,
     pre_norm,
-    residual,
-    residual_scale,
     *,
     options,
 ):
@@ -226,7 +227,13 @@ def _attention_forward(
             pre_norm.eps,
         ).view(batch_size, seq_len, -1, 3 * module.dim_head)
     query, key, value = torch.chunk(qkv, 3, dim=-1)
-    out = _projected_attention(module, query, key, value, rotary_pos_emb, options)
+    return _projected_attention(module, query, key, value, rotary_pos_emb, options)
+
+
+def _attention_forward(
+    module, x, rotary_pos_emb, pre_norm, residual=None, residual_scale=None, *, options
+):
+    out = _attend(module, x, rotary_pos_emb, pre_norm, options=options)
     return comfy.ops.linear_input_act(
         module.to_out,
         out,
@@ -265,19 +272,19 @@ def _attention_options(attention, device):
 
 
 @contextmanager
-def _temporary_forward(module, forward):
+def _temporary_attention_method(module, name, method):
     # Restore the exact instance state, including any pre-existing wrapper.
     # Never patch a class or a process-global attention function.
-    had_override = "forward" in module.__dict__
-    previous = module.__dict__.get("forward")
-    module.forward = forward
+    had_override = name in module.__dict__
+    previous = module.__dict__.get(name)
+    setattr(module, name, method)
     try:
         yield
     finally:
         if had_override:
-            module.forward = previous
+            setattr(module, name, previous)
         else:
-            delattr(module, "forward")
+            delattr(module, name)
 
 
 @contextmanager
@@ -285,13 +292,22 @@ def _decoder_overrides(decoder, attention, device):
     if attention == "native":
         yield
         return
+    if isinstance(decoder, getattr(h3_vae, "NonCausalViT3DDecoder", ())):
+        LOG.warning_once("Sol-H3 VAE uses native window attention")
+        yield
+        return
     options = _attention_options(attention, device)
     with ExitStack() as stack:
         for block in decoder.transformer_blocks:
+            module = block.attn
+            name, method = (
+                ("attend", _attend)
+                if callable(getattr(module, "attend", None))
+                else ("forward", _attention_forward)
+            )
             stack.enter_context(
-                _temporary_forward(
-                    block.attn,
-                    partial(_attention_forward, block.attn, options=options),
+                _temporary_attention_method(
+                    module, name, partial(method, module, options=options)
                 )
             )
         yield
@@ -299,6 +315,12 @@ def _decoder_overrides(decoder, attention, device):
 
 def decode_video(vae, latent, attention="w8a8"):
     model = require_h3_video_vae(vae)
+    if getattr(model, "noncausal", False):
+        with (
+            _vae_operator_scope(),
+            _decoder_overrides(model.decoder, attention, vae.device),
+        ):
+            return vae.decode(latent)
     tile_total = _decode_tile_total(model, latent)
     LOG.debug(
         "H3 VAE decode: native ComfyUI lifecycle, attention=%s; "

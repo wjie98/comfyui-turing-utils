@@ -106,6 +106,12 @@ def _loaded_convrot_clip_summary(clip) -> ConvRotSummary:
     return _summarize_convrot_modules(clip.cond_stage_model)
 
 
+def _uses_nvfp4_emulation(device: torch.device) -> bool:
+    return device.type == "cuda" and not comfy.model_management.supports_nvfp4_compute(
+        device
+    )
+
+
 def validate_runtime_support(
     expected: ConvRotSummary,
     device: torch.device | None = None,
@@ -113,7 +119,7 @@ def validate_runtime_support(
     if expected.nvfp4:
         if device is None:
             device = comfy.model_management.get_torch_device()
-        if device.type == "cuda":
+        if _uses_nvfp4_emulation(device):
             load_nvfp4_backend().validate_runtime(device)
     if expected.w4a8 == 0 and expected.codebook_w4a8 == 0 and expected.w6a8 == 0:
         return
@@ -178,7 +184,8 @@ def load_convrot_model(
     )
     compute_dtype = select_compute_dtype(model_config, load_device)
     model_options = {"dtype": compute_dtype} if compute_dtype is not None else {}
-    if expected.nvfp4:
+    emulated_nvfp4 = expected.nvfp4 and _uses_nvfp4_emulation(load_device)
+    if emulated_nvfp4:
         # Comfy skips legacy metadata conversion when custom operations are supplied.
         state_dict, metadata = comfy.utils.convert_old_quants(
             state_dict, diffusion_model_prefix, metadata=metadata
@@ -221,7 +228,7 @@ def load_convrot_model(
     )
     install_dynamic_vram_sample_fence(model, load_device)
     apply_model_adapters(model, load_device)
-    if expected.nvfp4:
+    if emulated_nvfp4:
         install_nvfp4_mlp_fusions(model)
     apply_attention_backend(
         model,
@@ -283,7 +290,7 @@ def load_convrot_clip(
         state_dict, model_prefix="", metadata=metadata
     )
     model_options["quantization_metadata"] = {"mixed_ops": True}
-    if expected.nvfp4:
+    if expected.nvfp4 and _uses_nvfp4_emulation(load_device):
         model_options["custom_operations"] = nvfp4_operations(
             None, load_device, full_precision_mm=True
         )

@@ -30,6 +30,8 @@ LOG = get_logger("qwen_image21")
 OPTIONS_KEY = "turing_utils_qwen_image21"
 _PREPARED_KEY = "turing_utils_qwen_image21_target_pe"
 _PATCH_MARKER = "turing_utils_qwen_image21_forward"
+_FORWARD_INPUTS = ("x", "timesteps", "context", "ref_latents", "image_slots", "transformer_options")
+_ATTENTION_INPUTS = ("x", "pe", "attn_fn", "prefix_len", "transformer_options")
 
 
 def _enabled(options):
@@ -132,6 +134,7 @@ def _cast_linear(linear, x):
 
 def _make_attention_forward(module, original):
     original = OriginalMethod.capture(original, module)
+    container = getattr(qwen, "AttentionTensorContainer", None)
 
     def forward(self, x, pe, attn_fn, prefix_len, transformer_options={}):
         linears = (self.to_q, self.to_k, self.to_v)
@@ -165,8 +168,11 @@ def _make_attention_forward(module, original):
         finally:
             comfy.ops.uncast_bias_weight(self.norm_q, qw, None, qs)
             comfy.ops.uncast_bias_weight(self.norm_k, kw, None, ks)
+        if container is not None:
+            q, k, v = container(q), container(k), container(v)
         return self.to_out[0](attn_fn(q, k, v, self.heads, preferred_attention=self.comfy_attention))
 
+    setattr(forward, _PATCH_MARKER, True)
     return weak_method(forward, module)
 
 
@@ -175,18 +181,29 @@ def apply_qwen_image21_adapter(model, device):
     if qwen is None or type(root) is not qwen.QwenImage21Transformer2DModel:
         return 0
     current = model.get_model_object("diffusion_model._forward")
-    if getattr(current, _PATCH_MARKER, False):
-        return 0
-    if tuple(inspect.signature(current).parameters) != (
-            "x", "timesteps", "context", "ref_latents", "image_slots", "transformer_options", "kwargs"):
+    parameters = tuple(inspect.signature(current).parameters)
+    legacy = parameters == (*_FORWARD_INPUTS, "kwargs")
+    if not legacy and parameters != (*_FORWARD_INPUTS, "prefix_cache", "kwargs"):
         LOG.warning("Qwen Image 2.1 optimization skipped: forward contract changed")
         return 0
-    model.add_object_patch("diffusion_model._forward", _make_model_forward(root, current))
+    # Modern ComfyUI owns writable KV slots and their offload lifecycle. Its
+    # native forward must run even when QKV projections use our quantization.
+    if legacy and not getattr(current, _PATCH_MARKER, False):
+        model.add_object_patch("diffusion_model._forward", _make_model_forward(root, current))
+    count = 0
     for i, block in enumerate(root.transformer_blocks):
         name = f"diffusion_model.transformer_blocks.{i}.attn.forward"
-        model.add_object_patch(name, _make_attention_forward(block.attn, model.get_model_object(name)))
-    LOG.info("Qwen Image 2.1: reference preparation reuse and shared W8A8 QKV input on %d blocks", len(root.transformer_blocks))
-    return len(root.transformer_blocks)
+        current_attention = model.get_model_object(name)
+        if getattr(current_attention, _PATCH_MARKER, False):
+            continue
+        if tuple(inspect.signature(current_attention).parameters) != _ATTENTION_INPUTS:
+            continue
+        model.add_object_patch(name, _make_attention_forward(block.attn, current_attention))
+        count += 1
+    if count:
+        cache_path = "reference preparation reuse" if legacy else "native cache handling"
+        LOG.info("Qwen Image 2.1: shared W8A8 QKV input on %d blocks, %s", count, cache_path)
+    return count
 
 
 def configure(model, enabled):

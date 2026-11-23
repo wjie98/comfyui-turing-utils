@@ -7,7 +7,6 @@ import json
 import time
 
 from comfy_api.latest import io
-from ..runtime.node_context import current_binding, resolve_node_options
 from ..prompt.chat import (
     DEFAULT_CHAT_OPTIONS,
     DEFAULT_SYSTEM_PROMPT,
@@ -139,10 +138,6 @@ def _inline_chat_inputs():
 
 class MultimodalPromptChat(io.ComfyNode):
     @classmethod
-    def fingerprint_inputs(cls, **inputs):
-        return current_binding()
-
-    @classmethod
     def define_schema(cls):
         return io.Schema(
             node_id="TuringUtilsMultimodalPromptChat",
@@ -254,8 +249,6 @@ class MultimodalPromptChat(io.ComfyNode):
         thinking: bool | None = None,
         **chat_settings,
     ) -> io.NodeOutput:
-        resolved = resolve_node_options(dict(base_url=base_url, model=model, api_key=api_key))
-        base_url, model, api_key = (resolved[name] for name in ("base_url", "model", "api_key"))
         if not prompt.strip() and not system_prompt.strip():
             raise ValueError("prompt or system_prompt must not be empty")
         model = model.strip()

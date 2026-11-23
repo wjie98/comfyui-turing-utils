@@ -22,6 +22,17 @@ from comfyui_turing_utils.loading import convrot as loader
 
 
 class NVFP4LoaderTest(unittest.TestCase):
+    def test_native_fp4_device_does_not_require_the_emulation_kernel(self):
+        device = torch.device("cuda", 0)
+        with (
+            mock.patch.object(
+                loader.comfy.model_management, "supports_nvfp4_compute", return_value=True
+            ),
+            mock.patch.object(loader, "load_nvfp4_backend") as backend,
+        ):
+            loader.validate_runtime_support(loader.ConvRotSummary(nvfp4=1), device)
+        backend.assert_not_called()
+
     def test_node_does_not_expose_activation_scaling(self):
         self.assertNotIn(
             "activation_scaling", ConvRotDiffusionModelLoader.INPUT_TYPES()["required"]

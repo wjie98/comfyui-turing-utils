@@ -22,7 +22,11 @@ from .nodes.minimax_vae import (
     MiniMaxH3VideoVAEDecode,
     MiniMaxH3VideoVAEEncode,
 )
-from .nodes.minimax_sampler import MiniMaxH3KSampler, _H3KSamplerApply
+from .nodes.minimax_sampler import (
+    MiniMaxH3ImageKSampler,
+    MiniMaxH3KSampler,
+    _H3KSamplerApply,
+)
 from .nodes.minimax_references import (
     H3AudioReference,
     H3BuildConditioning,
@@ -82,6 +86,7 @@ NODE_CLASS_MAPPINGS = {
     "TuringUtilsMiniMaxH3LatentUpscale": MiniMaxH3LatentUpscale,
     "_TuringUtilsH3UpscaleApply": _H3UpscaleApply,
     "TuringUtilsMiniMaxH3KSampler": MiniMaxH3KSampler,
+    "TuringUtilsMiniMaxH3ImageKSampler": MiniMaxH3ImageKSampler,
     "_TuringUtilsH3KSamplerApply": _H3KSamplerApply,
     "TuringUtilsResizeImageIfPresent": ResizeImageIfPresent,
     "TuringUtilsVideoMotionContactSheet": VideoMotionContactSheet,
@@ -133,6 +138,7 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "TuringUtilsMiniMaxH3LatentUpscale": "MiniMax H3 Latent Upscale",
     "_TuringUtilsH3UpscaleApply": "MiniMax H3 Latent Upscale Apply (Internal)",
     "TuringUtilsMiniMaxH3KSampler": "MiniMax H3 KSampler",
+    "TuringUtilsMiniMaxH3ImageKSampler": "MiniMax H3 Image KSampler",
     "_TuringUtilsH3KSamplerApply": "MiniMax H3 KSampler Apply (Internal)",
     "TuringUtilsResizeImageIfPresent": "Resize Image If Present",
     "TuringUtilsVideoMotionContactSheet": "Video Motion Contact Sheet (Experimental)",
@@ -155,19 +161,6 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "_TuringUtilsSeCApply": "SeC Track Visual Concept Apply (Internal)",
 }
 
-from .workspace.nodes import PUBLIC_NODES as MATERIAL_NODES
-from .workspace.routes import install_routes
-from .workspace.cache import install_task_cleanup
 from .job_api.routes import install_routes as install_job_routes
 
-NODE_CLASS_MAPPINGS.update(MATERIAL_NODES)
-for _name in MATERIAL_NODES:
-    NODE_DISPLAY_NAME_MAPPINGS[_name] = (
-        f"{_name.removeprefix('TuringMaterial')} Material"
-    )
-install_routes()
-install_task_cleanup()
 install_job_routes()
-NODE_DISPLAY_NAME_MAPPINGS.update(
-    {"TuringCanvasInputs": "Canvas Inputs", "TuringCanvasOutputs": "Canvas Outputs"}
-)

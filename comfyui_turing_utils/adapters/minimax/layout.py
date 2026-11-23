@@ -1,8 +1,7 @@
 """Loader-independent MiniMax H3 attention layout publication.
 
 Sparse attention sees only the flattened packed token sequence.  This module
-bridges the official H3 runtime information (nested latent shapes and block
-``mod_segments``) into a small, per-forward ``transformer_options`` contract.
+bridges the official H3 packed layout into a per-forward attention contract.
 It deliberately contains no quantization, Turing, or custom-loader policy.
 """
 
@@ -24,7 +23,7 @@ from ...attention.layout import (
 )
 from ..methods import OriginalMethod, weak_method
 from .memory_state import ActivationRuntimePlan
-from .compat import accepts_parameter, make_packed_layout
+from .compat import accepts_parameter, is_h3_image_dit, make_packed_layout
 from .reference_compression import restore_reference_times
 
 
@@ -245,9 +244,10 @@ def _append_reference_video_segments(translated, start: int, stop: int, frames: 
         translated.append((stop - tokens_per_frame, stop, "reference_video_anchor"))
 
 
-def minimax_attention_segments(base_model):
+def minimax_attention_segments(base_model, *, packed_layout=None):
     """Translate H3's PackedLayout into model-independent modality spans."""
-    packed_layout = _runtime_packed_layout(base_model)
+    if packed_layout is None:
+        packed_layout = _runtime_packed_layout(base_model)
     packed_segments = getattr(packed_layout, "segments", None)
     if not isinstance(packed_segments, (list, tuple)) or not packed_segments:
         return ()
@@ -289,30 +289,41 @@ def minimax_attention_segments(base_model):
     return tuple(translated)
 
 
-def minimax_temporal_topology(base_model, diffusion_model, mod_segments):
-    """Describe the contiguous target-video tail of the current H3 sequence."""
+def minimax_temporal_topology(
+    base_model, diffusion_model, mod_segments, *, image_layout=None
+):
+    """Describe the contiguous target visual grid of the current H3 sequence."""
     if base_model is None or diffusion_model is None or not mod_segments:
-        return {}
-    latent_shapes = _runtime_latent_shapes(base_model)
-    if not isinstance(latent_shapes, (list, tuple)) or not latent_shapes:
-        return {}
-    video_shape = tuple(int(value) for value in latent_shapes[0])
-    if len(video_shape) != 5:
         return {}
     patch_size = tuple(int(value) for value in diffusion_model.patch_size)
     if len(patch_size) != 3 or any(value <= 0 for value in patch_size):
         return {}
+
+    if image_layout is not None:
+        _, latent_t, latent_h, latent_w, audio_t = image_layout.signature
+        start, stop, kind = image_layout.segments[-1]
+        if latent_t != 1 or audio_t or kind != "video":
+            return {}
+    else:
+        latent_shapes = _runtime_latent_shapes(base_model)
+        if not isinstance(latent_shapes, (list, tuple)) or not latent_shapes:
+            return {}
+        video_shape = tuple(int(value) for value in latent_shapes[0])
+        if len(video_shape) != 5:
+            return {}
+        _, _, latent_t, latent_h, latent_w = video_shape
+        start, stop = mod_segments[-1][:2]
+
     pt, ph, pw = patch_size
-    frames = math.ceil(video_shape[2] / pt)
-    spatial_tokens_height = math.ceil(video_shape[3] / ph)
-    spatial_tokens_width = math.ceil(video_shape[4] / pw)
+    frames = math.ceil(latent_t / pt)
+    spatial_tokens_height = math.ceil(latent_h / ph)
+    spatial_tokens_width = math.ceil(latent_w / pw)
     tokens_per_frame = spatial_tokens_height * spatial_tokens_width
     topology_tokens = frames * tokens_per_frame
-    topology_start = int(mod_segments[-1][0])
-    if int(mod_segments[-1][1]) - topology_start != topology_tokens:
+    if int(stop) - int(start) != topology_tokens:
         return {}
     return {
-        "topology_start_tokens": topology_start,
+        "topology_start_tokens": int(start),
         "topology_tokens": topology_tokens,
         "tokens_per_frame": tokens_per_frame,
         "spatial_tokens_height": spatial_tokens_height,
@@ -320,11 +331,8 @@ def minimax_temporal_topology(base_model, diffusion_model, mod_segments):
     }
 
 
-def _reference_topologies(base_model):
+def _reference_topologies(base_model, packed):
     runtime = getattr(base_model, RUNTIME_CONTEXT_ATTR, None)
-    packed = _runtime_packed_layout(base_model)
-    if packed is None:
-        return ()
     cached = runtime.get("reference_topologies") if isinstance(runtime, dict) else None
     if cached is not None and cached[0] is packed:
         return cached[1]
@@ -357,8 +365,27 @@ def publish_minimax_attention_layout(
     """Publish exact H3 packed-sequence semantics for one transformer block."""
     if not isinstance(transformer_options, dict) or not mod_segments:
         return False
-    topology = minimax_temporal_topology(base_model, diffusion_model, mod_segments)
-    raw_segments = minimax_attention_segments(base_model)
+    image = is_h3_image_dit(diffusion_model)
+    packed = (
+        transformer_options.get("minimax_h3_layout")
+        if image
+        else _runtime_packed_layout(base_model)
+    )
+    raw_segments = (
+        minimax_attention_segments(base_model, packed_layout=packed)
+        if packed is not None
+        else ()
+    )
+    topology = (
+        minimax_temporal_topology(
+            base_model,
+            diffusion_model,
+            mod_segments,
+            image_layout=packed if image else None,
+        )
+        if raw_segments
+        else {}
+    )
     if not topology or not raw_segments:
         expected_layout = {
             "provider": MINIMAX_H3_LAYOUT_KIND,
@@ -368,7 +395,7 @@ def publish_minimax_attention_layout(
         }
     else:
         topology_id = "target_video"
-        references = _reference_topologies(base_model)
+        references = _reference_topologies(base_model, packed)
         segments = tuple(
             AttentionSegment.for_role(
                 start,

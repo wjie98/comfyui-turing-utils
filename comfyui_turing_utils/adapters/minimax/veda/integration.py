@@ -12,6 +12,7 @@ from ....attention.protocol import AttentionExecutionOutcome
 from ....attention.sparse_runtime import SparseProtection, SparseSchedule
 from ....kernel_api import kernel_extension_has_symbol
 from ..layout import is_minimax_h3_model
+from ..compat import is_h3_image_dit
 from .engine import VedaConfig, attend
 from .predictor import load_bundle
 from ....log import get_logger
@@ -191,6 +192,8 @@ def configure(
                                   sparse_reference_audio)
     if not is_minimax_h3_model(model):
         raise ValueError("Configure H3 Veda Sparse Attention requires MiniMax H3")
+    if is_h3_image_dit(model.model.diffusion_model):
+        raise ValueError("Veda predictors are currently supported for MiniMax H3 AV only.")
     if plan_policy not in ("nearest", "strict"):
         raise ValueError("Veda plan_policy must be nearest or strict")
     required = (

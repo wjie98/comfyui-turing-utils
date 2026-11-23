@@ -90,7 +90,6 @@ class NodeConfigurationTest(unittest.TestCase):
                 "Bernini",
                 "Krea2",
                 "Workflow",
-                "Materials",
             },
         )
         self.assertEqual(AttentionStrategy.GET_SCHEMA().category, "Turing Utils/Models")

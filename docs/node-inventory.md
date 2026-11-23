@@ -1,21 +1,20 @@
 # Turing Utils 节点清单
 
-当前开发工作树有 **46 个公开节点、15 个隐藏内部执行节点**（不含按需注册的素材计算适配类）。
+当前开发工作树有 **43 个公开节点、6 个隐藏内部执行节点**。
 右键菜单只使用 `Turing Utils/分类` 一层子目录，搜索仍可按节点名定位。
 
 ## 完整公开清单
 
 | 分类 | 数量 | 节点 |
 |---|---:|---|
-| Models | 3 | Load ConvRot DiT；Load ConvRot CLIP；Configure Attention Strategy |
+| Models | 5 | Load ConvRot DiT；Load ConvRot CLIP；Configure Attention Strategy；Qwen Image 2.1 多图优化；Qwen Image 2.1 多图条件 |
 | Prompt | 1 | Multimodal Prompt Chat |
 | Video | 13 | Video Frames Padding；Resize Image If Present；Video Motion Contact Sheet；Load Indexed Video Segment；Save Indexed Video Segment；Merge Indexed Video Segments；Video Prefix Context Noise；Video Continuation Concat；Trim Video Continuation Prefix；H3 Set Audio Prefix Noise Mask；Video Mask Guided Crop；Video Mask Guided Stitch；Video Pad For Outpaint |
 | Mask | 4 | Set Video Latent Noise Mask；Video Latent Composite Masked；Mask to Visual Prompts；SeC Track Visual Concept |
-| MiniMax H3 | 12 | H3 Add Noise；H3 Latent Info；H3 Keyframe Reference；H3 Image Reference；H3 Video Reference；H3 Audio Reference；H3 Semantic Reference；H3 Build Conditioning；MiniMax H3 KSampler；MiniMax H3 Latent Upscale；MiniMax H3 Video VAE Encode；MiniMax H3 Video VAE Decode |
+| MiniMax H3 | 13 | H3 Add Noise；H3 Latent Info；H3 Keyframe Reference；H3 Image Reference；H3 Video Reference；H3 Audio Reference；H3 Semantic Reference；H3 Build Conditioning；MiniMax H3 KSampler；MiniMax H3 Image KSampler；MiniMax H3 Latent Upscale；MiniMax H3 Video VAE Encode；MiniMax H3 Video VAE Decode |
 | Bernini | 2 | Bernini Context Windows；Bernini Inpaint Condition |
 | Krea2 | 1 | Krea2 Identity Edit Conditioning |
 | Workflow | 4 | Is Input Present；Lazy If / Else；Stage Barrier；Sigmas To String |
-| Materials | 6 | Text Material；Image Material；Video Material；Audio Material；Canvas Inputs；Canvas Outputs |
 
 H3 音频保护节点放在 Video，与延续拼接、截断工具相邻。
 Sigmas To String 将原生 SIGMAS 转为可复制的十进制 STRING，正向转换复用官方 ManualSigmas。
@@ -44,12 +43,9 @@ H3 KSampler 的主曲线 scheduler/manual 和单段/渐进/二采使用原生 Dy
 显示名统一以 (Internal) 结尾，节点说明标注内部用途，公开入口保留原名。
 Chat 的原 Options 参数为高级参数；H3 KSampler 的采样模式和曲线使用原生动态分支；
 其余普通节点完全使用原生参数布局，
-不再排序、修补输入接口或迁移旧工作流。SeC/Crop 接线后的控件行为交由 ComfyUI。
+SeC/Crop 接线后的控件行为交由 ComfyUI。
 H3 Keyframe Reference 固定三组输入/输出，Stage Barrier 固定八组输入/输出；
 未连接的位置保持为空，不再动态增减输出。
-素材画布另外使用八个读写单元、Canvas Chat 内部单元，以及按需计算适配类。
-旧画布专用的 H3 准备、收尾和 Refiner 单元已删除；卡片内使用普通工作流节点。
-素材节点使用普通 ComfyUI 类型，带双端点的独立工作流复制为卡片，内部可有子图；详见[画布使用说明](material-canvas.md)。
 内部单元不是正常用户入口，仅按原生开发者模式规则显示。
 加载/应用使用新的私有 ID，旧加载入口不再注册。
 
@@ -72,11 +68,3 @@ H3 Keyframe Reference 固定三组输入/输出，Stage Barrier 固定八组输�
 - AV 模板使用官方音频编码与 AV 拼接，音频保护单独设置。
 - 文件读写/合并、裁剪/回贴、前缀加噪、截断、mask 获取和采样调度仍独立；
   它们具有不同执行位置、缓存与副作用。
-
-## 后续建议
-
-普通工作流继续使用可组合节点和子图。新画布使用 IMAGE/VIDEO/AUDIO/STRING
-素材边界与局部任务执行语义，
-不把模型、LoRA 或提示词变更当成素材变更，也不自动使下游失效。
-先验证画布的 H3/SeC 真机生成、片段时间对齐和结果版本操作，再扩展素材管理交互；
-不要为了减少可见节点而丢失内部编码缓存，也暂不继续叠加低收益实验策略。

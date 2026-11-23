@@ -668,6 +668,10 @@ def codebook_w4a8_linear(
     convrot_groupsize: int = 256,
     out_dtype: torch.dtype = torch.bfloat16,
     input_act: str | None = None,
+    input_act_weight: torch.Tensor | None = None,
+    input_act_eps: float = 0.0,
+    residual: torch.Tensor | None = None,
+    residual_scale: torch.Tensor | None = None,
 ) -> torch.Tensor:
     """Run packed W4/W6 + grouped scales through the shared INT8 family."""
     from comfy_kitchen.backends import cuda as kitchen_cuda
@@ -679,7 +683,10 @@ def codebook_w4a8_linear(
     # original 2K input.  Using x.shape[-1] directly rejects the native path
     # for every fused MLP fc2 and sends SM75 to Kitchen's 64-KiB shared-memory
     # fallback, which the 2080 Ti cannot opt into.
-    linear_input_channels = x.shape[-1] // 2 if input_act == "swiglu" else x.shape[-1]
+    if input_act not in (None, "none", "swiglu", "gelu_tanh"):
+        x = apply_input_act(x, input_act, input_act_weight, input_act_eps)
+        input_act = None
+    input_width = 2 if input_act == "swiglu" else 1
     _, logical_k, bits = grouped_weight_geometry(qdata.shape, s_rel.shape, group_size)
     valid_codes = (bits == 4 and codebook is not None and codebook.numel() == 16) or (
         bits == 6 and codebook is None
@@ -694,11 +701,11 @@ def codebook_w4a8_linear(
         and s_rel.dtype in {torch.float8_e4m3fn, torch.float32}
         and qdata.ndim == 2
         and qdata.shape[0] % 8 == 0
-        and logical_k == linear_input_channels
+        and logical_k * input_width == x.shape[-1]
     )
     if not fast_path:
         x = apply_input_act(x, input_act)
-        return kitchen_cuda.w4a8_int8_linear(
+        result = kitchen_cuda.w4a8_int8_linear(
             x,
             qdata,
             s_rel,
@@ -711,28 +718,29 @@ def codebook_w4a8_linear(
             out_dtype=out_dtype,
         )
 
-    original_shape = x.shape
-    x2d = x.reshape(-1, original_shape[-1]).contiguous()
-    if input_act not in (None, "none", "swiglu", "gelu_tanh"):
-        x2d = apply_input_act(x2d, input_act)
-        input_act = None
-    qactivation, activation_scale = _quantize_turing_int8_activation(
-        x2d,
-        convrot_groupsize,
-        input_act=input_act,
-    )
-    operation = _kernel_op("turing_codebook_w4a8_linear")
-    output = operation(
-        qactivation,
-        qdata,
-        activation_scale,
-        s_rel,
-        s_channel,
-        codebook,
-        bias,
-        group_size,
-    )
-    return output.reshape(*original_shape[:-1], qdata.shape[0])
+    else:
+        x2d = x.reshape(-1, x.shape[-1]).contiguous()
+        qactivation, activation_scale = _quantize_turing_int8_activation(
+            x2d,
+            convrot_groupsize,
+            input_act=input_act,
+        )
+        operation = _kernel_op("turing_codebook_w4a8_linear")
+        result = operation(
+            qactivation,
+            qdata,
+            activation_scale,
+            s_rel,
+            s_channel,
+            codebook,
+            bias,
+            group_size,
+        ).reshape(*x.shape[:-1], qdata.shape[0])
+    if residual is not None:
+        from comfy_kitchen.backends._activations import apply_residual
+
+        return apply_residual(result, residual, residual_scale)
+    return result
 
 
 def convrot_w4a4_linear(

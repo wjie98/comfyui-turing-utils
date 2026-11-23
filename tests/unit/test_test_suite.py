@@ -12,14 +12,6 @@ def test_explicit_file_and_node_id_do_not_add_the_whole_directory():
     assert suite.explicit_targets(["-k", "tests/keyword", "-m", "gpu"]) == []
 
 
-def test_quick_workspace_does_not_collect_gpu_or_all_tests():
-    selected = suite.select(["web/workspace/parameters.js"])
-    assert selected.areas == ("workspace",)
-    assert selected.frontend
-    assert "tests" not in selected.targets
-    assert not any("gpu/" in path for path in selected.targets)
-
-
 def test_api_uses_progress_and_native_http_tests_without_gpu_matrix():
     selected = suite.select(["comfyui_turing_utils/job_api/progress.py"])
     assert selected.areas == ("api",)
@@ -37,10 +29,11 @@ def test_extracted_owners_retain_their_execution_and_persistence_coverage():
     assert suite.areas_for(
         "comfyui_turing_utils/adapters/minimax/sampling_masks.py"
     ) == {"sampling"}
-    selected = suite.select(["comfyui_turing_utils/workspace/template_files.py"])
-    assert set(selected.areas) == {"workspace", "api"}
-    assert "tests/workspace/test_storage.py" in selected.targets
-    assert "tests/workspace/test_execution.py" in selected.targets
+    selected = suite.select(["comfyui_turing_utils/runtime/shared_loaders.py"])
+    assert set(selected.areas) == {"sampling", "api"}
+    assert "tests/sampling/test_h3_sampling.py" in selected.targets
+    assert any(path.startswith("tests/test_job_api.py::") for path in selected.targets)
+
 
 
 def test_shared_contracts_and_unknown_runtime_code_expand_scope():
@@ -69,12 +62,6 @@ def test_pytest_output_paths_are_not_mistaken_for_test_targets():
         )
         == []
     )
-
-
-def test_frontend_harness_changes_keep_gpu_matrix_out_and_state_changes_get_smoke():
-    selected = suite.select(["tests/browser/harness.mjs", "web/workspace/documents.js"])
-    assert selected.areas == ("workspace",)
-    assert selected.browser == ("template_autosave.mjs",)
 
 
 def test_changed_paths_preserve_both_rename_owners_and_untracked_files(tmp_path):

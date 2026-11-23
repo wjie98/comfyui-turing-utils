@@ -6,6 +6,7 @@ from dataclasses import dataclass
 
 W4_FORMAT = "convrot_w4a4"
 GROUPED_INT8_FORMAT = "asym_w4a8_int8"
+W6_FORMAT = "w6a8_int8"
 W8_FORMAT = "int8_tensorwise"
 LEGACY_W8_FORMAT = "int8_rowwise"
 NVFP4_FORMAT = "nvfp4"
@@ -88,6 +89,9 @@ def describe_weight_storage(weight) -> WeightStorage | None:
 
 def convrot_storage_kind(weight) -> str | None:
     """Formats supported by the local ConvRot family; no dtype requirement."""
+    params = getattr(weight, "_params", None)
+    if getattr(params, "mma_packed", False) or getattr(params, "tiled", False):
+        return None
     storage = describe_weight_storage(weight)
     if storage is None or storage.transposed or storage.rotation_group != 256:
         return None

@@ -14,36 +14,11 @@ if str(ROOT) not in sys.path:
 
 
 class PackageArchitectureTest(unittest.TestCase):
-    def test_canvas_routes_have_no_retired_duplicate_entrypoints(self):
-        source = ROOT / "comfyui_turing_utils/workspace/routes.py"
-        routes = {
-            node.args[1].value
-            for node in ast.walk(ast.parse(source.read_text()))
-            if isinstance(node, ast.Call)
-            and isinstance(node.func, ast.Name)
-            and node.func.id == "endpoint"
-        }
-        retired = {
-            "/protocol",
-            "/project/statistics",
-            "/project",
-            "/card/connect",
-            "/text",
-            "/run",
-            "/metadata",
-            "/compile",
-            "/card/plan",
-        }
-        self.assertFalse(routes & retired)
-        self.assertTrue(
-            {"/select", "/selection", "/project/save", "/task/start", "/task/status"}
-            <= routes
-        )
-
-    def test_frontend_extension_is_registered(self):
+    def test_plugin_has_no_workspace_or_frontend_runtime(self):
         source = (ROOT / "__init__.py").read_text(encoding="utf-8")
-        self.assertIn('WEB_DIRECTORY = "./web"', source)
-        self.assertTrue((ROOT / "web" / "chat_advanced.js").is_file())
+        self.assertNotIn("WEB_DIRECTORY", source)
+        self.assertFalse((ROOT / "web").exists())
+        self.assertFalse((ROOT / "comfyui_turing_utils" / "workspace").exists())
 
     def test_kernel_package_is_accessed_only_through_facade(self):
         package = ROOT / "comfyui_turing_utils"
@@ -162,6 +137,7 @@ class PackageArchitectureTest(unittest.TestCase):
                 "TuringUtilsMiniMaxH3LatentUpscale",
                 "_TuringUtilsH3UpscaleApply",
                 "TuringUtilsMiniMaxH3KSampler",
+                "TuringUtilsMiniMaxH3ImageKSampler",
                 "_TuringUtilsH3KSamplerApply",
                 "TuringUtilsResizeImageIfPresent",
                 "TuringUtilsVideoMotionContactSheet",
@@ -182,12 +158,6 @@ class PackageArchitectureTest(unittest.TestCase):
                 "_TuringUtilsSeCLoader",
                 "TuringUtilsSeCTrackVisualConcept",
                 "_TuringUtilsSeCApply",
-                "TuringMaterialText",
-                "TuringMaterialImage",
-                "TuringMaterialVideo",
-                "TuringMaterialAudio",
-                "TuringCanvasInputs",
-                "TuringCanvasOutputs",
             ),
         )
 

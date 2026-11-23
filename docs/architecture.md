@@ -20,7 +20,7 @@ comfyui-turing-utils/
 │   ├── nodes/                   # thin ComfyUI schemas
 │   ├── media/                   # sampling, geometry, masks, timelines and files
 │   ├── prompt/                  # multimodal request construction and transport
-│   ├── workspace/               # material storage, card projection and local execution
+│   ├── job_api/                 # temporary API jobs and native queue integration
 │   ├── runtime/                 # device/kernel capability resolution and diagnostics
 │   ├── hardware.py
 │   ├── kernel_api.py            # independent-kernel boundary
@@ -36,7 +36,7 @@ comfyui-turing-utils/
 │   ├── scripts/                 # validation and benchmarks
 │   └── setup.py
 ├── docs/
-├── web/                         # native-editor extensions and small shared UI helpers
+├── skills/turing-workflow/       # portable agent client and project capabilities
 └── tests/
 ```
 
@@ -49,7 +49,7 @@ genuinely new responsibility.
 ```text
 ComfyUI registration and nodes
         ↓
-media / prompt / workspace services
+media / prompt services
         ↓
 loading orchestration ─────────────→ model adapters
         ↓                              ↓
@@ -113,30 +113,17 @@ effects.
 | `adapters/bernini.py` | Bernini context-window and absolute-RoPE integration |
 | `nodes/` | thin ComfyUI schemas and calls into the implementation packages |
 | `media/` | reusable image/video sampling, geometry, mask mapping, file and timeline operations |
-| `prompt/chat.py` | chat options, presentation, request/response handling and transport |
-| `workspace/` | project-owned material storage, native graph projection, card validation and segment compilation |
-| `workspace/transactions.py`, `template_files.py` | recoverable file journals/shared lock and card-library persistence; HTTP adapters delegate file operations |
-| `web/workspace/` | request feedback, project save ordering and material-control resource ownership |
-| `web/lib/` | native combo adaptation, directory selection, endpoint interaction and port reordering |
+| `prompt/chat.py` | chat options, media, request/response handling and transport |
+| `job_api/` | native workflow requests, temporary artifacts, progress and discovery |
 
 `hardware.py` owns architecture facts. `runtime/capabilities.py` combines those
 facts with operator-level ABI probes without launching CUDA. `kernel_api.py` is the only module
 allowed to import the independently installed kernel package. `registration.py`
 is the only node mapping table.
 
-Document saves and execution share `settleProjectState` in the frontend project
-state owner. It drains material mutations before parameter writes and reports
-unresolved save failures before a snapshot is submitted. Snapshot capture still
-has its own serialization queue because ComfyUI's active graph is shared.
-
 Testing entry points, quick selection, full matrices, and coverage ownership are
 documented in [testing.md](testing.md). Tests do not initialize the plugin root
 implicitly; scoped fixtures own native runtime setup.
-
-Dynamic input restoration preserves existing wires before native widget setters
-rebuild nested branches. Saved links temporarily leave the slots being rebuilt,
-then return by input name when configure finishes. This applies only to configure;
-ordinary branch edits keep native connection-removal behavior.
 
 H3 sampling separates task progress from numerical solver state. One
 `H3SamplingTask` owns both stages and their clean upscale/mask handoff;
@@ -168,14 +155,6 @@ is no second `use_w8a8` override at the strategy boundary. Their scheduling and
 dense fallback contracts remain shared, while their distinct routing policies
 stay explicit. Ordinary node input names, order and defaults are unchanged.
 
-Canvas retains only the native-editor API. Opening a project derives lightweight
-card descriptors from one request-local project snapshot; it does not flatten
-computation graphs. Insertion reads only the new card. Execution expands only
-the target card and reads other cards through their published material selections.
-Layout saves validate connected interfaces without expanding computation graphs.
-File-format hashes, revision checks and server-side types remain authoritative.
-No persistent execution-graph cache or additional model-weight cache is introduced.
-
 Sparse attention remains explicit and is never selected by a loader backend.
 Model-specific topology is installed through the attention-layout provider
 registry, so the official ComfyUI loader and ConvRot loader follow the same path.
@@ -183,9 +162,8 @@ Model-side fused Q/K handoff is installed through a separate attention-site
 registry. This lets dense and Sol backends request the same H3 or Wan/Bernini
 integration without importing either model family into generic attention code.
 
-## Material and prompt ownership
+## Media and prompt ownership
 
-Media operations no longer import ComfyUI node schemas or Canvas services.
 The same sampling and resizing code serves contact sheets, multimodal chat and
 ordinary media nodes. Native model-specific encoding remains in its adapter.
 Do not force distinct mask policies into one implicit broadcast rule:
@@ -202,103 +180,10 @@ belong in `nodes/multimodal_chat.py`. H3 reference encoding follows the same
 service/schema separation. Import data records from their owning adapter, not
 from the node module that happens to consume them.
 
-## Canvas boundaries
-
-| Module | Owns |
-|---|---|
-| `workflow_files.py` | ordinary workflow serialization and instance-file operations |
-| `transactions.py` | shared file lock, atomic writes and recoverable project commit journals |
-| `template_files.py` | card-library reading, revision checks, save/rename and recoverable deletion |
-| `projection.py` | lightweight display descriptors or explicitly requested execution expansion |
-| `compiler.py`, `tasks.py` | material-boundary graph cuts and validated task creation |
-| `execution.py` | server-owned operations, dependency waits and the single native-queue adapter |
-| `cache.py` | task-scoped intermediate eviction; preserves native node identity and model preparation |
-| `store.py`, `runs.py` | media index, selection revisions and recoverable publication |
-| `materials.py` | native media loading, import copying, serialization and selected-content decoding |
-| `material_execution.py` | selected-content reads and revision-checked publication, without node schemas |
-| `previews.py` | lazy still posters with bounded concurrent decoding and request deduplication |
-| `directories.py`, `routes.py` | instance-owned filesystem operations and HTTP adapters respectively |
-| `web/workspace/project_state.js` | per-project save queue and request-local native graph snapshots |
-| `web/workspace/card_nodes.js` | native card/project presentation, with service-owned action callbacks |
-| `web/workspace/execution.js` | task requests, publication display and reconnect observation; no inference scheduler |
-| `web/workspace/material_controls.js` | native controls, posters and one active on-demand player |
-| `web/workspace/api.js` | API transport and native feedback |
-| `web/lib/native_graph.js` | isolated frontend-version workarounds for dynamic restoration and nested conversion |
-| `web/lib/input_slots.js`, `serial_writes.js` | shared link migration and ordered-write failure contracts; no project/UI ownership |
-
-Material and project writes share one small queue primitive, not one combined
-queue: selection commits can autosave layout without waiting on themselves.
-Failed parameter or setting writes remain execution blockers until that same
-field succeeds; unrelated saves cannot silently clear them. The native graph
-adapter uses indexed link lookup for normal restoration and scans only when a
-clone has extra, not-yet-rehydrated input slots. It is a removable frontend
-1.53.6 workaround, not a second graph editor or a general monkey-patch framework.
-
-The browser submits one operation, not one prompt per material. The server freezes
-workflow parameters and the pixel limit, then runs boundaries on ComfyUI's existing
-single worker. Random controls are sampled once per logical segment and reused
-when missing material becomes available. Native lazy evaluation decides which
-absent boundary is actually needed; unused branches never generate or wait.
-Batch targets share one frozen graph, with separate selection maps rather than
-deep copies of the entire workflow for every material.
-Input readers carry the material's stable identity, not a submit-time filename
-or text value. Each native reader resolves the current selected content when it
-first executes, including changes made while queued. The logical continuation
-retains successful reads across dependency retries; subsequent tasks resolve
-again. A resumed reader also changes its native cache-key state so blocked model
-preparation entries cannot survive publication with stale blocker outputs.
-Concurrent callers share a material execution. A downstream request made while
-its source is running waits for that publication instead of reading the old file.
-Browser disconnects do not cancel inference. A server restart marks interrupted
-operations explicitly; it does not silently replay them.
-
-Task compilation completes before a prepared run is recorded. Publication
-records a SQLite intent before updating `canvas.json`; retry or reopening can
-finish an interrupted publication. Selection revisions prevent a delayed run
-from replacing a newer manual choice. Text remains inline in the canvas file;
-the temporary publication payload is cleared on completion.
-Card-file and canvas-manifest writes have a separate recoverable JSON commit
-journal. Reopening finishes only the intended writes; externally changed files
-stop recovery and preserve the journal for inspection.
-Card edit revisions hash the same bytes returned to the editor, under the
-manifest lock. Damaged derived API metadata does not prevent opening native
-workflow content for repair. Canvas layout sockets carry stable port IDs;
-indices are never reinterpreted against a newer reordered interface. Invisible
-bindings on broken cards survive unrelated layout saves, but explicit deletion
-or destination reconnection still takes effect.
-
-Model and LoRA preparation still use ComfyUI's existing owners and shared loader
-identities. `workspace/cache.py` is the isolated, version-sensitive integration
-with the executor's intermediate cache. Do not spread private executor calls or
-global cache clearing into media, UI or model services.
-Ordinary `class_type` values remain unchanged. Stage Barrier and shared-loader
-transforms run before the material cut; only task-owned intermediates bypass
-local/external cache reuse. Ordinary workflow provider behavior is unchanged.
-Canvas material and Chat nodes keep their public types, inputs and outputs.
-Request-local bindings in the compiled prompt carry roles and project identity;
-native node fingerprints include these bindings so dependency resume also
-invalidates blocked model preparation. `runtime/node_context.py` scopes binding
-lookup to the native prompt/node identity and shares only its ContextVar across
-plugin import aliases. It owns no persistent tensor/model cache. Chat request
-options resolve project credentials at execution time without serializing keys.
-Nine former Canvas adapter types are no longer registered. Saved public
-workflows remain compatible; old captured execution prompts containing private
-adapter types must be regenerated from their saved workflows before replay.
-Within a logical task only, completed branch frontiers survive a missing-material
-retry. Consumed ancestors are released; blocked results are never reused. The
-service closes this continuation on success, error or cancellation. The installed
-adapter owns a weak lookup registry, not a global tensor/model cache. Prompt hooks
-may not change frozen computations between attempts. This applies to native
-classic, LRU, RAM-pressure and disabled caches, without changing ordinary jobs.
-History lists share paged filename queries and merge refreshes. Vue media schema
-updates use the exposed app adapter only when schema changes, batched per frame;
-there is no supported single-definition API in frontend 1.53.6.
-
 ## Maintaining the structure
 
 `job_api/workflow.py` binds native API prompts to job-owned uploads and saver paths.
-The service submits directly to the native queue and observes its history/events;
-it does not construct Canvas projects, persist card templates or use material tasks.
+The service submits directly to the native queue and observes its history and progress events.
 `skills/turing-workflow/scripts/turing_client/` owns the portable HTTP client,
 local typed capability rendering, schema checks and resumable run snapshots, without
 importing ComfyUI. The server's `job_api` package resolves its existing lightweight
@@ -327,9 +212,9 @@ W6 support (0.45.0) do require updating the independent kernel.
 Weight storage is identified once in `quantization/formats.py`. Memory planning
 uses storage facts; fusion eligibility adds its BF16 and device requirements.
 Do not reuse a compute-eligibility predicate as a memory-format classifier.
-The `asym_w4a8_int8` checkpoint label covers two different packings: W4 stores
-K/2 bytes and a 16-entry codebook, whereas uniform W6 stores 3K/4 bytes without
-a codebook. Logical K comes from the group-scale grid, not the packed width.
+Grouped W4 stores K/2 bytes and a 16-entry codebook. Uniform W6 stores
+3K/4 bytes without a codebook. The loader reads logical K from the group-scale
+grid and normalizes legacy W6 labels to the format supported by ComfyUI.
 Both reuse the same ConvRot256 activation and INT8 contraction family. New
 formats should extend that geometry/dispatch boundary, not duplicate loaders
 or add model-specific tests inside generic services.
@@ -340,24 +225,19 @@ in `media/latent_masks.py`, and H3-specific audio-prefix masking in
 `NodeOutput`; their schemas, ordered ports and defaults remain unchanged.
 
 Python formatting and unambiguous static checks are defined in `ruff.toml`.
-Frontend formatting is defined in `.prettierrc.json`; formatting tools are
-development tooling, not runtime dependencies.
 Vendored SeC source and independent third-party repositories are excluded. Run:
 
 ```text
 ruff format --check comfyui_turing_utils tests
 ruff check comfyui_turing_utils tests
-prettier --check 'web/**/*.js' 'tests/browser/*.mjs'
 ops/test-dev.sh -q --tb=short
 ```
 
-`tests/fixtures/node_contracts.json` records all 57 maintained node interfaces,
+`tests/fixtures/node_contracts.json` records existing node interfaces,
 including ordered input names, DynamicCombo/Autogrow branches and defaults.
 The baseline schema bodies were compared as ASTs before recording order.
 `test_package_architecture.py` enforces service dependencies and the kernel
 import boundary. Python tests cover local execution and model/LoRA reuse.
-Classic UI geometry, connections, subgraph reloads, project saves and local
-execution are also exercised in `tests/browser/`.
 
 The pre-refactor GPU baseline had four failures: two incomplete device mocks,
 a FP32 fallback test comparing CUDA against eager, and the 36-block FP16 VAE

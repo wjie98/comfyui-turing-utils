@@ -17,7 +17,7 @@ from .activation_policy import (
     estimate_attention_lifecycle_peak,
 )
 from .layout import RUNTIME_CONTEXT_ATTR, make_minimax_runtime_context_wrapper
-from .compat import keyframe_condition_rows
+from .compat import is_h3_image_dit, keyframe_condition_rows
 
 
 LOG = get_logger("minimax.memory")
@@ -181,14 +181,25 @@ def _activation_profile(diffusion_model) -> _MiniMaxActivationProfile | None:
 
 def _minimax_memory_shape(kwargs, latent_shapes, diffusion_model):
     """Return an H3 memory proxy whose row count matches PackedLayout."""
-    if not isinstance(latent_shapes, (list, tuple)) or len(latent_shapes) < 2:
+    image = is_h3_image_dit(diffusion_model)
+    if not isinstance(latent_shapes, (list, tuple)) or len(latent_shapes) != (
+        1 if image else 2
+    ):
         return None
     video_shape = tuple(int(value) for value in latent_shapes[0])
-    audio_shape = tuple(int(value) for value in latent_shapes[1])
-    if len(video_shape) != 5 or len(audio_shape) != 4:
+    if len(video_shape) != 5 or video_shape[0] != 1:
         return None
-    if video_shape[0] != 1 or audio_shape[0] != 1 or audio_shape[2] != 2:
-        return None
+    if image:
+        if video_shape[2] != 1:
+            return None
+        target_audio_rows = target_audio_area = audio_row_width = 0
+    else:
+        audio_shape = tuple(int(value) for value in latent_shapes[1])
+        if len(audio_shape) != 4 or audio_shape[0] != 1 or audio_shape[2] != 2:
+            return None
+        target_audio_rows = audio_shape[2] * audio_shape[3]
+        target_audio_area = math.prod(audio_shape[1:])
+        audio_row_width = int(diffusion_model.audio_latents_dim)
 
     patch_size = tuple(int(value) for value in diffusion_model.patch_size)
     # PackedLayout and H3's modality rows currently define this exact patch
@@ -201,7 +212,6 @@ def _minimax_memory_shape(kwargs, latent_shapes, diffusion_model):
     latent_w = math.ceil(video_shape[4] / pw) * pw
     frame_rows = (latent_h // ph) * (latent_w // pw)
     target_visual_rows = latent_t * frame_rows
-    target_audio_rows = int(audio_shape[2]) * int(audio_shape[3])
     target_rows = target_visual_rows + target_audio_rows
     if target_rows <= 0:
         return None
@@ -213,7 +223,7 @@ def _minimax_memory_shape(kwargs, latent_shapes, diffusion_model):
         else 0
     )
 
-    keyframes = kwargs.get("minimax_keyframes") or ()
+    keyframes = () if image else kwargs.get("minimax_keyframes") or ()
     from comfy.ldm.minimax.model import PackedLayout
 
     visual_condition_rows, audio_condition_rows = keyframe_condition_rows(
@@ -221,6 +231,8 @@ def _minimax_memory_shape(kwargs, latent_shapes, diffusion_model):
     )
     for ref in kwargs.get("minimax_refs") or ():
         kind = ref.get("kind")
+        if image and kind != "image":
+            return None
         if kind == "image":
             visual_condition_rows += (int(ref["latent_h"]) // ph) * (
                 int(ref["latent_w"]) // pw
@@ -237,7 +249,7 @@ def _minimax_memory_shape(kwargs, latent_shapes, diffusion_model):
 
     condition_rows = text_rows + visual_condition_rows + audio_condition_rows
     full_rows = target_rows + condition_rows
-    target_area = math.prod(video_shape[1:]) + math.prod(audio_shape[1:])
+    target_area = math.prod(video_shape[1:]) + target_audio_area
     equivalent_area = math.ceil(target_area * condition_rows / target_rows)
     return _MiniMaxMemoryShape(
         equivalent_area,
@@ -249,7 +261,7 @@ def _minimax_memory_shape(kwargs, latent_shapes, diffusion_model):
         audio_condition_rows=audio_condition_rows,
         hidden_size=int(diffusion_model.hidden_size),
         video_row_width=int(diffusion_model.latents_dim) * math.prod(patch_size),
-        audio_row_width=int(diffusion_model.audio_latents_dim),
+        audio_row_width=audio_row_width,
     )
 
 

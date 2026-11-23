@@ -17,13 +17,13 @@ class QwenImage21Optimize:
         return {"required": {
             "model": ("MODEL",),
             "enabled": ("BOOLEAN", {"default": True,
-                "tooltip": "Reuse static reference preparation and share W8A8 QKV input quantization. Reference cache settings follow the native Qwen Image 2.1 Cache node."}),
+                "tooltip": "Share W8A8 QKV input quantization. Reference cache settings follow the native Qwen Image 2.1 Cache node."}),
         }}
 
     RETURN_TYPES = ("MODEL",)
     FUNCTION = "apply"
     CATEGORY = "Turing Utils/Models"
-    DESCRIPTION = "Reuse reference preparation and share W8A8 QKV quantization. Preserves native reference cache settings."
+    DESCRIPTION = "Share W8A8 QKV input quantization while preserving ComfyUI's reference cache settings."
 
     def apply(self, model, enabled=True):
         return (configure(model, enabled),)

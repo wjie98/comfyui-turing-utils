@@ -40,14 +40,14 @@ only after its CUDA sources or required version change.
 
 Development checks use [scoped quick tests and explicit full validation](docs/testing.md).
 `ops/test-dev.sh` selects related tests before collection; pass a test file to
-run just that file, or `--full` for the supported Python/CUDA/browser matrix.
+run just that file, or `--full` for the supported Python/CUDA matrix.
 
 ## Nodes
 
 ### Qwen Image 2.1
 
-`Load ConvRot DiT` automatically reuses Qwen 2.1 reference preparation and shares
-compatible W8A8 QKV input quantization. `Load ConvRot CLIP` scopes quantized
+`Load ConvRot DiT` automatically shares compatible Qwen 2.1 W8A8 QKV input
+quantization while preserving native caching. `Load ConvRot CLIP` scopes quantized
 encoding to the Qwen 2.1 text encoder. `Qwen Image 2.1 多图优化` exposes a
 model-local switch and preserves native reference cache settings.
 For CFG 1, `Qwen Image 2.1 多图条件` avoids encoding an unused negative prompt.
@@ -78,7 +78,7 @@ original loading functions; callers bypassing the prompt server must invoke
   `Load ConvRot DiT` in saved workflows. The NVFP4 CUDA path retains packed
   NVFP4 weights, and uses A8/S8 GEMM with at most 16 MiB per temporary S8 staging
   buffer for normal model widths (two buffers in the measured overlap range).
-  It does not use native Blackwell A4 arithmetic.
+  GPUs with native NVFP4 compute use ComfyUI and Kitchen's FP4 path.
   DiT attention retains the ConvRot loader's `w8a8` default; `sdpa` and `sage`
   remain available. ConvRot layers keep their existing dispatch; other formats
   and explicit full-precision layers retain ComfyUI execution. CLIP's CPU
@@ -492,6 +492,13 @@ original loading functions; callers bypassing the prompt server must invoke
     for other N+M recipes. The prompt compiler rejects the obsolete contract rather
     than silently treating an old low-resolution input as the final canvas.
     See [the mode examples](examples/h3_sampler_modes.json).
+- `MiniMax H3 Image KSampler` uses the checkpoint's PDD step count, Euler,
+  the simple scheduler, and CFG 1. Connect `MiniMax H3 Image Conditioning`
+  and decode with the official H3 Image VAE. Saved image workflows using the
+  shared H3 KSampler can still run in single mode with a scheduler curve;
+  use the Image sampler for the checkpoint defaults. The Image DiT's text,
+  reference images, and target image use the same attention protection policy
+  with either sampler. Veda predictors currently require an H3 AV model.
 - `MiniMax H3 Latent Upscale` includes model/precision selection and loads the attention-free 3D learned latent
   upscaler through ComfyUI's normal offload lifecycle. Place compatible weights
   from [LBH-123-AI/Minimax_h3_latent_Upscaler](https://huggingface.co/LBH-123-AI/Minimax_h3_latent_Upscaler)
@@ -536,13 +543,6 @@ original loading functions; callers bypassing the prompt server must invoke
   storyboard from a loaded `VIDEO` or decoded `IMAGE` frame batch. It can use
   uniform or motion-weighted sampling and optionally wraps each panel in
   annotated film rails so frame numbers and timestamps stay outside the image.
-- **Material Workspace** opens in ComfyUI's native workflow tabs from the Turing Utils menu.
-  Four material boundary nodes persist text, images, video and audio. Ordinary
-  workflows with Canvas Inputs/Outputs become independent card copies; executing a material runs only the segment back
-  to the preceding saved materials through ComfyUI's normal queue. Videos load a
-  poster only until playback is requested. Creating a project requires an empty
-  folder; opening one requires its valid `canvas.json`. The standalone page is removed.
-  See [Material Workspace](docs/material-canvas.md) for usage and validation limits.
 - **Temporary Job API** submits a native ComfyUI API workflow and image/video/audio
   attachments in one multipart request, then downloads results by job ID. It uses
   the native queue, clears inputs after execution, supports explicit/expired-result
