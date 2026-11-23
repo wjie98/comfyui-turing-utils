@@ -239,9 +239,9 @@ class TuringAttentionContractTest(unittest.TestCase):
         self.assertEqual(sparse.call_args.kwargs["threshold_sigma"], 1.0)
         self.assertEqual(sparse.call_args.kwargs["residual_subblocks"], 1)
 
-    def test_h3_sparse_stays_dense_until_complete_runtime_layout_is_available(self):
+    def test_h3_sparse_rejects_missing_runtime_layout(self):
         q = torch.zeros((1, 4, 4096, 128), dtype=torch.bfloat16)
-        baseline = mock.Mock(return_value=q)
+        baseline = mock.Mock()
         with (
             mock.patch(
                 "comfyui_turing_utils.attention.stable.is_supported_turing_device",
@@ -250,8 +250,11 @@ class TuringAttentionContractTest(unittest.TestCase):
             mock.patch(
                 "comfyui_turing_utils.attention.sparse._sol_sparse_sageattn"
             ) as sparse,
+            self.assertRaisesRegex(
+                RuntimeError, "Sol sparse attention.*required semantic attention layout"
+            ),
         ):
-            output = attention_sparse.turing_sol_sparse_attention(
+            attention_sparse.turing_sol_sparse_attention(
                 baseline,
                 q,
                 q,
@@ -263,8 +266,7 @@ class TuringAttentionContractTest(unittest.TestCase):
                 },
             )
 
-        self.assertIs(output, q)
-        baseline.assert_called_once()
+        baseline.assert_not_called()
         sparse.assert_not_called()
 
     def test_h3_sparse_accepts_complete_loader_independent_runtime_layout(self):
@@ -312,9 +314,9 @@ class TuringAttentionContractTest(unittest.TestCase):
         self.assertEqual(sparse.call_args.kwargs["dense_query_ranges"], ((0, 256),))
         self.assertEqual(sparse.call_args.kwargs["exact_kv_ranges"], ((0, 256),))
 
-    def test_experimental_sparse_keeps_short_calls_dense(self):
+    def test_sol_reports_short_sequence_lengths(self):
         q = torch.zeros((1, 4, 256, 128), dtype=torch.bfloat16)
-        baseline = mock.Mock(return_value=q)
+        baseline = mock.Mock()
         with (
             mock.patch(
                 "comfyui_turing_utils.attention.stable.is_supported_turing_device",
@@ -323,8 +325,11 @@ class TuringAttentionContractTest(unittest.TestCase):
             mock.patch(
                 "comfyui_turing_utils.attention.sparse._sol_sparse_sageattn"
             ) as sparse,
+            self.assertRaisesRegex(
+                RuntimeError, "Sol sparse attention.*4096 tokens.*Query=256, Key=256"
+            ),
         ):
-            output = attention_sparse.turing_sol_sparse_attention(
+            attention_sparse.turing_sol_sparse_attention(
                 baseline,
                 q,
                 q,
@@ -332,9 +337,33 @@ class TuringAttentionContractTest(unittest.TestCase):
                 4,
                 skip_reshape=True,
             )
-        self.assertIs(output, q)
-        baseline.assert_called_once()
+        baseline.assert_not_called()
         sparse.assert_not_called()
+
+    def test_sparse_rejects_protection_that_covers_every_query_block(self):
+        q = torch.zeros((1, 2, 128, 64), dtype=torch.bfloat16)
+        for attention in (
+            attention_sparse.turing_sol_sparse_attention,
+            attention_sparse.turing_sla_sparse_attention,
+        ):
+            with (
+                self.subTest(strategy=attention.__name__),
+                mock.patch.object(
+                    attention_stable, "is_supported_attention_device", return_value=True
+                ),
+                self.assertRaisesRegex(RuntimeError, "protection covers every 64-token block"),
+            ):
+                attention(
+                    mock.Mock(),
+                    q,
+                    q,
+                    q,
+                    2,
+                    skip_reshape=True,
+                    min_sequence_tokens=64,
+                    prefix_policy="manual",
+                    manual_prefix_tokens=65,
+                )
 
     def test_experimental_sparse_supports_cross_attention_with_prefix_dense(self):
         q = torch.zeros((1, 4, 4096, 128), dtype=torch.bfloat16)
@@ -525,18 +554,17 @@ class TuringAttentionContractTest(unittest.TestCase):
         self.assertEqual(output.shape, q.shape)
         self.assertEqual(sparse.call_args.args[1].shape, (1, 2, 4096, 128))
 
-    def test_experimental_sparse_fallback_preserves_original_layout(self):
+    def test_sol_reports_unsupported_device(self):
         q = torch.zeros((1, 4096, 4 * 64), dtype=torch.bfloat16)
-        baseline = mock.Mock(return_value=q)
+        baseline = mock.Mock()
         with (
             mock.patch(
                 "comfyui_turing_utils.attention.sparse._sol_sparse_sageattn"
             ) as sparse,
+            self.assertRaisesRegex(RuntimeError, "Sol sparse attention.*CUDA Tensor Core"),
         ):
-            output = attention_sparse.turing_sol_sparse_attention(baseline, q, q, q, 4)
-        self.assertIs(output, q)
-        baseline.assert_called_once()
-        self.assertIs(baseline.call_args.args[0], q)
+            attention_sparse.turing_sol_sparse_attention(baseline, q, q, q, 4)
+        baseline.assert_not_called()
         sparse.assert_not_called()
 
     def test_experimental_sparse_forwards_patch_parameters(self):

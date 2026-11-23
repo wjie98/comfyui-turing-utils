@@ -50,6 +50,11 @@ def install_attention_strategy(
     if layout_status.required:
         transformer_options[ATTENTION_LAYOUT_REQUIREMENT_KEY] = layout_status.model_kind
         if not layout_status.installed:
+            if backend in {"sol", "sla"}:
+                raise RuntimeError(
+                    f"{strategy} cannot run on {layout_status.model_kind} because its "
+                    f"attention layout provider could not be installed ({layout_status.reason})"
+                )
             LOG.warning_once(
                 "%s %s attention will stay dense because its runtime layout "
                 "provider could not be installed: %s",

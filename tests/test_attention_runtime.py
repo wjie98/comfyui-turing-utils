@@ -382,6 +382,27 @@ class AttentionRuntimeTest(unittest.TestCase):
             sol.prepared_attention_executor,
         )
 
+    def test_sparse_strategy_rejects_missing_required_layout_provider(self):
+        from comfyui_turing_utils.attention import orchestration
+        from comfyui_turing_utils.attention.layout import LayoutProviderStatus
+
+        status = LayoutProviderStatus("minimax_h3", False, "blocks_unavailable")
+        for backend in ("sol", "sla"):
+            with (
+                self.subTest(backend=backend),
+                mock.patch.object(
+                    orchestration, "ensure_attention_layout_provider", return_value=status
+                ),
+                self.assertRaisesRegex(RuntimeError, "minimax_h3.*blocks_unavailable"),
+            ):
+                orchestration.install_attention_strategy(
+                    FakePatcher(),
+                    mock.Mock(),
+                    strategy=backend,
+                    backend=backend,
+                    implementation="test",
+                )
+
     def test_sdpa_base_selects_fp16_sol_sparse_numeric_path(self):
         q = torch.zeros((1, 2, 256, 128), dtype=torch.bfloat16)
         with (
@@ -445,11 +466,21 @@ class AttentionRuntimeTest(unittest.TestCase):
                     torch.device("cuda", 0),
                     dense_backend="kitchen",
                     dense_override=kitchen,
+                    dense_prefix_layers=1,
                 )
                 q = torch.zeros(1, 2, 16, 128)
+                options = {
+                    "turing_utils_attention_layout": {"layer_index": 0, "layer_count": 24}
+                }
                 self.assertEqual(
                     override(
-                        lambda *args, **kwargs: "wrong", q, q, q, 2, skip_reshape=True
+                        lambda *args, **kwargs: "wrong",
+                        q,
+                        q,
+                        q,
+                        2,
+                        skip_reshape=True,
+                        transformer_options=options,
                     ),
                     "kitchen",
                 )

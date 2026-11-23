@@ -29,9 +29,10 @@ Exact local contracts have priority inside that scope; unsupported calls return
 to Kitchen's normal dispatcher before execution. The plugin does not change the
 global Kitchen backend priority, and it does not catch a selected operator's
 runtime failure to continue with another implementation.
-Attention has a separate single-owner container preflight: a shape or ABI that
-fails capability checks is delegated before Q/K/V are consumed. A failure from
-an attention kernel that has already started is not retried either.
+Attention checks capability before consuming the Q/K/V containers. Dense
+backends can delegate unsupported calls. Active Sol/SLA calls reject unsupported
+inputs with an error. Configured dense steps and layers use the selected dense
+backend. A kernel failure after execution starts is reported to the caller.
 
 ## Public custom operators
 

@@ -45,7 +45,6 @@ _LOGGED_FP32_COMPAT = False
 _LOGGED_TURING_KERNELS: set[tuple] = set()
 _LOGGED_TURING_FALLBACKS: set[str] = set()
 _LOGGED_SPARSE_KERNELS: set[tuple] = set()
-_LOGGED_SPARSE_DENSE_REASONS: set[str] = set()
 
 
 def is_supported_attention_device(device: torch.device) -> bool:
@@ -117,7 +116,7 @@ def inspect_turing_attention_call(
     if not low_precision_attention:
         return None, "low_precision_attention=False"
     if kernel == "sol" and is_causal:
-        return None, f"causal attention is not supported by Turing {kernel}"
+        return None, "causal attention is unsupported"
     if q.dtype != k.dtype or q.dtype != v.dtype:
         return None, "Q/K/V dtypes do not match"
     if q.dtype not in SUPPORTED_INPUT_DTYPES:
@@ -176,7 +175,7 @@ def inspect_turing_attention_call(
     if query_tokens <= 0 or key_tokens <= 0:
         return None, "empty Q/K sequences are unsupported"
     if not 0 < head_dim <= 128:
-        return None, f"head_dim={head_dim} is unsupported by Turing {kernel}"
+        return None, f"head_dim={head_dim} is unsupported"
     if require_long_sequence and (query_tokens < 64 or key_tokens < 64):
         return None, "split attention requires Q/K sequences of at least 64 tokens"
     if q.stride(-1) != 1 or k.stride(-1) != 1 or v.stride(-1) != 1:

@@ -266,9 +266,6 @@ def make_sparse_attention_override(
         debug_route_keys.add(kernel_key)
 
     def prepared_executor(request: PreparedAttention) -> AttentionExecutionOutcome:
-        reason = sparse_capabilities.unsupported_reason(request)
-        if reason is not None:
-            return AttentionExecutionOutcome.unsupported(reason)
         transformer_options = request.transformer_options
         if schedule.is_dense(transformer_options):
             return run_dense_prepared(request)
@@ -297,7 +294,10 @@ def make_sparse_attention_override(
             },
         )
         if reason is not None:
-            return run_dense_prepared(request)
+            raise RuntimeError(f"Sol sparse attention cannot run ({reason})")
+        reason = sparse_capabilities.unsupported_reason(request)
+        if reason is not None:
+            return AttentionExecutionOutcome.unsupported(reason)
         reason = _prepared_call_mismatch(request, sol_call.attention)
         if reason is not None:
             return AttentionExecutionOutcome.unsupported(reason)
@@ -366,14 +366,10 @@ def make_sparse_attention_override(
             or value.ndim != 4
             or value.shape[2] < 64
         ):
-            return AttentionExecutionOutcome.unsupported(
-                "streamed QKV requires HND W8A8 with at least 64 tokens"
+            raise RuntimeError(
+                "Sol streamed attention requires HND W8A8 with at least 64 tokens"
             )
-        prototype = value[:, :, :1, :].expand(
-            value.shape[0], value.shape[1], value.shape[2], value.shape[3]
-        )
-
-        def dense_result() -> AttentionExecutionOutcome:
+        if schedule.is_dense(transformer_options):
             if not callable(dense_streamed_qkv_executor):
                 return AttentionExecutionOutcome.unsupported(
                     "the selected dense backend cannot consume streamed QKV"
@@ -386,9 +382,9 @@ def make_sparse_attention_override(
                 transformer_options=transformer_options,
             )
 
-        if schedule.is_dense(transformer_options):
-            return dense_result()
-
+        prototype = value[:, :, :1, :].expand(
+            value.shape[0], value.shape[1], value.shape[2], value.shape[3]
+        )
         sol_call, reason = inspect_sol_attention_call(
             prototype,
             prototype,
@@ -412,7 +408,7 @@ def make_sparse_attention_override(
             },
         )
         if reason is not None:
-            return dense_result()
+            raise RuntimeError(f"Sol sparse attention cannot run ({reason})")
         quantized = _profiled(
             "attention.value_route_prepare",
             prequantize_turing_sol_attention_from_qk,
@@ -455,9 +451,6 @@ def make_sparse_attention_override(
         prepared_executor.turing_utils_streamed_qkv_executor = streamed_qkv_executor
 
     def attention_override(original: Callable, *args, **kwargs):
-        fallback = lambda *fallback_args, **fallback_kwargs: dense_override(
-            original, *fallback_args, **fallback_kwargs
-        )
         transformer_options = kwargs.get("transformer_options")
         schedule_state = schedule_state_for(transformer_options)
         dense_schedule = schedule.dense_step(transformer_options)
@@ -485,7 +478,7 @@ def make_sparse_attention_override(
                 )
                 debug_dense_reasons.add(debug_key)
         if dense_schedule or dense_layer:
-            return fallback(*args, **kwargs)
+            return dense_override(original, *args, **kwargs)
         debug_context = None
         if debug_route_density:
             layer_index, layer_count = _attention_layer_metadata(transformer_options)
@@ -502,7 +495,7 @@ def make_sparse_attention_override(
                 ),
             }
         return turing_sol_sparse_attention(
-            fallback,
+            original,
             *args,
             min_sequence_tokens=min_sequence_tokens,
             routing_threshold=routing_threshold,
@@ -565,17 +558,7 @@ def make_sparse_attention_override(
                 kwargs=kwargs,
             )
             if reason is not None:
-                return run_dense_container(
-                    q,
-                    k,
-                    v,
-                    heads,
-                    mask=mask,
-                    attn_precision=attn_precision,
-                    skip_reshape=skip_reshape,
-                    skip_output_reshape=skip_output_reshape,
-                    **kwargs,
-                )
+                raise RuntimeError(f"Sol sparse attention cannot run ({reason})")
             query = q.take()
             key = k.take()
             value = v.take()

@@ -328,9 +328,8 @@ Dispatch depends only on the attention call: matching
 FP16, BF16, or FP32 Q/K/V; head dimensions 1--128; unmasked non-causal attention;
 and both Q and K meeting the configurable minimum sequence length. HND and
 ComfyUI's unreshaped layout, GQA, unequal Q/K lengths, and incomplete final
-blocks are supported. Other calls use bundled stable Sage without model-family,
-sampling-step checks. A model adapter may publish semantic layer and topology
-metadata; unknown models remain fully generic.
+blocks are supported. Active Sol/SLA calls outside these limits report an error.
+A model adapter may publish semantic layer and topology metadata.
 
 The bundled `w8a8` backend and the inherited Sol/SLA W8A8 path require kernel 0.23.0.
 They support sm75 and newer native cubins and head dimensions 1--128. Dense W8A8
@@ -379,10 +378,10 @@ use the corresponding dense finalizer without repeating preprocessing.
 Exact-sm75 uses the bundled quantizing finalizer. Ampere and newer external
 Sage, plus explicit SDPA, use a floating prepared finalizer which applies the
 same protocol RMSNorm/RoPE transform to the existing projected Q/K and hands
-those tensors directly to the registered ComfyUI backend. Rejection happens
-before tensor ownership transfer, so protocol-incompatible causal calls and
-unsupported dtype, device, or RoPE layouts retain the original-model fallback
-without partial consumption. Masks are forwarded to the selected dense backend.
+those tensors directly to the registered ComfyUI backend. Prepared execution
+can decline an unsupported fusion before consuming Q/K/V. The ordinary model
+call then runs the active strategy. Dense providers can accept masks and causal
+attention according to their own capabilities.
 The handoff is installed through a model-neutral attention-site registry, so
 an explicit Sol patch on an official ComfyUI-loaded H3 or Bernini model can use
 the same fused path as the ConvRot loader. Capability rejection occurs before

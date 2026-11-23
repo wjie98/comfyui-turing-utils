@@ -26,7 +26,6 @@ from .stable import (
     SPARSE_USE_W8A8,
     AttentionCall,
     PrequantizedAttentionCall,
-    _LOGGED_SPARSE_DENSE_REASONS,
     _LOGGED_SPARSE_KERNELS,
     _sol_sparse_sageattn,
     finish_turing_attention_output,
@@ -51,21 +50,6 @@ class SlaAttentionCall:
     effective_min_sequence: int
     dense_query_ranges: tuple[tuple[int, int], ...]
     exact_kv_ranges: tuple[tuple[int, int], ...]
-
-
-def _sparse_dense_baseline(
-    reason: str,
-    fallback: Callable,
-    q: torch.Tensor,
-    k: torch.Tensor,
-    v: torch.Tensor,
-    heads: int,
-    **kwargs,
-) -> torch.Tensor:
-    if reason not in _LOGGED_SPARSE_DENSE_REASONS:
-        LOG.debug("Sparse attention uses the selected dense backend for %s", reason)
-        _LOGGED_SPARSE_DENSE_REASONS.add(reason)
-    return fallback(q, k, v, heads, **kwargs)
 
 
 def _sparse_prefix_tokens(
@@ -347,7 +331,6 @@ def _inspect_sparse_attention_call(
     sparse_reference_audio: bool,
     transformer_options,
     kwargs: dict,
-    reject_fully_protected_query: bool,
 ) -> tuple[
     tuple[AttentionCall, int, tuple[tuple[int, int], ...], tuple[tuple[int, int], ...]]
     | None,
@@ -374,7 +357,10 @@ def _inspect_sparse_attention_call(
         call.query_tokens < effective_min_sequence
         or call.key_tokens < effective_min_sequence
     ):
-        return None, f"sequences shorter than {effective_min_sequence} tokens"
+        return None, (
+            f"sequences shorter than {effective_min_sequence} tokens "
+            f"(Query={call.query_tokens}, Key={call.key_tokens})"
+        )
     if _required_sparse_layout_missing(
         transformer_options,
         call.query_tokens,
@@ -391,11 +377,16 @@ def _inspect_sparse_attention_call(
         sparse_reference_audio=bool(sparse_reference_audio),
         axis="query",
     )
-    if (
-        reject_fully_protected_query
-        and sum(stop - start for start, stop in dense_query_ranges) >= call.query_tokens
-    ):
-        return None, "all Query tokens are protected"
+    if dense_query_ranges:
+        # The sparse kernels give an entire 64-token Query block exact attention
+        # when any protected range touches it.
+        query_blocks = (call.query_tokens + 63) // 64
+        protected_blocks = _coalesce_token_ranges(
+            ((start // 64, (stop + 63) // 64) for start, stop in dense_query_ranges),
+            query_blocks,
+        )
+        if protected_blocks == ((0, query_blocks),):
+            return None, "Query protection covers every 64-token block"
     exact_kv_ranges = _sparse_protected_ranges(
         prefix_policy,
         manual_prefix_tokens,
@@ -444,7 +435,6 @@ def inspect_sol_attention_call(
         sparse_reference_audio=sparse_reference_audio,
         transformer_options=transformer_options,
         kwargs=kwargs,
-        reject_fully_protected_query=False,
     )
     if reason is not None:
         return None, reason
@@ -497,7 +487,6 @@ def inspect_sla_attention_call(
         sparse_reference_audio=sparse_reference_audio,
         transformer_options=transformer_options,
         kwargs=kwargs,
-        reject_fully_protected_query=True,
     )
     if reason is not None:
         return None, reason
@@ -685,26 +674,7 @@ def turing_sol_sparse_attention(
     use_w8a8: bool = SPARSE_USE_W8A8,
     **kwargs,
 ) -> torch.Tensor:
-    original_q, original_k, original_v = q, k, v
-    common = {
-        "mask": mask,
-        "attn_precision": attn_precision,
-        "skip_reshape": skip_reshape,
-        "skip_output_reshape": skip_output_reshape,
-        **kwargs,
-    }
-
-    def dense(reason: str):
-        return _sparse_dense_baseline(
-            reason,
-            fallback,
-            original_q,
-            original_k,
-            original_v,
-            heads,
-            **common,
-        )
-
+    """Run Sol. The callback argument preserves the Python call signature."""
     transformer_options = kwargs.get("transformer_options")
     sol_call, reason = inspect_sol_attention_call(
         q,
@@ -725,7 +695,7 @@ def turing_sol_sparse_attention(
         kwargs=kwargs,
     )
     if reason is not None:
-        return dense(reason)
+        raise RuntimeError(f"Sol sparse attention cannot run ({reason})")
     call = sol_call.attention
     input_dtype = call.input_dtype
     effective_min_sequence = sol_call.effective_min_sequence
@@ -939,13 +909,7 @@ def turing_sla_sparse_attention(
     use_w8a8: bool = SPARSE_USE_W8A8,
     **kwargs,
 ) -> torch.Tensor:
-    common = {
-        "mask": mask,
-        "attn_precision": attn_precision,
-        "skip_reshape": skip_reshape,
-        "skip_output_reshape": skip_output_reshape,
-        **kwargs,
-    }
+    """Run SLA. The callback argument preserves the Python call signature."""
     sla_call, reason = inspect_sla_attention_call(
         q,
         k,
@@ -964,9 +928,7 @@ def turing_sla_sparse_attention(
         kwargs=kwargs,
     )
     if reason is not None:
-        return _sparse_dense_baseline(
-            f"SLA: {reason}", fallback, q, k, v, heads, **common
-        )
+        raise RuntimeError(f"SLA sparse attention cannot run ({reason})")
     call = sla_call.attention
     kernel_key = (
         "sla",

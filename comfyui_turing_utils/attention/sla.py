@@ -186,9 +186,6 @@ def make_sla_attention_override(
         )
 
     def prepared_executor(request: PreparedAttention) -> AttentionExecutionOutcome:
-        reason = sparse_capabilities.unsupported_reason(request)
-        if reason is not None:
-            return AttentionExecutionOutcome.unsupported(reason)
         transformer_options = request.transformer_options
         if is_dense(transformer_options):
             return run_dense_prepared(request)
@@ -209,7 +206,10 @@ def make_sla_attention_override(
             },
         )
         if reason is not None:
-            return run_dense_prepared(request)
+            raise RuntimeError(f"SLA sparse attention cannot run ({reason})")
+        reason = sparse_capabilities.unsupported_reason(request)
+        if reason is not None:
+            return AttentionExecutionOutcome.unsupported(reason)
         reason = _prepared_call_mismatch(request, sla_call.attention)
         if reason is not None:
             return AttentionExecutionOutcome.unsupported(reason)
@@ -266,8 +266,8 @@ def make_sla_attention_override(
         ) -> AttentionExecutionOutcome:
             """Finish SLA from the shared row-streamed H3 QKV representation."""
             if not torch.is_tensor(value) or value.ndim != 4 or value.shape[2] < 64:
-                return AttentionExecutionOutcome.unsupported(
-                    "streamed QKV requires HND W8A8 with at least 64 tokens"
+                raise RuntimeError(
+                    "SLA streamed attention requires HND W8A8 with at least 64 tokens"
                 )
             if is_dense(transformer_options):
                 if not callable(dense_streamed_qkv_executor):
@@ -301,7 +301,7 @@ def make_sla_attention_override(
                 },
             )
             if reason is not None:
-                return AttentionExecutionOutcome.unsupported(reason)
+                raise RuntimeError(f"SLA sparse attention cannot run ({reason})")
             quantized = _profiled(
                 "attention.value_route_prepare",
                 prequantize_turing_sla_attention_from_qk,
@@ -335,13 +335,10 @@ def make_sla_attention_override(
         prepared_executor.turing_utils_streamed_qkv_executor = streamed_qkv_executor
 
     def attention_override(original: Callable, *args, **kwargs):
-        fallback = lambda *fallback_args, **fallback_kwargs: dense_override(
-            original, *fallback_args, **fallback_kwargs
-        )
         if is_dense(kwargs.get("transformer_options")):
-            return fallback(*args, **kwargs)
+            return dense_override(original, *args, **kwargs)
         return turing_sla_sparse_attention(
-            fallback,
+            original,
             *args,
             min_sequence_tokens=min_sequence_tokens,
             sparsity_ratio=sparsity_ratio,
@@ -393,17 +390,7 @@ def make_sla_attention_override(
                 kwargs=kwargs,
             )
             if reason is not None:
-                return run_dense_container(
-                    q,
-                    k,
-                    v,
-                    heads,
-                    mask=mask,
-                    attn_precision=attn_precision,
-                    skip_reshape=skip_reshape,
-                    skip_output_reshape=skip_output_reshape,
-                    **kwargs,
-                )
+                raise RuntimeError(f"SLA sparse attention cannot run ({reason})")
             query = q.take()
             key = k.take()
             value = v.take()

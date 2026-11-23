@@ -34,6 +34,74 @@ class FakeModel:
 
 
 class AttentionBackendsTest(unittest.TestCase):
+    def test_sparse_rejects_short_sequences_at_every_attention_entry_point(self):
+        from comfyui_turing_utils.attention import sla, sol
+
+        tensor = torch.zeros((1, 2, 128, 64), dtype=torch.bfloat16)
+        spec = attention_protocol.QKTransformSpec(
+            attention_protocol.RMSNormSpec(torch.ones(64), 1e-6, "head"),
+            attention_protocol.RMSNormSpec(torch.ones(64), 1e-6, "head"),
+            attention_protocol.RotaryEmbeddingSpec(None, 0, "none"),
+        )
+        for name, module, make, capability, preflight in (
+            (
+                "Sol", sol, sol.make_sparse_attention_override,
+                "bundled_sparse_available", "preflight_bundled_sparse",
+            ),
+            (
+                "SLA", sla, sla.make_sla_attention_override,
+                "bundled_sla_available", "preflight_bundled_sla",
+            ),
+        ):
+            dense = mock.Mock()
+            with (
+                mock.patch.object(module, "is_supported_attention_device", return_value=True),
+                mock.patch.object(
+                    attention_stable, "is_supported_attention_device", return_value=True
+                ),
+                mock.patch.object(module, capability, return_value=True),
+                mock.patch.object(module, preflight),
+                mock.patch.object(module, "bundled_w8a8_available", return_value=True),
+                mock.patch.object(
+                    module, "fused_qk_preprocessing_available", return_value=True
+                ),
+                mock.patch.object(
+                    module, "split_prequantization_available", return_value=True
+                ),
+            ):
+                override = make(torch.device("cuda"), dense_override=dense)
+                q, k, v = (
+                    comfy_attention.AttentionTensorContainer(tensor) for _ in range(3)
+                )
+                request = attention_protocol.PreparedAttention.from_hnd(
+                    q, k, v, heads=2, qk_transform=spec, transformer_options={}
+                )
+                prepared = override.prepared_attention_executor
+                calls = {
+                    "tensor": lambda: override(
+                        dense, tensor, tensor, tensor, 2, skip_reshape=True
+                    ),
+                    "container": lambda: override.container_function(
+                        q, k, v, 2, skip_reshape=True
+                    ),
+                    "prepared": lambda: prepared(request),
+                    "streamed": lambda: prepared.turing_utils_streamed_qkv_executor(
+                        None, tensor, heads=2, qk_transform=spec, transformer_options={}
+                    ),
+                }
+                for entry, call in calls.items():
+                    with (
+                        self.subTest(strategy=name, entry=entry),
+                        self.assertRaisesRegex(
+                            RuntimeError,
+                            f"{name} sparse attention.*4096 tokens.*Query=128, Key=128",
+                        ),
+                    ):
+                        call()
+                self.assertEqual(dense.mock_calls, [])
+                for container in (q, k, v):
+                    self.assertIs(container.peek(), tensor)
+
     def test_external_prepared_executor_consumes_projected_qkv_once(self):
         tensors = [torch.zeros((1, 2, 64, 128), dtype=torch.bfloat16) for _ in range(3)]
         q, k, v = (

@@ -591,8 +591,8 @@ original loading functions; callers bypassing the prompt server must invoke
   long-sequence sparse backend. It uses an input-adaptive statistical threshold,
   keeps one 64-token skipped-block centroid by default, accepts semantic
   multimodal layout metadata, and exposes integer dense-step safeguards,
-  dense first/last-layer protection, and an internal automatic short-sequence
-  crossover. It inherits `w8a8`, `sage`, or `sdpa` from `Load ConvRot DiT`:
+  dense first/last-layer protection, and a minimum sequence length.
+  It inherits `w8a8`, `sage`, or `sdpa` from `Load ConvRot DiT`:
   W8A8 selects integer sparse PV, while Sage/SDPA select the floating FP16
   sparse core. Dense prefix/suffix counts span both stages of H3 KSampler as
   one task. Ordinary independent sampler nodes still count locally per invocation.
@@ -795,10 +795,10 @@ Sol remains an independent patch rather than a loader option because its
 quality/performance policy is intentionally configurable. Connect the model
 through the Sol patch node to enable it explicitly. The
 kernel accepts FP16/BF16/FP32 Q/K/V, GQA, head dimensions 1--128, unequal Q/K,
-and unmasked non-causal sequences; incompatible or short calls use the selected
-architecture-native dense backend. Automatic semantic protection requires separate Query/K layout
-metadata for unequal sequences; ambiguous single-sequence metadata falls back
-instead of applying the wrong ranges.
+and unmasked non-causal sequences. Active Sol/SLA calls report an error if the
+inputs are unsupported, including sequences below the configured minimum or
+missing required semantic layout. Automatic semantic protection uses separate
+Query/K layout metadata for unequal sequences.
 
 The bundled Sol core and its protected dense W8A8 path are native on sm75,
 Ampere, Ada, and Hopper when those architectures are included in the kernel
