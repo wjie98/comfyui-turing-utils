@@ -1,9 +1,10 @@
 """Sample MiniMax H3 Image without applying the AV scheduler or upscaler."""
 
 import nodes
+from comfy.ldm.minimax.sampling import MiniMaxH3ImageModelSampling
 
 from ...log import get_logger
-from .compat import is_h3_image_dit
+from .model_contract import is_h3_image_dit
 
 
 LOG = get_logger("minimax.image")
@@ -22,10 +23,6 @@ def sample_h3_image(
 ):
     if not is_h3_image_dit(model.get_model_object("diffusion_model")):
         raise ValueError("MiniMax H3 Image KSampler requires a MiniMax H3 Image MODEL.")
-
-    # This sampling class arrived with the image model. Keep importing this
-    # adapter possible on ComfyUI versions that only have the AV model.
-    from comfy.ldm.minimax.sampling import MiniMaxH3ImageModelSampling
 
     model_sampling = model.get_model_object("model_sampling")
     if not isinstance(model_sampling, MiniMaxH3ImageModelSampling):

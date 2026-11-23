@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import inspect
 import weakref
 from collections.abc import Sequence
 import torch
@@ -27,6 +26,7 @@ from ...quantization.fusions import (
     segmented_rms_adaln,
 )
 from .memory_planning import _install_memory_planning
+from .model_contract import has_h3_block_signature
 from .execution import (
     LOG,
     _SUPPORTED_DTYPES,
@@ -38,21 +38,6 @@ from .attention_ops import (
 )
 from .mlp import (
     _make_mlp_forward,
-)
-
-
-_BLOCK_FORWARD_PARAMETERS = (
-    "x",
-    "t_emb",
-    "mod_segments",
-    "rope_freqs",
-    "transformer_options",
-)
-
-
-_BLOCK_FORWARD_PARAMETERS_WITH_ATTENTION = (
-    *_BLOCK_FORWARD_PARAMETERS,
-    "attention",
 )
 
 
@@ -82,14 +67,6 @@ def _audit_fc2(blocks: Sequence[torch.nn.Module]) -> int:
         _format_counts(kinds),
     )
     return eligible
-
-
-def _compatible_block_forward(block_type: type[torch.nn.Module]) -> bool:
-    parameters = tuple(inspect.signature(block_type.forward).parameters)
-    return parameters in {
-        ("self", *_BLOCK_FORWARD_PARAMETERS),
-        ("self", *_BLOCK_FORWARD_PARAMETERS_WITH_ATTENTION),
-    }
 
 
 def _block_fusion_blocker(
@@ -123,7 +100,6 @@ def _make_block_forward(
     diffusion_model=None,
 ):
     original = OriginalMethod.capture(block.forward, block)
-    supports_attention = "attention" in inspect.signature(original.function).parameters
     supports_indexed_modulation = segmented_modulation_schema() >= 2
     if base_model is not None:
         base_model = weakref.proxy(base_model)
@@ -153,10 +129,11 @@ def _make_block_forward(
             blocker = "per_token_modulation"
         audit.record("block", blocker is None, x, blocker)
         if blocker is not None:
-            kwargs = {"transformer_options": transformer_options}
-            if supports_attention:
-                kwargs["attention"] = attention
-            return original(self, x, t_emb, mod_segments, rope_freqs, **kwargs)
+            return original(
+                self, x, t_emb, mod_segments, rope_freqs,
+                transformer_options=transformer_options,
+                attention=attention,
+            )
 
         shift_msa, scale_msa, gate_msa, shift_mlp, scale_mlp, gate_mlp = (
             self.adaln_proj(t_emb)
@@ -196,7 +173,7 @@ def apply_minimax_adapter(model, device: torch.device) -> int:
         from comfy.ldm.minimax.model import DiTBlock, _mod_gate
     except ImportError:
         return 0
-    if not _compatible_block_forward(DiTBlock):
+    if not has_h3_block_signature(DiTBlock.forward):
         LOG.warning(
             "MiniMax CUDA fusions are disabled because the DiTBlock forward contract changed"
         )

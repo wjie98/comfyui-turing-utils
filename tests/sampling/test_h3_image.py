@@ -35,9 +35,6 @@ from comfyui_turing_utils.nodes.minimax_sampler import (
 
 @pytest.fixture
 def image_case():
-    image_model = getattr(models, "MiniMaxH3Image", None)
-    if image_model is None:
-        pytest.skip("Installed ComfyUI does not have MiniMax H3 Image")
     device = torch.device("cpu")
     grid = [1.0, 0.9, 0.6, 0.25, 0.0]
     config = comfy.supported_models_base.BASE(
@@ -59,7 +56,7 @@ def image_case():
     )
     config.latent_format = MiniMaxH3Video()
     config.custom_operations = comfy.ops.disable_weight_init
-    model = image_model(config, device=device)
+    model = models.MiniMaxH3Image(config, device=device)
     generator = torch.Generator().manual_seed(2048)
     with torch.no_grad():
         for name, parameter in model.named_parameters():

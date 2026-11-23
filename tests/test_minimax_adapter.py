@@ -22,7 +22,7 @@ from comfyui_turing_utils.adapters.minimax import (
     mlp as minimax_mlp,
 )
 from comfyui_turing_utils.adapters.minimax import acceleration as minimax_adapter  # noqa: E402
-from comfyui_turing_utils.adapters.minimax.compat import make_packed_layout  # noqa: E402
+from comfyui_turing_utils.adapters.minimax.model_contract import has_h3_block_signature  # noqa: E402
 from comfyui_turing_utils.attention.protocol import (  # noqa: E402
     ATTENTION_EXECUTOR_KEY,
     AttentionExecutionOutcome,
@@ -83,7 +83,7 @@ class MiniMaxAdapterTest(unittest.TestCase):
     def test_current_comfy_block_contract_is_supported(self):
         from comfy.ldm.minimax.model import DiTBlock
 
-        self.assertTrue(minimax_adapter._compatible_block_forward(DiTBlock))
+        self.assertTrue(has_h3_block_signature(DiTBlock.forward))
 
     def test_attention_forward_hands_raw_qk_to_fused_preprocessor(self):
         from comfy.ldm.modules.attention import AttentionTensorContainer
@@ -181,7 +181,7 @@ class MiniMaxAdapterTest(unittest.TestCase):
                 self.mlp = FakeMLP()
 
             def forward(
-                self, x, t_emb, mod_segments, rope_freqs, transformer_options={}
+                self, x, t_emb, mod_segments, rope_freqs, transformer_options={}, attention=None
             ):
                 return x
 
@@ -485,7 +485,8 @@ class MiniMaxAdapterTest(unittest.TestCase):
         keyframes = [
             {
                 "resolved_frame_index": 0,
-                "latent": torch.empty(1, 24, 1, 8, 10),
+                "latent": torch.empty(1, 24, 2, 8, 10),
+                "audio_latent": torch.empty(1, 32, 2, 3),
             },
             {
                 "resolved_frame_index": 99,
@@ -511,30 +512,18 @@ class MiniMaxAdapterTest(unittest.TestCase):
         plan = minimax_memory_planning._minimax_memory_shape(
             kwargs, self._latent_shapes(), self._diffusion_spec()
         )
-        layout = make_packed_layout(
-            PackedLayout,
-            11,
-            7,
-            8,
-            10,
-            12,
-            {
-                "keyframes": keyframes,
-                "refs": refs,
-                "frame_count": 100,
-            },
-        )
+        layout = PackedLayout(11, 7, 8, 10, 12, keyframes=keyframes, refs=refs)
 
         self.assertEqual(plan.full_rows, layout.seq_len)
         self.assertEqual(plan.target_visual_rows, 7 * 4 * 5)
         self.assertEqual(plan.target_audio_rows, 24)
-        self.assertEqual(plan.visual_condition_rows, 2 * 20 + 12 + 18)
-        self.assertEqual(plan.audio_condition_rows, 10 + 14)
+        self.assertEqual(plan.visual_condition_rows, 3 * 20 + 12 + 18)
+        self.assertEqual(plan.audio_condition_rows, 6 + 10 + 14)
         self.assertEqual(
             plan.equivalent_area,
             math.ceil(
                 (24 * 7 * 8 * 10 + 32 * 2 * 12)
-                * (11 + 40 + 12 + 18 + 10 + 14)
+                * (11 + 60 + 12 + 18 + 6 + 10 + 14)
                 / (7 * 20 + 24)
             ),
         )

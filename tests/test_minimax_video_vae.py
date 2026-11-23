@@ -25,7 +25,7 @@ from comfyui_turing_utils.attention.protocol import (
 from comfyui_turing_utils.nodes import minimax_vae as nodes
 
 
-ATTENTION_METHOD = "attend" if hasattr(video_vae.h3_vae.Attention, "attend") else "forward"
+ATTENTION_METHOD = "attend"
 
 
 def make_decoder(patch_size_t=4):
@@ -386,7 +386,6 @@ class MiniMaxVideoVAETest(unittest.TestCase):
                     self.assertEqual(getattr(block.attn, ATTENTION_METHOD), method)
                     self.assertNotIn(ATTENTION_METHOD, block.attn.__dict__)
 
-    @unittest.skipUnless(hasattr(video_vae.h3_vae, "NonCausalViT3DDecoder"), "Sol-H3 required")
     def test_noncausal_decoder_retains_native_window_execution(self):
         vae = make_vae()
         model = vae.first_stage_model
@@ -403,79 +402,55 @@ class MiniMaxVideoVAETest(unittest.TestCase):
         decode.assert_called_once_with(value)
         options.assert_not_called()
 
-    def test_pre_norm_cast_lives_through_fused_linear_and_releases_on_error(self):
+    def test_upstream_pre_norm_cast_releases_on_error(self):
         x = torch.rand(1, 3, 4)
-        norm = SimpleNamespace(weight=torch.ones(4), eps=1e-5, comfy_cast_weights=True)
+        norm = video_vae.comfy.ops.disable_weight_init.RMSNorm(4, eps=1e-5)
         cast_weight = torch.full((4,), 2.0)
         active = []
 
         @contextmanager
-        def cast(owner, reference, *, offloadable):
-            self.assertIs(owner, norm)
+        def cast(reference):
             self.assertIs(reference, x)
-            self.assertTrue(offloadable)
             active.append(True)
             try:
                 yield cast_weight, None
             finally:
                 active.pop()
 
-        def linear(layer, value, act, weight, eps):
+        def rms_norm(value, weight, eps):
             self.assertEqual(active, [True])
+            self.assertIs(value, x)
             self.assertIs(weight, cast_weight)
             self.assertEqual(eps, norm.eps)
-            raise RuntimeError("linear failed")
+            raise RuntimeError("norm failed")
 
         with (
-            mock.patch.object(video_vae.comfy.ops, "CastBiasWeightContext", cast),
-            mock.patch.object(video_vae.comfy.ops, "linear_input_act", linear),
+            mock.patch.object(norm, "cast_weight", cast),
+            mock.patch.object(video_vae.comfy.rmsnorm, "rms_norm", rms_norm),
         ):
-            with self.assertRaisesRegex(RuntimeError, "linear failed"):
-                video_vae._attention_forward(
-                    SimpleNamespace(to_qkv=object()),
+            with self.assertRaisesRegex(RuntimeError, "norm failed"):
+                video_vae._attend(
+                    SimpleNamespace(to_qkv=torch.nn.Linear(4, 12), dim_head=4),
                     x,
                     None,
                     norm,
-                    x,
-                    torch.ones(4),
                     options={},
                 )
         self.assertEqual(active, [])
 
-    def test_modern_norm_owns_its_cast_context(self):
-        x = torch.rand(1, 3, 4)
-        cast_weight = torch.ones(4)
-        owner = mock.MagicMock()
-        owner.__enter__.return_value = (cast_weight, None)
-        norm = SimpleNamespace(cast_weight=mock.Mock(return_value=owner))
-        with video_vae._norm_weight_context(norm, x) as weight:
-            self.assertIs(weight, cast_weight)
-        norm.cast_weight.assert_called_once_with(x)
-        owner.__exit__.assert_called_once()
-
-    def test_plain_and_nonaffine_norm_preserve_input_dtype(self):
-        for dtype in (torch.float16, torch.bfloat16, torch.float32):
-            x = torch.rand(1, 3, 4).to(dtype)
-            for affine in (True, False):
-                norm = torch.nn.RMSNorm(4, elementwise_affine=affine)
-                with video_vae._norm_weight_context(norm, x) as weight:
-                    if affine:
-                        self.assertEqual(weight.dtype, dtype)
-                        self.assertEqual(weight.device, x.device)
-                    else:
-                        self.assertIsNone(weight)
-
     @unittest.skipUnless(torch.cuda.is_available(), "CUDA required")
     def test_comfy_cpu_norm_weight_is_cast_without_moving_owned_parameter(self):
+        module = video_vae.h3_vae.Attention(1, 4, operations=torch.nn)
         norm = video_vae.comfy.ops.disable_weight_init.RMSNorm(4, eps=1e-5)
         norm.weight.data.fill_(2.0)
         original = norm.weight
         for dtype in (torch.float16, torch.bfloat16, torch.float32):
             x = torch.rand(1, 3, 4, device="cuda", dtype=dtype)
-            with video_vae._norm_weight_context(norm, x) as weight:
-                self.assertEqual(weight.device, x.device)
-                self.assertEqual(weight.dtype, x.dtype)
-                torch.testing.assert_close(weight, torch.full_like(weight, 2.0))
+            module.to(device=x.device, dtype=dtype)
+            with torch.inference_mode():
+                expected = module.attend(x, None, norm)
+                actual = video_vae._attend(module, x, None, norm, options={})
+            torch.testing.assert_close(actual, expected)
             self.assertIs(norm.weight, original)
             self.assertEqual(norm.weight.device.type, "cpu")
 
@@ -544,9 +519,8 @@ class MiniMaxVideoVAETest(unittest.TestCase):
             norm_k=SimpleNamespace(weight=None, eps=1e-5),
         )
         value = torch.randn(1, 3, 4)
-        pre_norm = torch.nn.RMSNorm(4)
-        residual = value.clone()
-        residual_scale = torch.ones(4)
+        pre_norm = video_vae.comfy.ops.disable_weight_init.RMSNorm(4)
+        pre_norm.weight.data.fill_(1)
         seen = []
 
         def consume(q, k, v, heads, **kwargs):
@@ -557,13 +531,11 @@ class MiniMaxVideoVAETest(unittest.TestCase):
 
         override = mock.Mock()
         override.container_function = consume
-        output = video_vae._attention_forward(
+        output = video_vae._attend(
             module,
             value,
             None,
             pre_norm,
-            residual,
-            residual_scale,
             options={"optimized_attention_override": override},
         )
         self.assertEqual(output.shape, value.shape)
@@ -580,13 +552,11 @@ class MiniMaxVideoVAETest(unittest.TestCase):
             request.consume_qkv()
             return AttentionExecutionOutcome(torch.zeros(1, 3, 4))
 
-        video_vae._attention_forward(
+        video_vae._attend(
             module,
             value,
             None,
             pre_norm,
-            residual,
-            residual_scale,
             options={ATTENTION_EXECUTOR_KEY: execute},
         )
         self.assertFalse(any(key.startswith("_turing_utils") for key in vars(module)))

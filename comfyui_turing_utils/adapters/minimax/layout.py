@@ -7,9 +7,10 @@ It deliberately contains no quantization, Turing, or custom-loader policy.
 
 from __future__ import annotations
 
-import inspect
 import math
 import weakref
+
+from comfy.ldm.minimax.model import PackedLayout
 
 from ...log import get_logger
 from ...attention.runtime import dense_attention_runtime
@@ -23,7 +24,7 @@ from ...attention.layout import (
 )
 from ..methods import OriginalMethod, weak_method
 from .memory_state import ActivationRuntimePlan
-from .compat import accepts_parameter, is_h3_image_dit, make_packed_layout
+from .model_contract import has_h3_block_signature, is_h3_dit, is_h3_image_dit
 from .reference_compression import restore_reference_times
 
 
@@ -36,17 +37,6 @@ RUNTIME_FORWARD_PATCH_KEY = "diffusion_model.forward"
 _FORWARD_PROVIDER_ATTR = "_turing_utils_minimax_layout_forward"
 _MODEL_FORWARD_PROVIDER_ATTR = "_turing_utils_minimax_layout_model_forward"
 _REFINER_FORWARD_PROVIDER_ATTR = "_turing_utils_minimax_refiner_attention"
-_BLOCK_FORWARD_PARAMETERS = (
-    "x",
-    "t_emb",
-    "mod_segments",
-    "rope_freqs",
-    "transformer_options",
-)
-_BLOCK_FORWARD_PARAMETERS_WITH_ATTENTION = (
-    *_BLOCK_FORWARD_PARAMETERS,
-    "attention",
-)
 _LAYOUT_FIELDS = {
     "protocol_version",
     "provider",
@@ -70,32 +60,9 @@ def _root_and_diffusion_model(model):
     return root, getattr(root, "diffusion_model", None)
 
 
-def _is_minimax_h3_diffusion_model(diffusion_model) -> bool:
-    if diffusion_model is None:
-        return False
-    try:
-        from comfy.ldm.minimax.model import MiniMaxH3Model
-    except ImportError:
-        return False
-    return isinstance(diffusion_model, MiniMaxH3Model)
-
-
 def is_minimax_h3_model(model) -> bool:
     _, diffusion_model = _root_and_diffusion_model(model)
-    return _is_minimax_h3_diffusion_model(diffusion_model)
-
-
-def _compatible_block_forward(forward) -> bool:
-    try:
-        parameters = tuple(inspect.signature(forward).parameters)
-    except (TypeError, ValueError):
-        return False
-    if parameters and parameters[0] == "self":
-        parameters = parameters[1:]
-    return parameters in {
-        _BLOCK_FORWARD_PARAMETERS,
-        _BLOCK_FORWARD_PARAMETERS_WITH_ATTENTION,
-    }
+    return is_h3_dit(diffusion_model)
 
 
 def make_minimax_runtime_context_wrapper(base_model):
@@ -180,8 +147,6 @@ def _resolve_packed_layout(diffusion_model, x, context, payload):
     ):
         return None
     try:
-        from comfy.ldm.minimax.model import PackedLayout
-
         patch_size = tuple(int(value) for value in diffusion_model.patch_size)
         latent_t, latent_h, latent_w = (
             math.ceil(int(size) / patch) * patch
@@ -197,16 +162,10 @@ def _resolve_packed_layout(diffusion_model, x, context, payload):
         layout = payload.get("layout")
         if layout is not None and getattr(layout, "signature", None) == signature:
             return layout
-        return make_packed_layout(
-            PackedLayout,
-            signature[0],
-            latent_t,
-            latent_h,
-            latent_w,
-            signature[4],
-            payload,
+        return PackedLayout(
+            *signature, keyframes=payload.get("keyframes"), refs=payload.get("refs")
         )
-    except (AttributeError, ImportError, TypeError, ValueError):
+    except (AttributeError, TypeError, ValueError):
         return None
 
 
@@ -513,7 +472,6 @@ def _make_layout_forward(
     diffusion_model,
 ):
     original = OriginalMethod.capture(original, block)
-    supports_attention = accepts_parameter(original.function, "attention")
     base_model = weakref.proxy(base_model)
     diffusion_model = weakref.proxy(diffusion_model)
 
@@ -534,10 +492,11 @@ def _make_layout_forward(
             base_model=base_model,
             diffusion_model=diffusion_model,
         )
-        kwargs = {"transformer_options": transformer_options}
-        if supports_attention:
-            kwargs["attention"] = attention
-        return original(self, x, t_emb, mod_segments, rope_freqs, **kwargs)
+        return original(
+            self, x, t_emb, mod_segments, rope_freqs,
+            transformer_options=transformer_options,
+            attention=attention,
+        )
 
     setattr(forward, _FORWARD_PROVIDER_ATTR, True)
     return weak_method(forward, block)
@@ -553,7 +512,7 @@ def mark_forward_as_minimax_layout_provider(forward):
 def ensure_minimax_attention_layout_provider(model) -> LayoutProviderStatus:
     """Install the H3 layout bridge on any standard ComfyUI ModelPatcher."""
     base_model, diffusion_model = _root_and_diffusion_model(model)
-    if not _is_minimax_h3_diffusion_model(diffusion_model):
+    if not is_h3_dit(diffusion_model):
         return LayoutProviderStatus(None, False, "not_minimax_h3")
     if not callable(getattr(model, "add_object_patch", None)) or not callable(
         getattr(model, "add_wrapper_with_key", None)
@@ -564,7 +523,7 @@ def ensure_minimax_attention_layout_provider(model) -> LayoutProviderStatus:
     blocks = getattr(diffusion_model, "blocks", None)
     if blocks is None or len(blocks) == 0:
         return LayoutProviderStatus(MINIMAX_H3_LAYOUT_KIND, False, "blocks_unavailable")
-    if any(not _compatible_block_forward(block.forward) for block in blocks):
+    if any(not has_h3_block_signature(block.forward) for block in blocks):
         return LayoutProviderStatus(
             MINIMAX_H3_LAYOUT_KIND, False, "block_forward_contract_changed"
         )

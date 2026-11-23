@@ -42,15 +42,11 @@ def initialize_plugin() -> None:
     """Install ComfyUI integrations for this process and its current server."""
     from server import PromptServer
 
-    from .adapters.minimax.conditioning import (
-        install_combined_minimax_conditioning_support,
-    )
     from .runtime.stage_barrier import install_stage_barrier_scheduler
 
     bootstrap_builtin_integrations()
     with _BOOTSTRAP_LOCK:
         install_stage_barrier_scheduler()
-        install_combined_minimax_conditioning_support()
 
         server = getattr(PromptServer, "instance", None)
         if server is None:

@@ -72,9 +72,8 @@ DynamicVRAM/aimdo paging, official batching, input/output transfers, dtype and
 OOM recovery. The plugin does not retry allocator or kernel errors on its own.
 Keeping other models resident is not promised; ComfyUI may offload them as needed.
 
-The selected tiled decoder receives a temporary attention method override.
-Current ComfyUI calls `attend`, and older versions call `forward`.
-The `native` option keeps those methods as provided by ComfyUI. Sol-H3 uses its
+The selected tiled decoder receives a temporary `attend` override.
+The `native` option uses ComfyUI's implementation. Sol-H3 uses its
 native window attention and streamed decoding. Linear fusion is selected
 through operator dispatch.
 The official decoder block loop, spatial blending and temporal
@@ -98,11 +97,9 @@ attention/fusion dispatch, and restoration after errors or cancellation.
 
 ### Upstream maintenance
 
-Pre-attention RMSNorm weights stay inside ComfyUI's cast context until the fused
-QKV linear returns, including exception cleanup. Newer norm modules own this
-context through `cast_weight`; the current core uses `CastBiasWeightContext`.
-No norm weight or device copy is cached on the model. The tensor form of
-`linear_input_act` remains usable across these core interfaces.
+The QKV projection passes the pre-attention RMSNorm module to ComfyUI's
+`linear_input_act`. ComfyUI owns the norm cast, including release when the
+projection fails.
 
 Upstream spatial/temporal blending, encoder kernels and tile batching should
 never be copied into this plugin. Test after core upgrades instead. Attention

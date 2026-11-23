@@ -20,7 +20,7 @@ from comfy.nested_tensor import NestedTensor
 
 from ...media.latent_masks import binary_video_latent_mask, _validate_mask_values
 from ...runtime.sampling import NativeStepSampler, SamplingProgress
-from .compat import is_h3_image_dit
+from .model_contract import is_h3_image_dit
 from .image_sampling import sample_legacy_h3_image
 from .sampling_sigmas import sampling_sigmas
 from .sampling_masks import close_patch_mask, low_resolution_mask

@@ -31,7 +31,7 @@ class FakeBlock(torch.nn.Module):
         super().__init__()
         self.seen_options = None
 
-    def forward(self, x, t_emb, mod_segments, rope_freqs, transformer_options={}):
+    def forward(self, x, t_emb, mod_segments, rope_freqs, transformer_options={}, attention=None):
         self.seen_options = transformer_options
         return x
 
@@ -369,27 +369,20 @@ class MiniMaxLayoutProviderTest(unittest.TestCase):
         audio = torch.zeros((1, 32, 2, 13), dtype=torch.bfloat16)
         context = torch.zeros((1, 48, 8), dtype=torch.bfloat16)
         stale = SimpleNamespace(signature=(48, 7, 8, 10, 13))
-        rebuilt = object()
-
-        with mock.patch.object(
-            minimax_model, "PackedLayout", return_value=rebuilt
-        ) as constructor:
-            result = minimax_layout._resolve_packed_layout(
-                diffusion,
-                [video, audio],
-                context,
-                {"layout": stale, "refs": [], "keyframes": None},
-            )
-
-        self.assertIs(result, rebuilt)
-        constructor.assert_called_once_with(
-            48,
-            7,
-            10,
-            12,
-            13,
-            keyframes=None,
-            refs=[],
+        rebuilt = minimax_layout._resolve_packed_layout(
+            diffusion,
+            [video, audio],
+            context,
+            {"layout": stale, "refs": [], "keyframes": None},
+        )
+        self.assertIsInstance(rebuilt, minimax_model.PackedLayout)
+        self.assertEqual(rebuilt.signature, (48, 7, 10, 12, 13))
+        self.assertEqual(rebuilt.seq_len, 48 + 7 * 5 * 6 + 2 * 13)
+        self.assertIs(
+            minimax_layout._resolve_packed_layout(
+                diffusion, [video, audio], context, {"layout": rebuilt}
+            ),
+            rebuilt,
         )
 
     def test_publisher_drops_stale_topology_when_current_shapes_do_not_validate(self):

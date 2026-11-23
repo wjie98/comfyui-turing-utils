@@ -15,9 +15,6 @@ COMFY_ROOT = PLUGIN_ROOT.parents[1]
 sys.path.insert(0, str(COMFY_ROOT))
 sys.path.insert(0, str(PLUGIN_ROOT))
 
-from comfyui_turing_utils.adapters.minimax.conditioning import (  # noqa: E402
-    repair_combined_minimax_payload,
-)
 from comfyui_turing_utils.nodes.minimax_references import (  # noqa: E402
     H3BuildConditioning,
     H3AudioReference,
@@ -131,14 +128,6 @@ class _LazyAudioMap(Mapping):
 
     def __len__(self):
         return len(self._load())
-
-
-class _PayloadHolder:
-    def __init__(self, cond):
-        self.cond = cond
-
-    def _copy_with(self, cond):
-        return _PayloadHolder(cond)
 
 
 class MiniMaxH3ReferencesTest(unittest.TestCase):
@@ -672,27 +661,24 @@ class MiniMaxH3ReferencesTest(unittest.TestCase):
         ).result
         self.assertEqual(result, (1344, 720, 124, 24.0))
 
-    def test_combined_payload_repair_matches_packed_layout_order(self):
+    def test_native_conditioning_keeps_keyframes_ahead_of_references(self):
+        from comfy.model_base import MiniMaxH3
+
         keyframe = torch.zeros(1, 24, 1, 4, 4)
+        guide_audio = torch.zeros(1, 32, 2, 4)
         image = torch.ones(1, 24, 1, 2, 2)
         audio = torch.ones(1, 32, 2, 5)
-        out = {"minimax_payload": _PayloadHolder({"cond_video_latents": [image]})}
-        repaired = repair_combined_minimax_payload(
-            out,
-            {
-                "minimax_keyframes": [{"latent": keyframe}],
-                "minimax_refs": [
-                    {"kind": "image", "latent": image},
-                    {"kind": "audio", "audio_latent": audio},
-                ],
-            },
+        payload = MiniMaxH3._cond_latents(
+            [{"latent": keyframe, "audio_latent": guide_audio}],
+            [
+                {"kind": "image", "latent": image},
+                {"kind": "audio", "audio_latent": audio},
+            ],
         )
-
-        payload = repaired["minimax_payload"].cond
         self.assertIs(payload["cond_video_latents"][0], keyframe)
         self.assertIs(payload["cond_video_latents"][1], image)
-        self.assertIs(payload["cond_audio_latents"][0], audio)
-        self.assertIsNot(repaired, out)
+        self.assertIs(payload["cond_audio_latents"][0], guide_audio)
+        self.assertIs(payload["cond_audio_latents"][1], audio)
 
 
 if __name__ == "__main__":

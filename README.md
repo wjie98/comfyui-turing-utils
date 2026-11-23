@@ -10,7 +10,7 @@ fixed-Top-K SLA and Spark-H3 sparse attention, and focused Qwen Image 2.1/Krea2/
 - NVIDIA GPU with CUDA support
 - Turing, Ampere, Ada, or newer architecture
 - Python 3.10 or newer
-- PyTorch with CUDA and ComfyUI
+- PyTorch with CUDA and current ComfyUI (tested with 0.46.0)
 - `comfy-kitchen>=0.2.26` for ConvRot model integration
 - the independently installed `comfyui-turing-utils-kernel>=0.29.1` for SLA;
   native sm75+ W8A8/Sol requires a cubin (or PTX) for the target GPU, while

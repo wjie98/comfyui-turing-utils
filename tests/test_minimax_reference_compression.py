@@ -154,7 +154,7 @@ def test_all_sparse_protection_switches_use_compressed_segments_and_true_anchors
 
 
 class Block(torch.nn.Module):
-    def forward(self, x, t_emb, mod_segments, rope_freqs, transformer_options={}):
+    def forward(self, x, t_emb, mod_segments, rope_freqs, transformer_options={}, attention=None):
         return x
 
 
