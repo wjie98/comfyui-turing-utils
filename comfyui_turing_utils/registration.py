@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from .nodes.attention import AttentionStrategy
 from .nodes.bernini import BerniniContextWindowsCore, BerniniInpaintCondition
+from .nodes.jasna import JasnaLTXRestore
 from .nodes.krea2 import Krea2IdentityEditConditioning
 from .nodes.latent import SetVideoLatentNoiseMask, VideoLatentCompositeMasked
 from .nodes.loaders import ConvRotCLIPLoader, ConvRotDiffusionModelLoader
@@ -64,6 +65,7 @@ NODE_CLASS_MAPPINGS = {
     "TuringUtilsVideoLatentCompositeMasked": VideoLatentCompositeMasked,
     "TuringUtilsBerniniContextWindowsCore": BerniniContextWindowsCore,
     "TuringUtilsBerniniInpaintCondition": BerniniInpaintCondition,
+    "TuringUtilsJasnaLTXRestore": JasnaLTXRestore,
     "TuringUtilsKrea2IdentityEditConditioning": Krea2IdentityEditConditioning,
     "TuringUtilsIsInputPresent": IsInputPresent,
     "TuringUtilsLazyIfElse": LazyIfElse,
@@ -116,6 +118,7 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "TuringUtilsVideoLatentCompositeMasked": "Video Latent Composite Masked",
     "TuringUtilsBerniniContextWindowsCore": "Bernini Context Windows",
     "TuringUtilsBerniniInpaintCondition": "Bernini Inpaint Condition",
+    "TuringUtilsJasnaLTXRestore": "Jasna LTX Restore",
     "TuringUtilsKrea2IdentityEditConditioning": "Krea2 Identity Edit Conditioning",
     "TuringUtilsIsInputPresent": "Is Input Present",
     "TuringUtilsLazyIfElse": "Lazy If / Else",

@@ -193,12 +193,24 @@ def load_convrot_model(
         model_options["custom_operations"] = nvfp4_operations(
             compute_dtype, load_device
         )
-    model = comfy.sd.load_diffusion_model_state_dict(
-        state_dict,
-        model_options=model_options,
-        metadata=metadata,
-        disable_dynamic=disable_dynamic,
-    )
+    if "jasna_restore" in metadata:
+        from ..adapters.jasna import build_model
+
+        model = build_model(
+            state_dict,
+            metadata,
+            model_config,
+            load_device,
+            model_options,
+            disable_dynamic,
+        )
+    else:
+        model = comfy.sd.load_diffusion_model_state_dict(
+            state_dict,
+            model_options=model_options,
+            metadata=metadata,
+            disable_dynamic=disable_dynamic,
+        )
     if model is None:
         raise RuntimeError(
             f"ComfyUI could not detect a supported model config from {model_path}"

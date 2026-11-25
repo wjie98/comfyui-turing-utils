@@ -184,6 +184,7 @@ class PackageArchitectureTest(unittest.TestCase):
                 "TuringUtilsVideoLatentCompositeMasked",
                 "TuringUtilsBerniniContextWindowsCore",
                 "TuringUtilsBerniniInpaintCondition",
+                "TuringUtilsJasnaLTXRestore",
                 "TuringUtilsKrea2IdentityEditConditioning",
                 "TuringUtilsIsInputPresent",
                 "TuringUtilsLazyIfElse",
